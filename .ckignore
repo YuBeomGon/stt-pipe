@@ -1,0 +1,38 @@
+# autoresearch scout-block 확장 — 읽기(컨텍스트 채우기) 차단 패턴.
+# AUTORESEARCH.md §8 참조. gitignore 문법.
+#
+# 본 파일은 *읽기 차단* 만 다룬다 — 편집 차단은 우리 `.claude/hooks/` 의
+# PreToolUse 훅 (Phase 3 swap 후 활성) 이 책임진다.
+#
+# Phase 1·2 에서도 활성화해 두면 좋다 (autoresearch 본체 미설치 상태에서도
+# 영향 없음 — 단지 autoresearch 설치 시점에 즉시 효력).
+
+# Holdout (Phase 3 chmod 와 별개 — 컨텍스트로도 보이지 않게)
+data/raw/wav/AIG_녹취반출_20250813/**
+data/raw/label/AIG_녹취반출_20250813/**
+
+# 봉인된 baseline / oracle
+baseline/**
+
+# 평가자 본문 (Phase 3 에서 노출 금지)
+judge/**
+
+# 백엔드 봉인 (workspace 가 직접 import 금지)
+frozen/**
+
+# 오디오 프로필 원본 (workspace 직접 참조 금지 — diagnosis 만 노출)
+assets/audio_profile/**
+
+# 보호 스크립트 (편집은 .claude PreToolUse 가 거부. 컨텍스트도 노출 X)
+scripts/swap_verify.sh
+scripts/swap_claude.sh
+scripts/seal_holdout.sh
+scripts/evaluate_holdout.py
+scripts/verify_check.py
+
+# Phase 3 가드 본문 (활성 본문은 verify.sh / .claude/ — 비활성 alt 는 노출 X)
+scripts/verify.sh.alt
+.claude.alt/**
+
+# 자체 산출 — autoresearch / runs / 캐시 (필요 시 별도 .ckignore 항목 조정)
+.cache/**
