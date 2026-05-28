@@ -152,11 +152,19 @@ label 파일을 source of truth로 한다 (label이 wav보다 적거나 같음).
 
 | 지표 | 정의 | 용도 |
 |------|------|------|
-| **`corpus_cer`** | `Σ_i edits_i / Σ_i ref_chars_i` (char-weighted) | **Primary, 모든 의사결정의 기준** |
-| `macro_cer` | per-file CER의 산술 평균 | 진단용 보조 지표 |
+| **`corpus_cer`** | `Σ_i edits_i / Σ_i ref_chars_i` (char-weighted, ref_chars_i > 0 인 파일만) | **Primary, 모든 의사결정의 기준** |
+| `macro_cer` | per-file CER의 산술 평균 (ref_chars > 0 인 파일만) | 진단용 보조 지표 |
 
 > corpus-level이 의사결정 기준인 이유: long-form 파일들 사이 길이 편차가 커서,
 > 짧은 파일의 CER이 macro 평균을 왜곡할 수 있다. 글자 가중치가 공정.
+
+> **Empty-reference 처리**: ref_chars == 0 인 파일 (예: turn 번호만 있고 본문이
+> 없는 degenerate label) 은 corpus_cer 분자/분모와 edit-breakdown 합산에서
+> *제외* 한다. 분모가 0 이라 CER 자체가 정의되지 않고, 분자에 pure-insertion
+> edits 만 누적되면 점수가 왜곡되기 때문. per_file 시계열에는 transparency 차원에서
+> 그대로 두되 `cer: null` 로 표기한다. 집계 결과에는 `num_files` (전체) 와
+> `num_files_scored` (ref_chars > 0) 를 별도 노출해 제외 사실이 드러나게 한다.
+> 본 정책은 `Σ` 정의에 부속한 표준 규칙이며 이식 시에도 동일하게 적용한다.
 
 ### 5.3 Edit-op 분해
 
@@ -496,7 +504,7 @@ text_pre_merge_len, text_post_merge_len, overlap_dedup_chars
 | (5) Aggregation | corpus-level char-weighted CER |
 | (6) Decomposition | edit-op sub/del/ins |
 | (7) Guards | length / empty / repeat / coverage / hallucination patterns / time |
-| (8) Oracle | faster-whisper baseline = target 상한 |
+| (8) Target / Comparator | `target_cer` 는 사람이 정한 도달 목표 (수동, 현재 0.10). faster-whisper `baseline_cer` 은 거리감 측정용 참조 앵커일 뿐 합격선 아님 (§7) |
 | (9) Holdout | 0813, 잡 종료 후 1회만 |
 | (10) Pipeline | `transcribe(audio, sr) -> str` 단일 계약, 내부 자유 |
 

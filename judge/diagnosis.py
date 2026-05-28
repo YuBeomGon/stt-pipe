@@ -88,6 +88,11 @@ def _select_focus(
         2. per-file CER
         3. (baseline delta — not available in Phase 1)
     Tie-break: lexical path sort.
+
+    ``why_selected`` reports which signal actually placed the file in focus,
+    not the global ranking criteria — it labels ``worst_cer`` only for the
+    file with the highest CER in the corpus, and ``guard_violation`` only
+    for files that actually have flags.
     """
 
     def sort_key(entry: dict[str, Any]):
@@ -96,15 +101,29 @@ def _select_focus(
         # Lower (more negative) sorts first → use negated values.
         return (-len(flags), -(cer if cer is not None else -1.0), entry["wav"])
 
+    cer_values = [
+        e["metrics"]["cer"]
+        for e in per_file_diag
+        if e["metrics"].get("cer") is not None
+    ]
+    worst_cer_value = max(cer_values) if cer_values else None
+
     ranked = sorted(per_file_diag, key=sort_key)
     selected: list[dict[str, Any]] = []
     for entry in ranked[:max_focus]:
         reasons: list[str] = []
         if entry.get("flags"):
             reasons.append("guard_violation")
-        if entry["metrics"].get("cer") is not None:
+        cer = entry["metrics"].get("cer")
+        if (
+            worst_cer_value is not None
+            and cer is not None
+            and cer == worst_cer_value
+        ):
             reasons.append("worst_cer")
-        selected.append({"wav": entry["wav"], "why_selected": reasons or ["lexical_top"]})
+        if not reasons:
+            reasons.append("lexical_top")
+        selected.append({"wav": entry["wav"], "why_selected": reasons})
     return selected
 
 

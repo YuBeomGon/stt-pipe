@@ -2,6 +2,18 @@
 
 One-time operation. Writes ``baseline/target_cer.json`` and the artefact MUST
 NOT be re-measured/overwritten (`STT-PIPELINE-SPEC.md §7, §11`).
+
+The output file carries two distinct numbers:
+    - ``target_cer``  : the *manual* success goal (currently 0.10). Set once
+                       at measurement time via ``--target-cer``. Phase 3
+                       keep/revert is judged against this.
+    - ``baseline_cer``: the measured faster-whisper corpus_cer. Comparison
+                       anchor only; not a pass/fail threshold.
+
+If a future ambition change requires updating *only* ``target_cer`` without
+re-measuring the baseline, hand-edit the field with a clear commit message
+rather than re-running this script — re-running is refused while the output
+already exists, by design.
 """
 
 from __future__ import annotations
@@ -198,7 +210,13 @@ def main(argv: list[str] | None = None) -> int:
         "--target-cer",
         type=float,
         default=0.10,
-        help="success goal (Phase 3 keep/revert is against this, not baseline_cer)",
+        help=(
+            "manual success goal sealed into target_cer.json (Phase 3 "
+            "keep/revert and success criterion). Independent from the "
+            "measured faster-whisper baseline_cer. Set once at initial "
+            "measurement; do not re-run this script to change it — "
+            "hand-edit target_cer in the sealed file instead."
+        ),
     )
     args = parser.parse_args(argv)
 
