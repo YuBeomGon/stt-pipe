@@ -167,6 +167,50 @@ bash scripts/verify.sh        # → exit 0, 마지막 줄에 corpus_cer 한 숫�
 
 ## 2. autoresearch 호출
 
+### 2.1 호출 직전 사전조건 체크리스트 (사람)
+
+본 invocation 을 입력하기 *전* 에 모두 ✓ 인지 확인:
+
+```bash
+# (a) verify.sh 가 Phase 3 본문 활성
+head -3 scripts/verify.sh        # → "# Phase 3 verify (PHASE3-PLAN.md §1.2)."
+
+# (b) .claude/ 가 Phase 3 본문 활성
+ls .claude/                       # → settings.json + hooks/ + README.md
+ls .claude/hooks/                 # → restrict_workspace.py + block_swap_and_seal.py
+
+# (c) holdout 봉인
+stat -c '%a' data/raw/wav/AIG_녹취반출_20250813   # → 0
+stat -c '%a' data/raw/label/AIG_녹취반출_20250813 # → 0
+
+# (d) autoresearch 본체 설치 — 다음 둘 중 하나 통과
+ls ~/.claude/skills/autoresearch/SKILL.md   # 글로벌
+ls .claude/skills/autoresearch/SKILL.md     # 프로젝트
+# (없으면: `npx skills add uditgoenka/autoresearch` 또는
+#  `/plugin marketplace add uditgoenka/autoresearch`)
+
+# (e) Python 환경 활성
+echo "$CONDA_DEFAULT_ENV"          # → py11 (또는 동등 env, 3.11+)
+
+# (f) 작업 브랜치 (autoresearch 가 매 iter `experiment:` 커밋을 남기므로)
+git rev-parse --abbrev-ref HEAD    # → phase3 (또는 main 이 아닌 작업 브랜치)
+
+# (g) 사전 smoke 통과 (§1.5 a·b·c)
+
+# (h) AR_DISABLE_* 환경변수 미설정
+env | grep ^AR_DISABLE_             # → (출력 없음)
+```
+
+하나라도 미통과면 §1 의 해당 단계 재실행.
+
+### 2.2 (선택) `/autoresearch:plan` 우선 실행
+
+AUTORESEARCH.md §3·§4 에 따르면 `/autoresearch:plan` 이 Goal → validated
+Scope/Metric/Verify config 로 변환한다 (산출: `handoff.json`). 본 루프 진입 *전*
+1 회 권장. plan 결과가 §2.3 의 invocation 과 의미상 일치하는지 사람이 확인.
+
+### 2.3 `/autoresearch` invocation
+
 Claude Code 세션 안에서:
 
 ```
@@ -180,8 +224,10 @@ Iterations: 25
 
 외부 shell wrapper 형태 아님 — Claude Code 가 자기 자신을 루프 컨트롤러로 사용.
 
-선택: `/autoresearch:plan` 을 한 번 돌려 위 4 종 입력을 검증·구체화한 뒤 본 루프 진입.
-루프 구조 그림은 [`PHASE3-LOOP.md`](PHASE3-LOOP.md) 를 참조.
+루프 구조 그림은 [`PHASE3-LOOP.md`](PHASE3-LOOP.md) 를 참조. autoresearch 의 자체
+루프 알고리즘과 결과 저장 위치 (`autoresearch/<sub>-<YYMMDD>-<HHMM>/*.tsv`)
+는 [`AUTORESEARCH.md §5·§9·§10`](AUTORESEARCH.md) 참조. 본 프로젝트의 분석 정본은
+autoresearch 의 TSV 가 아니라 우리 `runs/<hyp_id>/` 산출이다.
 
 ---
 
@@ -296,18 +342,33 @@ overfit 된 신호.
 
 ## 7. Phase 3 DoD
 
-- [ ] `scripts/swap_verify.sh` 로 verify.sh → Phase 3 본문 swap 완료 (사람, 1회)
-- [ ] `head -3 scripts/verify.sh` 에 "Phase 3 verify" 헤더 확인
-- [ ] `scripts/swap_claude.sh` 로 `.claude` → Phase 3 본문 swap 완료 (사람, 1회)
-- [ ] `ls .claude/hooks/` 에 PreToolUse 훅 본문 존재 확인
+**진입 가드 (자산 작성 + 1 회 동작 검증)**:
+
+- [x] `scripts/swap_verify.sh` 작성 + 3-way mv 무결성 검증 (commit 2497876)
+- [x] `scripts/swap_claude.sh` 작성 + 3-way mv 무결성 검증 (commit d91384c)
+- [x] `scripts/seal_holdout.sh` idempotent 정정 + find-기반 chmod (commit a0a1f97)
+- [x] `.claude.alt/settings.json` permissions.deny 11 종 보호 경로 + hooks 등록
+- [x] `.claude.alt/hooks/restrict_workspace.py` (Edit/Write/MultiEdit 가드)
+- [x] `.claude.alt/hooks/block_swap_and_seal.py` (Bash 가드)
+- [x] `.ckignore` 작성 (autoresearch scout-block 읽기 차단 확장)
+- [x] pytest 가드 단위 검증 56/56 (verify_check 9, claude hooks 19, seal 4, 등)
+
+**Phase 3 진입 직전 (사람 1회)**:
+
+- [x] swap_verify 실행 → `head -3 scripts/verify.sh` = "Phase 3 verify (PHASE3-PLAN.md §1.2)."
+- [x] swap_claude 실행 → `ls .claude/hooks/` = restrict_workspace + block_swap_and_seal
+- [x] holdout chmod 적용 확인 (`stat -c '%a'` = 0, `ls` → Permission denied)
 - [ ] autoresearch 본체 설치 확인 (글로벌 또는 프로젝트). `/autoresearch` 슬래시 커맨드 인식
-- [ ] holdout chmod 적용 확인 (`ls data/raw/wav/AIG_녹취반출_20250813` → permission denied)
-- [ ] verify hard-fail / runtime cap / baseline-relative budget smoke 통과
-- [ ] `.claude` PreToolUse 훅 smoke 통과 (judge/ 또는 baseline/ 안 파일 Edit 시도 → 거부)
+- [ ] `/autoresearch:plan` 입력 검증 1 회 (선택)
+- [ ] verify 의도적 위반 smoke 통과 (§1.5 a·b·c)
+- [ ] `.claude` PreToolUse 훅 *수동* smoke (judge/baseline/frozen Edit 시도 → 거부)
+
+**잡 실행 + 분석**:
+
 - [ ] autoresearch 1 iter 정상 종료 확인 (dry run)
 - [ ] 25 iter 완주 또는 target 도달
 - [ ] `analyze_run.py` 로 REPORT.md 생성
-- [ ] holdout 복구 + 평가 1 회 완료 (`evaluate_holdout.py`)
+- [ ] holdout 복구 + 평가 1 회 완료 (`evaluate_holdout.py --unseal`)
 - [ ] REPORT.md 의 사람 판단 칸 (B 우회 시도, C 추론 품질, D 카테고리 분포, H reasoning 일치) 작성
 
 ---
