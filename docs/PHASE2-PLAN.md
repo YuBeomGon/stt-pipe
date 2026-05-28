@@ -60,7 +60,11 @@ runs/_summary/                # Phase 3 종료 시 산출물 위치
 - `runs/<hyp_id>/per_file.jsonl` 전체
 - `runs/<hyp_id>/_telemetry/*.jsonl` (있을 때)
 - `baseline/target_cer.json`, `baseline/noise_floor.json`
+- `assets/audio_profile/AIG_녹취반출_20250715.json` — 사후 분석 단서 (긴 무음/짧은 발화 구간 매칭)
 - `git log --all` (commit 메시지, revert 흔적, timestamp)
+
+> 본 도구는 **사후 분석 컨텍스트** — autoresearch agent (workspace 진화) 와 권한 분리.
+> assets/audio_profile/ 읽기 허용. agent 의 workspace 에서는 차단 (AGENTS §1, PHASE3 §1.2).
 
 ### 3.2 CLI
 

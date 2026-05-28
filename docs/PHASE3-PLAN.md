@@ -35,6 +35,7 @@ chmod -R 000 data/raw/label/AIG_녹취반출_20250813
 | `audio_coverage_rate` | `< 0.8` | sidecar telemetry 가 있을 때만 exit 1 |
 | `repeated_text_rate` | `> 0.20` | exit 1 |
 | **정적 backend 보호** | `workspace/transcribe.py` 에 `import ctranslate2` / `import transformers` / `from_pretrained` / `Whisper(` 중 어느 패턴이라도 출현 | exit 1 (frozen 우회 시도. workspace 는 `frozen.asr_backend` 의 `load / generate / to_storage_view` 만 사용) |
+| **정적 profile 차단** | `workspace/transcribe.py` 에 `assets` / `audio_profile` / `silero` 중 어느 substring 이라도 출현 | exit 1 (audio profile 은 사후 분석용. agent 는 chunking 단서 직접 받지 않음 — zero-base) |
 
 `corpus_cer` 자체는 *메트릭으로만 출력* — keep/discard 판정은 autoresearch 가 한다.
 가드 위반은 점수 무관 즉시 ROLLBACK.

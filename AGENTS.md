@@ -27,7 +27,7 @@ faster-whisper baseline 이하로 낮춘다.
 | `frozen/` | **편집 금지** — backend(CT2 + whisper-large-v3-turbo) 봉인. decoding params 는 workspace 에서 자유 |
 | `judge/` | **편집 금지** — 평가자 본문 |
 | `baseline/` | **편집 금지** — 봉인됨. 재측정 금지 |
-| `assets/audio_profile/` | **편집 금지** — Phase 1 산출 봉인. 0715 만, 0813 (holdout) 은 Phase 3 *전* 생성 X. 읽기 허용 |
+| `assets/audio_profile/` | **편집 금지 + workspace 읽기도 차단**. agent (workspace 진화 컨텍스트) 가 VAD/duration 등 단서를 직접 받으면 zero-base 침해. 사후 분석 도구 (`analyze_run.py`, `evaluate_holdout.py`) 만 읽기 허용. 0715 만, 0813 은 Phase 3 *전* 생성 X |
 | `scripts/` | **편집 금지** — verify / measure / analyze / evaluate_holdout 보호 |
 | `docs/` | **편집 금지** — 정본·운영 문서 |
 | `tests/` | **편집 금지** |

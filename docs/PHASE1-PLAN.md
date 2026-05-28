@@ -72,6 +72,7 @@ soundfile==0.12.1
 numpy==1.26.4
 rapidfuzz==3.10.0
 huggingface_hub==0.25.2
+silero-vad==5.1
 pytest==8.3.3
 ```
 
@@ -360,7 +361,7 @@ bash scripts/verify.sh
 ```json
 {
   "batch": "AIG_녹취반출_20250715",
-  "method": "librosa.effects.split + RMS aggregates",
+  "method": "silero-vad v5.1 + RMS aggregates (librosa)",
   "produced_at": "2026-05-28T...",
   "per_file": [
     {
@@ -384,9 +385,13 @@ audio-only 원칙. 필요하면 별도 `assets/label_profile/<batch>.json` 으�
 
 ### 7.2 구현 메모
 
-- VAD: `librosa.effects.split(top_db=...)` 로 시작 (RMS threshold). 추가 deps X.
-- 품질 부족 검출 시 `silero-vad` 또는 `webrtcvad` 로 교체 — *그때* requirements 갱신.
-- 산출은 1 회. 봉인. Phase 3 에서 read-only.
+- VAD: **silero-vad** (`silero-vad==5.1`, PyTorch 의존). librosa.effects.split 보다
+  speech/silence 경계 정확.
+- RMS aggregates 는 librosa.
+- 산출 1 회 봉인. **Phase 3 진입 시 autoresearch agent (workspace 진화 컨텍스트) 는
+  읽기도 차단** — VAD 결과가 chunking 정책에 직접 단서를 주면 zero-base 침해.
+  *사후 분석 도구* (`scripts/analyze_run.py`, `scripts/evaluate_holdout.py`) 만 읽기
+  허용.
 
 ### 7.3 검증
 
