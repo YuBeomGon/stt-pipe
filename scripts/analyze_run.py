@@ -22,21 +22,41 @@ import subprocess
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
 log = logging.getLogger("analyze_run")
 
-_EXCLUDED_DIRNAMES = {"_summary", "holdout", "_telemetry"}
+# Names matched verbatim against `runs/<name>/` directory entries.
+_EXCLUDED_DIRNAMES = {"_summary", "_telemetry"}
+# Prefixes — covers `holdout_<unix_ts>` (evaluate_holdout output) plus any
+# future "_<bucket>" auxiliary directories.
+_EXCLUDED_PREFIXES = ("_", "holdout_", "holdout")
 _NOISE_DEFAULT_DELTA = 0.01  # absolute Δcer fallback when sigma is provisional
+_EVAL_BATCH = "AIG_녹취반출_20250715"
 
 # Category keyword groups — PHASE2-PLAN §3.3 D.
+# The English keywords in PHASE2-PLAN are *examples*; the Korean equivalents
+# are added because autoresearch runs against a Korean-led prompt/AGENTS/CLAUDE
+# stack, so accepted commit subjects are typically Korean.
 _CATEGORY_PATTERNS = {
-    "chunking": re.compile(r"\b(chunk|window|split|segment)", re.IGNORECASE),
-    "prompt": re.compile(r"\b(prompt|token|language)", re.IGNORECASE),
-    "decode": re.compile(r"\b(beam|temperature|fallback|sample)", re.IGNORECASE),
-    "post": re.compile(r"\b(dedup|merge|regex|postprocess|post-process)", re.IGNORECASE),
+    "chunking": re.compile(
+        r"(\bchunk|\bwindow|\bsplit|\bsegment|청크|윈도우|분할|세그먼트|윈도|쪼개)",
+        re.IGNORECASE,
+    ),
+    "prompt": re.compile(
+        r"(\bprompt|\btoken|\blanguage|프롬프트|토큰|언어|힌트)",
+        re.IGNORECASE,
+    ),
+    "decode": re.compile(
+        r"(\bbeam|\btemperature|\bfallback|\bsample|빔|온도|샘플|폴백|디코딩|디코더)",
+        re.IGNORECASE,
+    ),
+    "post": re.compile(
+        r"(\bdedup|\bmerge|\bregex|\bpostprocess|\bpost-process|후처리|중복|병합|정규식)",
+        re.IGNORECASE,
+    ),
 }
 
 # Keyword → expected metric direction (for H. reasoning auto-alignment).
@@ -139,13 +159,30 @@ def _parse_iso(s: str | None) -> datetime | None:
 
 
 def discover_iterations(runs_dir: Path) -> list[IterRecord]:
-    """Walk ``runs/`` and load every hyp_id directory with a score_report."""
+    """Walk ``runs/`` and load every hyp_id directory with a score_report.
+
+    Skips three classes of directory:
+      * exact names ``_summary`` / ``_telemetry``,
+      * anything starting with ``_`` (auxiliary buckets) or ``holdout``
+        (``evaluate_holdout`` produces ``holdout_<unix_ts>``),
+      * directories whose ``score_report.batch`` is not the eval batch —
+        defense in depth against future name conventions.
+    """
     out: list[IterRecord] = []
     for child in sorted(runs_dir.iterdir() if runs_dir.is_dir() else []):
-        if not child.is_dir() or child.name in _EXCLUDED_DIRNAMES:
+        if not child.is_dir():
+            continue
+        if child.name in _EXCLUDED_DIRNAMES:
+            continue
+        if any(child.name.startswith(p) for p in _EXCLUDED_PREFIXES):
             continue
         score = _read_json(child / "score_report.json")
         if score is None:
+            continue
+        if score.get("batch") and score.get("batch") != _EVAL_BATCH:
+            log.debug(
+                "skip %s: batch=%s is not the eval batch", child.name, score.get("batch")
+            )
             continue
         per_file = _read_jsonl(child / "per_file.jsonl")
         diagnosis = _read_json(child / "diagnosis_report.json")
@@ -186,15 +223,19 @@ def enrich_with_git(iters: list[IterRecord]) -> None:
     earlier commit by timestamp is taken as the iteration's commit. This is a
     heuristic — when autoresearch writes a `runs/<hyp_id>/commit.txt` sidecar
     we prefer that instead.
+
+    All comparisons go through unix-second integers (epoch-naive), which sidesteps
+    the local-vs-UTC ambiguity that ``datetime.fromtimestamp`` introduces on
+    non-UTC hosts.
     """
     log_out = _git(
         "log", "--all", "--pretty=format:%H%x09%ct%x09%s", "--date=iso"
     )
-    commits: list[tuple[str, datetime, str]] = []
+    commits: list[tuple[str, int, str]] = []  # (sha, unix_ts, subject)
     for line in log_out.splitlines():
         try:
             sha, ts, subject = line.split("\t", 2)
-            commits.append((sha, datetime.fromtimestamp(int(ts)), subject))
+            commits.append((sha, int(ts), subject))
         except ValueError:
             continue
     commits.sort(key=lambda t: t[1])
@@ -209,16 +250,21 @@ def enrich_with_git(iters: list[IterRecord]) -> None:
                 it.commit_sha = first.strip()
                 it.commit_subject = rest[0] if rest else None
                 continue
-        # 2. nearest preceding commit by timestamp
+        # 2. nearest preceding commit by unix-second timestamp.
+        # produced_at is the score_report's `datetime.now(UTC)` ISO string, so
+        # converting back to epoch seconds is unambiguous regardless of host TZ.
         target = it.produced_at
-        if target.tzinfo is not None:
-            target = target.replace(tzinfo=None)
-        best: tuple[str, datetime, str] | None = None
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=UTC)
+        target_unix = target.timestamp()
+        best: tuple[str, int, str] | None = None
         for sha, ts, subject in commits:
-            if ts <= target and (best is None or ts > best[1]):
+            if ts <= target_unix and (best is None or ts > best[1]):
                 best = (sha, ts, subject)
         if best is not None:
-            it.commit_sha, it.commit_ts, it.commit_subject = best
+            it.commit_sha = best[0]
+            it.commit_ts = datetime.fromtimestamp(best[1], tz=UTC)
+            it.commit_subject = best[2]
 
 
 # --------------------------------------------------------------------------- #
@@ -603,27 +649,36 @@ def _top3_share(iters: list[IterRecord]) -> tuple[str, str]:
 
 
 def _recovery_and_streak(iters: list[IterRecord]) -> tuple[str, str]:
-    n_after_rollback = 0
+    """Return (recovery_rate_pct, max_rollback_streak).
+
+    A *rollback episode* is a contiguous run of ROLLBACK iterations bordered
+    by an accept (or the start of the job). recovery_rate = (# episodes that
+    end in accept) / (# total episodes). An episode that the job ends inside
+    (no terminating accept) counts toward the denominator but not the
+    numerator — the job failed to recover from that one.
+    """
+    n_episodes = 0
     n_recovered = 0
     max_streak = 0
     current_streak = 0
-    prev_rollback = False
+    prev_was_rollback = False
     for it in iters:
         if it.accepted:
-            if prev_rollback:
+            if prev_was_rollback:
                 n_recovered += 1
             current_streak = 0
-            prev_rollback = False
+            prev_was_rollback = False
         else:
-            if prev_rollback:
-                n_after_rollback += 1
-            else:
-                n_after_rollback += 0  # noop; counted on next accept
+            if not prev_was_rollback:
+                # transition from accept (or job start) into a new rollback episode
+                n_episodes += 1
             current_streak += 1
             max_streak = max(max_streak, current_streak)
-            prev_rollback = True
-    rec_rate = (n_recovered / n_after_rollback * 100) if n_after_rollback else 0.0
-    return (f"{rec_rate:.0f}" if n_after_rollback else "n/a", str(max_streak))
+            prev_was_rollback = True
+    if n_episodes == 0:
+        return ("n/a", str(max_streak))
+    rec_rate = n_recovered / n_episodes * 100
+    return (f"{rec_rate:.0f}", str(max_streak))
 
 
 # --------------------------------------------------------------------------- #
