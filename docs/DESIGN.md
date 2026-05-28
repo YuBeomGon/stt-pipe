@@ -288,6 +288,12 @@ lexical sort. 한 번 결정되면 noise_floor.json 에 박혀 잡 동안 고정
 
 상세는 [`PHASE2-PLAN.md`](PHASE2-PLAN.md). 정본으로 둔다.
 
+**무엇을 분석하는가**: 잡 전체 (25 iter) 종료 후 *루프 진행 자체* 를 검증.
+"최종 corpus_cer 가 좋아졌나" 만 보면 어떻게·어디서 깨졌는지 모르므로, 다음 질문에
+답하는 도구를 미리 만든다 — 한쪽 방향 쏠림 / 큰 개선의 집중 vs 누적 / 가드 과잉
+사살 / agent 의도-결과 일치 / 한두 파일이 점수 끌어옴 / holdout overfit. PHASE2-PLAN
+§0 참조.
+
 요점만:
 - 진입 시점: Phase 1 DoD 통과 직후, autoresearch 잡 *전*
 - 산출물: `scripts/analyze_run.py`, `scripts/evaluate_holdout.py`, `docs/templates/REPORT.md`
