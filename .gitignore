@@ -16,6 +16,8 @@ data/raw/
 
 # 실행 산출물
 runs/
+notes/
+.claude/
 
 # OS
 .DS_Store

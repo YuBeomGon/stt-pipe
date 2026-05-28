@@ -16,11 +16,11 @@ flowchart TD
 
     D --> E[Agent가 workspace/transcribe.py 수정]
     E --> F[Verify: bash scripts/verify.sh]
-    F --> G[judge.evaluate<br/>0715 12 files]
+    F --> G[judge.evaluate<br/>0715 11 files]
 
     G --> H[score_report.json<br/>CER/time/guards]
     G --> I[per_file.jsonl<br/>per-file metrics]
-    G --> J[diagnosis_report.json<br/>12파일 summary + focus 최대 2개]
+    G --> J[diagnosis_report.json<br/>11파일 summary + focus 최대 2개]
     G --> K[_telemetry/*.jsonl/.srt<br/>optional]
 
     H --> L{Hard fail?}
@@ -55,7 +55,7 @@ sequenceDiagram
 
     AR->>W: transcribe.py 수정
     AR->>V: bash scripts/verify.sh
-    V->>J: evaluate 0715 12 pairs
+    V->>J: evaluate 0715 11 pairs
     loop each wav
         J->>W: transcribe(audio, sr)
         W-->>J: text
@@ -80,7 +80,7 @@ flowchart LR
     AP -->|read only after job| AN[scripts/analyze_run.py]
     AP -. direct read forbidden .-> W[workspace/transcribe.py]
 
-    J --> D[diagnosis_report.json<br/>12파일 summary<br/>focus 최대 2개<br/>raw speech_segments 없음]
+    J --> D[diagnosis_report.json<br/>11파일 summary<br/>focus 최대 2개<br/>raw speech_segments 없음]
     D --> AR[autoresearch agent]
     PF[per_file.jsonl] --> AR
     SR[score_report.json] --> AR
@@ -98,11 +98,13 @@ flowchart LR
 | 층위 | 기준 | 역할 |
 |------|------|------|
 | Hard fail | backend/profile 직접참조, holdout 접근, 산술 불일치, evaluate 실패 | 무효 후보 즉시 rollback |
-| Final CER target | `corpus_cer <= baseline/target_cer.json:target_cer` | 최종 목표: faster-whisper CER 이하 달성 |
+| Final CER target | `corpus_cer <= baseline/target_cer.json:target_cer` (= 0.10, 수동) | 최종 목표: 사람이 정한 ambition 도달 |
 | Final time target | `total_inference_time_s <= baseline.total_inference_time_s * budget` | 최종 목표: faster-whisper time budget 안에 들기 |
+| Comparator | `baseline/target_cer.json:baseline_cer` (faster-whisper) | 거리감/품질 참조 앵커. 그 자체가 합격선은 아님 |
 | Noise floor | `Δcer >= 2σ` | 노이즈가 아닌 개선만 keep |
-| Quality diagnostics | hallucination/repetition/length/coverage | 기본은 진단, 최종 목표 baseline 대비 큰 악화만 fail |
+| Quality diagnostics | hallucination/repetition/length/coverage | 기본은 진단, baseline guard 분포 대비 큰 악화만 fail |
 
-Phase 3 의 중간 루프는 현재 best 를 조금씩 갱신하는 과정이고, faster-whisper baseline 은
-매 iter 기준점이 아니라 **최종 목표점**이다. 최종적으로는 faster-whisper 보다 낮은 CER을
-time budget 안에서 달성하면서 품질 가드를 악화시키지 않는 것이 목표다.
+Phase 3 의 중간 루프는 현재 best 를 조금씩 갱신하는 과정이고, `target_cer` (0.10) 가
+**최종 도달 목표**다. faster-whisper 결과 (`baseline_cer`) 는 거리감을 보기 위한 앵커일
+뿐이고, 그것을 단순히 넘기는 것이 곧 성공이 아니다. 최종적으로는 `target_cer` 이하의
+CER 을 baseline time budget 안에서 달성하면서 품질 가드를 악화시키지 않는 것이 목표.

@@ -5,15 +5,24 @@ import pytest
 from judge.pairing import pair_batch, parse_label
 
 
-def test_0715_pairs_exactly_12():
+def test_0715_pairs_after_filter():
+    """0715 has 12 _l files; one (01_8088_..._10_25_39) has a degenerate
+    label (turn markers only). pair_batch defaults to dropping it.
+    """
     pairs = pair_batch("AIG_녹취반출_20250715")
-    assert len(pairs) == 12
+    assert len(pairs) == 11
     for wav, label in pairs:
         assert wav.suffix == ".wav"
         assert label.suffix == ".txt"
         assert wav.stem.endswith("_l")
         assert label.stem.endswith("_l")
         assert wav.stem == label.stem
+    assert not any("10_25_39" in str(w) for w, _ in pairs)
+
+
+def test_0715_pairs_unfiltered_is_12():
+    pairs = pair_batch("AIG_녹취반출_20250715", skip_empty_labels=False)
+    assert len(pairs) == 12
 
 
 def test_parse_label_drops_turn_numbers_and_blanks(tmp_path: Path):

@@ -79,14 +79,14 @@ runs/_summary/                # Phase 3 종료 시 산출물 위치
 
 - `runs/<hyp_id>/score_report.json` 전체
 - `runs/<hyp_id>/per_file.jsonl` 전체
-- `runs/<hyp_id>/diagnosis_report.json` 전체 — 당시 에이전트에게 노출된 12파일 summary + focus 표시
+- `runs/<hyp_id>/diagnosis_report.json` 전체 — 당시 에이전트에게 노출된 11파일 summary + focus 표시
 - `runs/<hyp_id>/_telemetry/*.jsonl` (있을 때)
 - `baseline/target_cer.json`, `baseline/noise_floor.json`
 - `assets/audio_profile/AIG_녹취반출_20250715.json` — 전체 에볼루션 사후 분석용 raw profile
 - `git log --all` (commit 메시지, revert 흔적, timestamp)
 
 > Phase 3 중 에이전트는 raw profile 원본을 직접 읽지 않고, 각 iter 의
-> `diagnosis_report.json` 에 12파일 summary + focus 표시만 본다. `analyze_run.py` 는 잡 종료 후
+> `diagnosis_report.json` 에 11파일 summary + focus 표시만 본다. `analyze_run.py` 는 잡 종료 후
 > raw profile 과 모든 diagnosis 를 함께 읽어 전체 에볼루션을 평가한다.
 
 ### 3.2 CLI

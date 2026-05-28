@@ -53,6 +53,6 @@ def test_evaluate_end_to_end(tmp_path, fake_transcribe_module):
     float(last)  # must be a number
     assert out.is_file()
     report = json.loads(out.read_text(encoding="utf-8"))
-    assert report["num_files"] == 12
+    assert report["num_files"] == 11
     assert (out.parent / "per_file.jsonl").is_file()
     assert (out.parent / "diagnosis_report.json").is_file()

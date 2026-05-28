@@ -75,7 +75,7 @@ aig/
 │   ├── <hyp_id>/                # autoresearch iteration별 산출물
 │   │   ├── score_report.json
 │   │   ├── per_file.jsonl
-│   │   ├── diagnosis_report.json # LLM 추론용 12파일 summary + focus 최대 2개
+│   │   ├── diagnosis_report.json # LLM 추론용 11파일 summary + focus 최대 2개
 │   │   └── _telemetry/
 │   │       ├── <file_id>.jsonl   # 정본 segment telemetry (optional)
 │   │       └── <file_id>.srt     # JSONL 에서 일방향 변환된 사람용 view
@@ -154,10 +154,10 @@ python -m judge.evaluate \
 ```
 
 동작:
-1. `pairing` 으로 12 페어 로드
+1. `pairing` 으로 11 페어 로드
 2. 각 wav → `librosa.load(sr=16000, mono=True)` → telemetry env 설정 → `transcribe(audio, sr)` 호출
 3. per-file CER + 가드 산출 → `score_report.json` 작성
-4. 12파일 전체의 profile summary 와 focus file 최대 2개를 결합해
+4. 11파일 전체의 profile summary 와 focus file 최대 2개를 결합해
    `diagnosis_report.json` 작성
 5. **마지막 줄에 `corpus_cer` 한 숫자 print** (autoresearch Verify 가 파싱)
 
@@ -167,7 +167,7 @@ judge 가 설정한 `ASR_TELEMETRY_DIR`, `ASR_TELEMETRY_FILE_ID` 를 사용해
 coverage guard 를 skip 한다.
 
 `diagnosis_report.json` 은 에이전트 추론용이다. raw `assets/audio_profile/*.json` 전체를
-직접 노출하지 않고, 12파일 전체의 summary 만 포함한다. guard 위반·worst CER·baseline
+직접 노출하지 않고, 11파일 전체의 summary 만 포함한다. guard 위반·worst CER·baseline
 대비 악화 기준으로 선택된 focus file 최대 2개는 우선순위 표시일 뿐이다.
 `speech_segments` 원본 start/end 리스트는 구체적인 chunking 힌트가 되므로 diagnosis 에
 넣지 않고, segment 개수·발화 길이 분위수·무음 gap 분위수 같은 요약만 제공한다.
@@ -224,13 +224,19 @@ python -m judge.evaluate \
 
 ### 2.9 Baseline 측정 (`scripts/measure_baseline.py`)
 
-`faster-whisper` 로 0715 12 페어 1회 transcribe → 동일 judge 로 점수 산출 → `baseline/target_cer.json` 작성:
+`faster-whisper` 로 0715 11 페어 1회 transcribe → 동일 judge 로 점수 산출 →
+`baseline/target_cer.json` 작성. `target_cer` 는 사람이 정한 *최종 목표*
+(현재 `0.10`) 로 박히고, faster-whisper 가 실제로 낸 점수는 `baseline_cer`
+필드에 별도로 저장된다 — 둘이 갖는 의미가 다르기 때문에 분리한다
+(`STT-PIPELINE-SPEC.md §7`).
 
 ```json
 {
-  "target_cer": 0.0XXX,
+  "target_cer": 0.10,
+  "baseline_cer": 0.0XXX,
   "macro_cer": 0.0XXX,
-  "num_files": 12,
+  "num_files": 11,
+  "num_files_scored": 11,
   "batches": ["AIG_녹취반출_20250715"],
   "total_audio_s": ...,
   "total_inference_time_s": ...,
@@ -259,11 +265,12 @@ python -m judge.evaluate \
 }
 ```
 
-이후 **재실행 금지** (결정론 보장). 한 번 봉인되면 최종 목표값과 품질 참조값으로 쓴다.
+이후 **재실행 금지** (결정론 보장). `baseline_cer` 는 한 번 봉인되면 품질
+참조값으로만 쓰고, `target_cer` 는 사람이 의도해서 바꾸지 않는 한 그대로 둔다.
 
 ### 2.10 σ 측정 (`scripts/measure_sigma.py`) — representative-file proxy
 
-비용 절감을 위해 corpus 전체 12 파일 3 회 대신 **대표 파일 1 개 3 회** 로 σ proxy
+비용 절감을 위해 corpus 전체 11 파일 3 회 대신 **대표 파일 1 개 3 회** 로 σ proxy
 산출. SPEC §6.1 의 운영 옵션을 따른다.
 
 **대표 파일 선정**: 0715 eval 페어 중 `audio_s` 최장 _l.wav. tie-break = path
@@ -291,9 +298,9 @@ lexical sort. 한 번 결정되면 noise_floor.json 에 박혀 잡 동안 고정
 
 ### 2.11 Phase 1 완료 기준 (Definition of Done)
 
-- [ ] 데이터 페어링 코드가 0715 12 페어 정확히 매칭
+- [ ] 데이터 페어링 코드가 0715 11 페어 정확히 매칭
 - [ ] judge 가 스텁 transcribe 에 대해 score_report.json 산출
-- [ ] judge 가 `diagnosis_report.json` 산출 (per_file_diagnosis 12개, focus file 최대 2개, raw `speech_segments` 미포함)
+- [ ] judge 가 `diagnosis_report.json` 산출 (per_file_diagnosis 11개, focus file 최대 2개, raw `speech_segments` 미포함)
 - [ ] `scripts/verify.sh` 실행 시 corpus_cer 숫자가 마지막 줄에 출력
 - [ ] `assets/audio_profile/AIG_녹취반출_20250715.json` 생성 (0715 only — 0813 미생성)
 - [ ] `baseline/target_cer.json` 생성 + 봉인 (재실행 금지 명시)

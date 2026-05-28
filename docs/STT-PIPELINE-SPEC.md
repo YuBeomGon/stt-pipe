@@ -19,12 +19,14 @@ faster-whisper baseline 이하**로 낮춘다.
 | 항목 | 값 |
 |------|------|
 | **Primary metric** | `corpus_cer` (corpus-level character error rate) |
-| **Target** | `corpus_cer ≤ target_cer` (target_cer = faster-whisper baseline, §7) |
+| **Target** | `corpus_cer ≤ target_cer` (target_cer 은 *수동 목표*, 현재 `0.10` — §7) |
+| **Baseline** | `baseline_cer` = faster-whisper off-the-shelf 결과 (참조용 비교 앵커, §7) |
 | **Constraints** | 품질 가드 + 속도 가드 (§6) |
 | **개선 단위** | `Δcer ≥ 2σ` (σ = 평가 노이즈 floor, §6.1) 일 때만 의미 있는 개선 |
 
-목표 절대값은 baseline 측정 후 확정. 시작 시점에서는 "faster-whisper를 능가" 라는
-상대적 목표.
+`target_cer` 는 도달해야 할 수동 목표 (예: 0.10) — 본 문제는 faster-whisper 가 도달
+하지 못한 영역을 ctranslate2 위의 파이프라인 자체로 메우는 것이 목표다. `baseline_cer`
+는 그 목표까지 거리감을 보기 위한 비교 앵커일 뿐, 그 자체가 성공 기준은 아니다.
 
 ---
 
@@ -82,10 +84,15 @@ label 파일을 source of truth로 한다 (label이 wav보다 적거나 같음).
 
 ### 3.5 Batches
 
-| Batch | _l 페어 수 | 용도 |
-|-------|------------|------|
-| `AIG_녹취반출_20250715` | 12 | eval (primary) |
-| `AIG_녹취반출_20250813` | 13 | **holdout — 접근 금지 (§8)** |
+| Batch | _l 페어 수 | scored | 용도 |
+|-------|------------|--------|------|
+| `AIG_녹취반출_20250715` | 11 | 11 | eval (primary) |
+| `AIG_녹취반출_20250813` | 13 | 13 (가정) | **holdout — 접근 금지 (§8)** |
+
+> 0715 의 원래 `_l` 파일은 12 개이지만, 그중 `01_8088_010XXXX1216_2025_07_15_10_25_39_l.txt`
+> 는 turn 번호만 있고 본문이 없는 degenerate label 이라 `pair_batch` 가 자동 스킵한다
+> (참고로 같은 wav 는 57 초 짜리 무음·잡음 위주). 따라서 평가에서 실제 사용되는 페어 수는
+> 11 이다.
 
 > 운영 환경에 `AIG_녹취반출_20250704` 등 다른 batch 가 함께 존재할 수 있으나,
 > 본 문제는 위 두 batch 만 사용한다. pairing 단계에서 다른 batch 는 통과하지
@@ -198,7 +205,7 @@ corpus_cer 하나만 보면 회귀의 원인을 알 수 없다. 다음 가드를
 | `audio_coverage_rate` | 디코더가 처리한 누적 audio_s / 전체 audio_s. pipeline 이 telemetry 를 제공할 때 산출하며, 미제공 시 hard gate 에 쓰지 않는다 |
 | **`hallucination_hit_rate`** | **§6.4 패턴 중 어느 하나라도 hyp에 매치된 파일 비율 (Whisper 알려진 환각 검출)** |
 | `hallucination_hits_total` | 모든 파일·모든 패턴 누적 매치 횟수 (per-file `hallucination_hits` 합) |
-| **`total_inference_time_s`** | **12 파일 전체 처리 wall clock 합** (절대 시간) |
+| **`total_inference_time_s`** | **11 파일 전체 처리 wall clock 합** (절대 시간) |
 | `runtime_s_per_audio_min` | `total_inference_time_s / (total_audio_s / 60)` (단위 시간당 처리 시간 — 1.0이면 실시간) |
 | `avg_rtf` | per-file Real-Time Factor (`decode_s / audio_s`) 평균 |
 
@@ -263,23 +270,26 @@ blocking_patterns:
 
 ---
 
-## 7. Oracle Baseline (비교 기준)
+## 7. Target & Baseline
 
 ### 7.1 정의
 
-`faster-whisper` (CT2 위에 빌드된 핸드튠 추론 라이브러리)로 §3.5의 0715 12 _l
-페어를 1회 transcribe하여 산출한 corpus_cer.
+- **`target_cer`** — 수동으로 정한 최종 목표 (현재 `0.10`). 잡 동안 변경 X.
+  운영 환경에 따라 사람이 한 번 정하고 봉인. autoresearch 의 success 조건은 이 값.
+- **`baseline_cer`** — `faster-whisper` (CT2 위 핸드튠 추론 라이브러리) 로 §3.5 의
+  0715 11 _l 페어를 1회 transcribe 한 corpus_cer. 비교 앵커일 뿐, 성공 기준은 아님.
 
-- 동일한 §5.1 정규화 적용
-- 1회 측정 후 봉인 — 재측정 안 함 (결정론 보장)
+둘 다 동일한 §5.1 정규화를 거친다. `baseline_cer` 는 1회 측정 후 봉인, 재측정 X.
 
 ### 7.2 위치 (이식 시 보관 형식 권장)
 
 ```json
 {
-  "target_cer": 0.0XXX,
+  "target_cer": 0.10,
+  "baseline_cer": 0.0XXX,
   "macro_cer": 0.0XXX,
-  "num_files": 12,
+  "num_files": 11,
+  "num_files_scored": 11,
   "batches": ["AIG_녹취반출_20250715"],
   "total_audio_s": 1245.7,
   "total_inference_time_s": 24.7,
@@ -313,8 +323,10 @@ blocking_patterns:
 
 ### 7.3 의미
 
-- `target_cer`는 **달성해야 할 상한** — 추론 파이프라인이 이 값 이하로 가면 성공
-- `total_inference_time_s`는 최종 속도 목표값 — 운영 설계는 이 값을 기준으로 time budget 을 둔다
+- `target_cer`는 **수동으로 정한 도달 목표** — 추론 파이프라인이 이 값 이하로 가면 성공.
+  현재 `0.10`. faster-whisper 가 같은 데이터에서 더 높은 CER 을 내더라도 목표는 변하지 않는다.
+- `baseline_cer`는 같은 데이터에 대한 faster-whisper 결과 — 거리감 측정용. 잡 중 갱신 X.
+- `total_inference_time_s`는 baseline 측정 시 같이 기록되며, time budget 의 앵커가 된다.
 - faster-whisper 자체는 **비교 기준일 뿐 해법이 아님** — 우리 파이프라인은
   ctranslate2 raw로 직접 구성
 
@@ -478,7 +490,7 @@ text_pre_merge_len, text_post_merge_len, overlap_dedup_chars
 | 단계 | 단일 책임 |
 |------|----------|
 | (1) Backend | 모델 가중치 동결 — 동일 출발선 보장 |
-| (2) Dataset | label-driven, _l only, 0715 12 페어 |
+| (2) Dataset | label-driven, _l only, 0715 11 페어 |
 | (3) Labels | turn 구조 + `[INAUDIBLE]` 제거 + 1줄 reference |
 | (4) Normalization | NFC + INAUDIBLE 제거 + 구두점 제거 + lowercase + whitespace 제거 |
 | (5) Aggregation | corpus-level char-weighted CER |

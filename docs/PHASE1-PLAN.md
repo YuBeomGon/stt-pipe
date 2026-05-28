@@ -17,7 +17,7 @@
 | GPU 가용성 | `nvidia-smi` — float16 14GB 정도 여유? | CUDA 환경 정비 |
 | Python 3.10+ | `python --version` | venv 따로 |
 | 데이터 존재 | `ls $ASR_RAW_DATA_ROOT/wav/AIG_녹취반출_20250715/*_l.wav \| wc -l` → 12 기대 | 사용자에게 위치 확인 |
-| label 매칭 | 동일 디렉토리 label 도 12개 | 사용자에게 확인 |
+| label 매칭 | 같은 디렉토리에 label 12개 (그중 1개는 본문이 없는 degenerate, 자동 스킵 → 사용 11) | 사용자에게 확인 |
 | holdout 존재 (참고만) | 0813 존재 확인 (13 페어 기대), **건드리지 않음** | — |
 | Git 초기화 | `git rev-parse --show-toplevel` | `git init` 후 `.gitignore` 작성 |
 | 인터넷 | HF model 다운로드 가능 | proxy/mirror 설정 |
@@ -99,16 +99,18 @@ ct2-transformers-converter \
 
 ### 2.1 `judge/pairing.py`
 
-함수: `def pair_batch(batch_name: str, root: Path = ...) -> list[tuple[Path, Path]]:`
+함수: `def pair_batch(batch_name: str, root: Path = ..., skip_empty_labels: bool = True) -> list[tuple[Path, Path]]:`
 
-규칙 (`STT-PIPELINE-SPEC.md §3.4`):
+규칙 (`STT-PIPELINE-SPEC.md §3.4 / §3.5`):
 1. `root/label/<batch>/*.txt` iterate
 2. `*_l.txt` 패턴만 통과
 3. 같은 basename 의 `root/wav/<batch>/<base>.wav` 페어링
 4. wav 없는 label → skip + log warning
-5. `ASR_RAW_DATA_ROOT` env var 로 root 오버라이드
+5. `parse_label()` 결과가 빈 문자열인 degenerate 라벨은 기본 스킵 (turn 번호만
+   있고 본문이 없는 케이스). 디버깅 시 `skip_empty_labels=False` 로 끄면 원본 셋이 나옴.
+6. `ASR_RAW_DATA_ROOT` env var 로 root 오버라이드
 
-**검증**: 0715 에 대해 정확히 12 페어 반환.
+**검증**: 0715 에 대해 정확히 11 페어 반환 (원본 12 중 degenerate 라벨 1 개 자동 제외).
 
 ### 2.2 `judge/normalize.py`
 
@@ -131,7 +133,7 @@ ct2-transformers-converter \
 - 나머지 줄을 공백 한 칸으로 concat → 한 줄 reference
 
 **검증 (이 Step 종료 시)**:
-- 0715 label 12개 모두 정상 파싱 (빈 reference 없음)
+- 0715 label 11개 모두 정상 파싱 (빈 reference 없음)
 - `normalize("[INAUDIBLE] 안녕하세요!")` → `"안녕하세요"`
 - 동일 정규화 함수가 hypothesis 와 reference 양쪽에 쓰일 것을 의식하고 작성
 
@@ -180,7 +182,7 @@ def corpus_aggregate(per_file: list[dict]) -> dict:
 
 에이전트가 다음 가설을 세울 수 있도록, 점수와 오디오 특성을 결합한
 `runs/<hyp_id>/diagnosis_report.json` 을 만든다. 원본 `assets/audio_profile/*.json`
-전체를 노출하지 않고, 0715 12개 파일 모두의 요약 summary 를 붙인다. 구체적인
+전체를 노출하지 않고, 0715 11개 파일 모두의 요약 summary 를 붙인다. 구체적인
 VAD 경계는 숨기고, focus file 은 그중 우선 볼 파일 최대 2개를 표시하는 인덱스다.
 
 **focus file 선정 (deterministic, 최대 2개)**:
@@ -241,7 +243,7 @@ start/end 경계를 그대로 주면 그 자체가 chunking recipe 가 되므로
 
 Phase 1 에서는 얇은 pytest 를 둔다.
 - `tests/test_normalize.py`: 정규화 골든 케이스
-- `tests/test_pairing.py`: 0715 12 페어 매칭
+- `tests/test_pairing.py`: 0715 11 페어 매칭
 - `tests/test_metrics.py`: editops 산술과 corpus 집계
 - `tests/test_evaluate_smoke.py`: fake audio + stub transcribe end-to-end
 
@@ -267,7 +269,7 @@ python -m judge.evaluate \
 5. `per_file_metrics` → `corpus_aggregate`
 6. `score_report.json` 작성 (DESIGN §2.5 형식)
 7. `per_file.jsonl` 작성
-8. `assets/audio_profile/` 원본에서 전체 12파일 summary + focus file 최대 2개를 뽑아
+8. `assets/audio_profile/` 원본에서 전체 11파일 summary + focus file 최대 2개를 뽑아
    `diagnosis_report.json` 작성
 9. **마지막 줄에 corpus_cer 한 숫자만 print** — autoresearch Verify 파싱용
 
@@ -463,10 +465,10 @@ audio-only 원칙. 필요하면 별도 `assets/label_profile/<batch>.json` 으�
 ### 7.3 검증
 
 - per_file 12 행 (0715)
-- duration_s 합산이 12 페어 wav 의 librosa.get_duration 합과 일치
+- duration_s 합산이 11 페어 wav 의 librosa.get_duration 합과 일치
 - speech_segments 가 [0, duration_s] 안에 들어옴
 - profile 생성 후 `bash scripts/verify.sh` 재실행 시 `diagnosis_report.json` 에
-  per_file_diagnosis 12개, focus file ≤ 2, raw `speech_segments` 미포함
+  per_file_diagnosis 11개, focus file ≤ 2, raw `speech_segments` 미포함
 
 ---
 
@@ -476,10 +478,12 @@ audio-only 원칙. 필요하면 별도 `assets/label_profile/<batch>.json` 으�
 
 흐름:
 1. faster-whisper 로드 (`large-v3-turbo`, float16, GPU)
-2. 0715 12 페어 iterate → `model.transcribe(wav)` → text 합치기
+2. 0715 11 페어 iterate → `model.transcribe(wav)` → text 합치기
 3. **동일 judge 의 normalize + metrics** 사용 (transcribe 만 다른 백엔드)
-4. `baseline/target_cer.json` 작성 (DESIGN §2.9 형식). `target_cer`,
-   `total_inference_time_s`, `runtime_s_per_audio_min`, `guard_baseline` 을 함께 기록
+4. `baseline/target_cer.json` 작성 (DESIGN §2.9 형식). `target_cer` 는
+   사람이 정한 수동 목표 (현재 0.10, `--target-cer` 로 override 가능). 측정된
+   faster-whisper corpus_cer 은 같은 파일의 `baseline_cer` 필드에 별도 저장.
+   `total_inference_time_s`, `runtime_s_per_audio_min`, `guard_baseline` 도 함께 기록.
 
 ### 8.2 봉인
 
@@ -489,11 +493,12 @@ audio-only 원칙. 필요하면 별도 `assets/label_profile/<batch>.json` 으�
 - `versions`, `model`, `decoding_params`, `hardware`, `guard_baseline` 메타데이터 기록
 
 **검증**:
-- `target_cer` 가 합리적 범위 (보험 콜센터 한국어로 0.05~0.20 추정)
+- `target_cer` 가 운영 목표값 (현재 0.10) — 측정값이 아니라 사람이 정한 ambition
+- `baseline_cer` 가 합리적 범위에 떨어지는지 확인 (보험 콜센터 한국어 + faster-whisper 라 상당히 클 수 있음)
 - `total_inference_time_s`, `total_audio_s`, `runtime_s_per_audio_min` 기록됨
 - `guard_baseline` 에 empty/length/repeated/hallucination/audio_coverage 기준값 기록됨
 - faster-whisper / ctranslate2 / transformers 버전, HF revision, decoding params 기록됨
-- per_file 12 행, edits 합산이 corpus_cer 와 일치
+- per_file 11 행, edits 합산이 `baseline_cer` 와 일치
 
 ---
 
@@ -501,7 +506,7 @@ audio-only 원칙. 필요하면 별도 `assets/label_profile/<batch>.json` 으�
 
 ### 9.1 `scripts/measure_sigma.py`
 
-**비용 절감**: corpus 전체 12 페어 × 3 회 (=수십 시간) 대신 **대표 파일 1 개 × 3 회**.
+**비용 절감**: corpus 전체 11 페어 × 3 회 (=수십 시간) 대신 **대표 파일 1 개 × 3 회**.
 SPEC §6.1 의 representative-file proxy 옵션. 정직하게 *근사* 임을 기록.
 
 흐름:
@@ -543,10 +548,10 @@ SPEC §6.1 의 representative-file proxy 옵션. 정직하게 *근사* 임을 �
 
 `DESIGN.md §2.10` 체크리스트 그대로:
 
-- [ ] 데이터 페어링 코드가 0715 12 페어 정확히 매칭
+- [ ] 데이터 페어링 코드가 0715 11 페어 정확히 매칭
 - [ ] judge 가 스텁 transcribe 에 대해 score_report.json 산출
 - [ ] `scripts/verify.sh` 실행 시 corpus_cer 숫자가 마지막 줄에 출력
-- [ ] `runs/<hyp_id>/diagnosis_report.json` 생성 — per_file_diagnosis 12개, focus file 최대 2개, raw `speech_segments` 미포함
+- [ ] `runs/<hyp_id>/diagnosis_report.json` 생성 — per_file_diagnosis 11개, focus file 최대 2개, raw `speech_segments` 미포함
 - [ ] `assets/audio_profile/AIG_녹취반출_20250715.json` 생성 (0715 only — 0813 미생성)
 - [ ] `baseline/target_cer.json` 생성 + 봉인
 - [ ] `baseline/target_cer.json` 에 versions/model/decoding_params/hardware/guard_baseline 메타데이터 기록

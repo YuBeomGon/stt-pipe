@@ -73,6 +73,8 @@ def measure(
     compute_type: str = "float16",
     beam_size: int = 5,
     language: str = "ko",
+    vad_filter: bool = True,
+    target_cer: float = 0.10,
 ) -> dict[str, Any]:
     if batch in _FORBIDDEN_BATCHES:
         raise SystemExit(f"refusing to measure baseline on holdout {batch!r}")
@@ -99,7 +101,7 @@ def measure(
         "language": language,
         "task": "transcribe",
         "beam_size": beam_size,
-        "vad_filter": False,
+        "vad_filter": vad_filter,
         "without_timestamps": True,
         "condition_on_previous_text": False,
     }
@@ -126,17 +128,24 @@ def measure(
         )
         per_file.append({"wav": str(wav_path), "label": str(label_path), **m})
         cer = m["cer"]
+        cer_str = f"{cer:.4f}" if cer is not None else "n/a"
         print(
-            f"{wav_path.name}  cer={cer:.4f}  audio={audio_s:.1f}s  decode={decode_s:.2f}s",
+            f"{wav_path.name}  cer={cer_str}  audio={audio_s:.1f}s  decode={decode_s:.2f}s",
             flush=True,
         )
 
     agg = corpus_aggregate(per_file)
 
+    # Phase 3 success criterion is the manual goal (`target_cer`), not the
+    # measured baseline. `baseline_cer` is the off-the-shelf faster-whisper
+    # number we are trying to beat. Decoupling lets us aim past faster-whisper
+    # without re-sealing the baseline if we change the ambition.
     baseline: dict[str, Any] = {
-        "target_cer": agg["corpus_cer"],
+        "target_cer": target_cer,
+        "baseline_cer": agg["corpus_cer"],
         "macro_cer": agg["macro_cer"],
         "num_files": agg["num_files"],
+        "num_files_scored": agg.get("num_files_scored"),
         "batches": [batch],
         "total_audio_s": agg["total_audio_s"],
         "total_inference_time_s": agg["total_inference_time_s"],
@@ -183,6 +192,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--compute-type", default="float16")
     parser.add_argument("--beam-size", type=int, default=5)
+    parser.add_argument("--no-vad-filter", dest="vad_filter", action="store_false")
+    parser.set_defaults(vad_filter=True)
+    parser.add_argument(
+        "--target-cer",
+        type=float,
+        default=0.10,
+        help="success goal (Phase 3 keep/revert is against this, not baseline_cer)",
+    )
     args = parser.parse_args(argv)
 
     result = measure(
@@ -192,9 +209,12 @@ def main(argv: list[str] | None = None) -> int:
         device=args.device,
         compute_type=args.compute_type,
         beam_size=args.beam_size,
+        vad_filter=args.vad_filter,
+        target_cer=args.target_cer,
     )
     print(
         f"\ntarget_cer={result['target_cer']:.6f}  "
+        f"baseline_cer={result['baseline_cer']:.6f}  "
         f"total_inference_time_s={result['total_inference_time_s']:.2f}",
     )
     return 0

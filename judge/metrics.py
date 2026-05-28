@@ -126,15 +126,22 @@ def corpus_aggregate(per_file: Iterable[dict[str, Any]]) -> dict[str, Any]:
     if n == 0:
         raise ValueError("corpus_aggregate: empty per_file list")
 
-    total_ref = sum(f["ref_chars"] for f in files)
-    total_edits = sum(f["edits"] for f in files)
-    total_sub = sum(f["sub"] for f in files)
-    total_del = sum(f["del"] for f in files)
-    total_ins = sum(f["ins"] for f in files)
+    # Files with an empty reference (e.g. a label that contains only
+    # turn-number markers) cannot contribute to character-weighted CER and
+    # would otherwise inflate the numerator with pure-insertion edits.
+    # Keep them in per_file.jsonl for transparency but exclude from the
+    # corpus_cer / edit-breakdown sums.
+    scored = [f for f in files if f["ref_chars"] > 0]
+    num_scored = len(scored)
+    total_ref = sum(f["ref_chars"] for f in scored)
+    total_edits = sum(f["edits"] for f in scored)
+    total_sub = sum(f["sub"] for f in scored)
+    total_del = sum(f["del"] for f in scored)
+    total_ins = sum(f["ins"] for f in scored)
     total_audio = sum(f["audio_s"] for f in files)
     total_decode = sum(f["decode_s"] for f in files)
 
-    cer_values = [f["cer"] for f in files if f["cer"] is not None]
+    cer_values = [f["cer"] for f in scored if f["cer"] is not None]
     macro_cer = statistics.fmean(cer_values) if cer_values else None
     corpus_cer = (total_edits / total_ref) if total_ref > 0 else None
 
@@ -179,6 +186,7 @@ def corpus_aggregate(per_file: Iterable[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "num_files": n,
+        "num_files_scored": num_scored,
         "corpus_cer": corpus_cer,
         "macro_cer": macro_cer,
         "error_breakdown": breakdown,

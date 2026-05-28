@@ -134,10 +134,13 @@ def evaluate_batch(
             record = {"wav": str(wav_path), "label": str(label_path), **metrics}
             per_file_records.append(record)
             pf_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            cer_str = (
+                f"{metrics['cer']:.4f}" if metrics["cer"] is not None else "n/a"
+            )
             log.info(
                 "scored %s cer=%s decode_s=%.2f hits=%d",
                 wav_path.name,
-                f"{metrics['cer']:.4f}" if metrics["cer"] is not None else "n/a",
+                cer_str,
                 decode_s,
                 metrics["hallucination_hits"],
             )

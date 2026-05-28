@@ -1,7 +1,7 @@
 {
   "batch": "AIG_녹취반출_20250715",
   "method": "silero-vad (silero-vad pip pkg) + RMS aggregates (librosa)",
-  "produced_at": "2026-05-28T07:54:33.487219+00:00",
+  "produced_at": "2026-05-28T08:06:35.313413+00:00",
   "per_file": [
     {
       "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/00003004871752551193_l.wav",
@@ -3590,17 +3590,6 @@
       "rms_db_mean": -35.72783279418945,
       "rms_db_p05": -65.6259994506836,
       "rms_db_p95": -25.062808990478516
-    },
-    {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/01_8088_010XXXX1216_2025_07_15_10_25_39_l.wav",
-      "duration_s": 57.44375,
-      "speech_segments": [],
-      "silence_ratio": 1.0,
-      "longest_silence_s": 57.44375,
-      "longest_speech_s": 0.0,
-      "rms_db_mean": -70.42906188964844,
-      "rms_db_p05": -83.48741912841797,
-      "rms_db_p95": -63.35055923461914
     },
     {
       "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_09_49_57_l.wav",

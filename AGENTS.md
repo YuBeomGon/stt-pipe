@@ -27,7 +27,7 @@ faster-whisper baseline 이하로 낮춘다.
 | `frozen/` | **편집 금지** — backend(CT2 + whisper-large-v3-turbo) 봉인. decoding params 는 workspace 에서 자유 |
 | `judge/` | **편집 금지** — 평가자 본문 |
 | `baseline/` | **편집 금지** — 봉인됨. 재측정 금지 |
-| `assets/audio_profile/` | **편집 금지** — 0715 audio-only profile 봉인. 원본은 `judge/verify/analyze` 만 읽고, `workspace/transcribe.py` 의 직접 경로/open 참조는 금지. 에이전트에는 `runs/<hyp_id>/diagnosis_report.json` 의 12파일 summary 와 focus 표시만 노출. 0813 은 Phase 3 *전* 생성 X |
+| `assets/audio_profile/` | **편집 금지** — 0715 audio-only profile 봉인. 원본은 `judge/verify/analyze` 만 읽고, `workspace/transcribe.py` 의 직접 경로/open 참조는 금지. 에이전트에는 `runs/<hyp_id>/diagnosis_report.json` 의 11파일 summary 와 focus 표시만 노출. 0813 은 Phase 3 *전* 생성 X |
 | `scripts/` | **편집 금지** — verify / measure / analyze / evaluate_holdout 보호 |
 | `docs/` | **편집 금지** — 정본·운영 문서 |
 | `tests/` | **편집 금지** |
@@ -48,7 +48,8 @@ batch 참조 필수). 정본·운영 문서 (`docs/`, `README.md`, `AGENTS.md`, 
 | 무엇 | 어디 |
 |------|------|
 | Primary metric | `corpus_cer` (lower is better) |
-| Final target | `baseline/target_cer.json` 의 `target_cer` 이하 |
+| Final target | `baseline/target_cer.json` 의 `target_cer` 이하 (= 0.10, 사람이 정한 수동 목표) |
+| Comparator | `baseline/target_cer.json` 의 `baseline_cer` (faster-whisper, 참조 앵커) |
 | Final time target | `baseline/target_cer.json` 의 `total_inference_time_s` budget |
 | 의미 있는 개선 | `Δcer ≥ 2σ` (σ = `baseline/noise_floor.json`) |
 | 가드 (Phase 3) | backend/profile 직접참조·실행 실패·산술 불일치는 hard-fail. hallucination/length/repetition/coverage 는 `guard_baseline` 대비 quality budget 으로 판단 |

@@ -44,6 +44,19 @@ def test_hallucination_pattern_hit_on_raw():
     assert m["hallucinated_spans"][0]["pattern"]
 
 
+def test_empty_reference_excluded_from_corpus_cer():
+    # File with a degenerate label (no usable transcript) must not inflate
+    # the corpus_cer numerator or skew breakdown ratios.
+    real = per_file_metrics("안녕하세요", "안녕", "안녕", 5.0, 0.5)
+    empty_ref = per_file_metrics("", "환각텍스트", "환각텍스트", 5.0, 0.5)
+    agg = corpus_aggregate([real, empty_ref])
+    assert agg["num_files"] == 2
+    assert agg["num_files_scored"] == 1
+    assert math.isclose(agg["corpus_cer"], real["edits"] / real["ref_chars"])
+    # Empty-ref file still affects rates that don't divide by chars.
+    assert agg["empty_output_rate"] == 0.0
+
+
 def test_repeated_text_detected():
     rep = "안녕하세" * 3 + "다른텍스트"
     m = per_file_metrics(

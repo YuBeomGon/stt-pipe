@@ -24,12 +24,14 @@ chmod -R 000 data/raw/label/AIG_녹취반출_20250813
 
 ### 1.2 Verify 판정 정책
 
-Phase 3 의 최종 목표점은 Phase 1 에서 봉인한 faster-whisper baseline 이다.
-중간 iteration 은 이 목표점을 매번 넘겨야 하는 것이 아니라, 현재 best 대비
-`2σ` 이상 개선되는지를 보고 keep/revert 한다.
+Phase 3 의 최종 목표점은 사람이 정한 `target_cer` (현재 `0.10`) 다. faster-whisper
+`baseline_cer` 은 그 목표까지 거리를 보기 위한 참조 앵커일 뿐 성공 기준이 아니다
+(STT-PIPELINE-SPEC §7 / DESIGN §2.9). 중간 iteration 은 이 목표를 매번 넘겨야 하는
+것이 아니라, 현재 best 대비 `2σ` 이상 개선되는지를 보고 keep/revert 한다.
 
-- 최종 CER 목표: `baseline/target_cer.json:target_cer`
-- 최종 시간 목표: `baseline/target_cer.json:total_inference_time_s`
+- 최종 CER 목표: `baseline/target_cer.json:target_cer` (= 0.10, 수동)
+- 최종 시간 목표: `baseline/target_cer.json:total_inference_time_s` (faster-whisper 측정값)
+- 비교 앵커: `baseline/target_cer.json:baseline_cer` (faster-whisper corpus_cer)
 - 중간 keep/revert 기준: 현재 best 대비 `baseline/noise_floor.json:sigma`
 - 품질 참조값: baseline 측정 때 같은 judge 로 산출한 guard 분포
 
@@ -45,13 +47,14 @@ baseline 목표 대비 큰 악화 여부와 diagnosis 로 다룬다.
 | **산술 무결성** | `Σ edits / Σ ref_chars != corpus_cer` 또는 per-file 합산 불일치 | exit 1 |
 | **catastrophic output** | `empty_output_rate > 0.50` 또는 `length_ratio.p05 < 0.10` 또는 `length_ratio.p95 > 5.0` | exit 1 |
 | **runtime hard cap** | `total_inference_time_s > baseline.total_inference_time_s * RUNTIME_HARD_MULTIPLIER` | exit 1 |
-| **quality budget** | hallucination/repetition/coverage/length 가 최종 목표 baseline 대비 크게 악화 | 기본 warning + diagnosis. 악화 허용폭 초과 시 exit 1 가능 |
+| **quality budget** | hallucination/repetition/coverage/length 가 `baseline_cer` 측정 시 guard 분포 대비 크게 악화 | 기본 warning + diagnosis. 악화 허용폭 초과 시 exit 1 가능 |
 | **keep/revert** | `corpus_cer <= best_cer - 2σ` | autoresearch 가 keep, 아니면 rollback |
 | **success** | `corpus_cer <= target_cer` 그리고 `total_inference_time_s <= baseline.total_inference_time_s * RUNTIME_SUCCESS_MULTIPLIER` | 종료 가능 |
 
 초기 운영값:
 - `RUNTIME_HARD_MULTIPLIER=3.0` — 폭주 방지용. 너무 빡빡하면 탐색 자체가 막힘.
-- `RUNTIME_SUCCESS_MULTIPLIER=1.0` — 최종 성공 목표는 faster-whisper time 이하.
+- `RUNTIME_SUCCESS_MULTIPLIER=1.0` — 시간 목표는 faster-whisper time 이하 (앵커가 baseline_cer 측정값).
+- `target_cer=0.10` — 사람이 정한 도달 목표. faster-whisper 가 그보다 높은 CER 을 내더라도 변경하지 않는다.
 - `quality budget` 은 baseline guard 값 + 작은 허용폭으로 시작하되, Phase 1 baseline 측정값을 보고 확정.
 
 `corpus_cer`, runtime, guard 값은 모두 `score_report.json` 에 기록한다. 에이전트의 원인
@@ -75,7 +78,7 @@ Claude Code 세션 안에서:
 
 ```
 /autoresearch
-Goal: workspace/transcribe.py 의 transcribe(audio, sr) 함수를 진화시켜 0715 12 페어 corpus_cer 을 baseline/target_cer.json 의 target_cer 이하로 낮추고, total_inference_time_s 는 baseline time budget 안에 둔다. 어떤 backend·model 변경도 금지 (STT-PIPELINE-SPEC.md §2, §11 참조).
+Goal: workspace/transcribe.py 의 transcribe(audio, sr) 함수를 진화시켜 0715 11 페어 corpus_cer 을 baseline/target_cer.json 의 `target_cer` (= 0.10, 수동 목표) 이하로 낮추고, total_inference_time_s 는 같은 파일의 baseline time budget 안에 둔다. faster-whisper `baseline_cer` 은 비교 앵커일 뿐 그 값을 넘기는 게 성공 기준은 아니다. 어떤 backend·model 변경도 금지 (STT-PIPELINE-SPEC.md §2, §7, §11 참조).
 Scope: workspace/transcribe.py
 Metric: corpus_cer (primary, lower is better); runtime and quality budget are verify constraints
 Verify: bash scripts/verify.sh
@@ -97,7 +100,7 @@ Iterations: 25
 | `workspace/transcribe.py` (편집 대상) | `judge/` 본문 (평가자 보호) |
 | 자기 `runs/<hyp_id>/score_report.json` 결과 | holdout 디렉토리 (chmod 차단) |
 | 자기 `runs/<hyp_id>/per_file.jsonl`, `_telemetry/` 결과 | baseline 산출 코드와 봉인 파일 본문 |
-| 자기 `runs/<hyp_id>/diagnosis_report.json` — 12파일 profile summary + focus file 최대 2개 | `assets/audio_profile/` 원본 (workspace 직접 참조 금지) |
+| 자기 `runs/<hyp_id>/diagnosis_report.json` — 11파일 profile summary + focus file 최대 2개 | `assets/audio_profile/` 원본 (workspace 직접 참조 금지) |
 
 > **검토 필요**: autoresearch 의 파일 접근 권한 제어 메커니즘 확인. 못 막으면 명세
 > 텍스트 + 권한(chmod) + 신뢰 모델 조합으로 운영.
@@ -129,7 +132,7 @@ Iterations: 25
 각 iteration:
 - `runs/<hyp_id>/score_report.json` — 메트릭 + 가드
 - `runs/<hyp_id>/per_file.jsonl` — 진단 (per-file telemetry)
-- `runs/<hyp_id>/diagnosis_report.json` — LLM 추론용 12파일 summary + focus file 최대 2개
+- `runs/<hyp_id>/diagnosis_report.json` — LLM 추론용 11파일 summary + focus file 최대 2개
 - `runs/<hyp_id>/_telemetry/*.jsonl` — sidecar (있을 때)
 - workspace 변경: autoresearch 가 자체 git commit / revert
 

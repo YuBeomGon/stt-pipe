@@ -23,6 +23,7 @@ def _default_root() -> Path:
 def pair_batch(
     batch_name: str,
     root: Path | None = None,
+    skip_empty_labels: bool = True,
 ) -> list[tuple[Path, Path]]:
     """Return list of `(wav_path, label_path)` for the given batch.
 
@@ -31,7 +32,10 @@ def pair_batch(
         2. Keep only `*_l.txt` (left channel).
         3. Pair with matching `<root>/wav/<batch>/<stem>.wav`.
         4. Skip + warn when the wav is missing.
-        5. Output sorted by wav path for deterministic order.
+        5. Drop labels whose parsed reference is empty (turn-marker-only
+           files contribute no usable transcript). Disable via
+           ``skip_empty_labels=False`` for diagnostics.
+        6. Output sorted by wav path for deterministic order.
     """
     if root is None:
         root = _default_root()
@@ -51,6 +55,12 @@ def pair_batch(
         wav_path = wav_dir / (label_path.stem + ".wav")
         if not wav_path.is_file():
             log.warning("pairing: wav missing for label %s", label_path)
+            continue
+        if skip_empty_labels and not parse_label(label_path).strip():
+            log.warning(
+                "pairing: dropping degenerate label (empty reference) %s",
+                label_path,
+            )
             continue
         pairs.append((wav_path, label_path))
 
