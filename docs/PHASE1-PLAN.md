@@ -1,7 +1,7 @@
 # Phase 1 — Harness 구축 플랜
 
 > **범위**: `DESIGN.md` 의 Phase 1 만. 가드레일은 전부 OFF 상태로 골격·judge·baseline·σ
-> 까지 완성하는 것이 목표. Phase 2 (autoresearch 자동화) 는 별도 플랜.
+> 까지 완성하는 것이 목표. Phase 2 (평가 인프라) / Phase 3 (autoresearch 실행 + 분석) 은 별도 플랜.
 
 작업 순서는 **의존 관계 기반**. judge 가 모든 측정의 기반이므로 가장 먼저, 그 다음
 스텁, baseline, σ 순.
@@ -154,7 +154,7 @@ def corpus_aggregate(per_file: list[dict]) -> dict:
 `null` 또는 omit 하고, corpus `audio_coverage_rate` 는 hard gate 에 쓰지 않는다.
 
 `repeated_text_rate` 검출은 단순 휴리스틱으로 시작 (예: 동일 4-gram 이상이 3회 이상
-연속 등장하는 파일 비율). Phase 1 정밀도는 중요치 않음 — 가드 임계는 Phase 2 에서
+연속 등장하는 파일 비율). Phase 1 정밀도는 중요치 않음 — 가드 임계는 Phase 3 에서
 조정.
 
 ### 3.2 단위 점검 (간이)
@@ -317,7 +317,7 @@ bash scripts/verify.sh
 ### 7.2 스텁이 너무 깨졌을 때
 
 스텁의 corpus_cer 이 1.0 이상 (= 사실상 빈 출력) 이거나 매 실행 동일 (= 결정론) 이면
-σ ≈ 0 으로 나옴. 이 경우 σ 측정은 **Phase 2 첫 정상 가설 이후로 미룸** — 노이즈
+σ ≈ 0 으로 나옴. 이 경우 σ 측정은 **Phase 3 첫 정상 가설 이후로 미룸** — 노이즈
 임계 적용을 그만큼 늦춤.
 
 **검증**:
@@ -356,5 +356,5 @@ bash scripts/verify.sh
 
 ## 다음 단계
 
-Phase 1 DoD 전부 통과 → `docs/PHASE2-PLAN.md` 작성 (별도) → autoresearch 가드레일
-활성화 + 호출.
+Phase 1 DoD 전부 통과 → [`PHASE2-PLAN.md`](PHASE2-PLAN.md) (평가 인프라 구축) →
+[`PHASE3-PLAN.md`](PHASE3-PLAN.md) (autoresearch 실행 + 분석).

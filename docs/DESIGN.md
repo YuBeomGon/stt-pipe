@@ -10,16 +10,18 @@
 
 ---
 
-## 0. 큰 그림 — 2단계 분리
+## 0. 큰 그림 — 3 단계 분리
 
-| 단계 | 무엇 | 가드레일 | 누가 코드 짠다 |
-|------|------|----------|----------------|
+| 단계 | 무엇 | 가드레일 | 누가 |
+|------|------|----------|------|
 | **Phase 1 — Harness 구축** | 골격·환경·judge·baseline·σ 측정 | **OFF** (자유롭게 수정) | 사람 |
-| **Phase 2 — Autoresearch 자동화** | autoresearch가 transcribe.py 진화 | **ON** (holdout chmod + guard hard-fail) | 에이전트 |
+| **Phase 2 — 평가 인프라** | `analyze_run.py`·`evaluate_holdout.py`·REPORT 템플릿 | OFF | 사람 |
+| **Phase 3 — Autoresearch 실행 + 분석** | autoresearch 가 transcribe.py 진화 + 잡 종료 후 Phase 2 도구로 평가 | **ON** (holdout chmod + guard hard-fail) | 에이전트 + 사람(분석) |
 
-**왜 분리**: Phase 1 에 가드레일 켜면 셋업 자체가 막힘 (judge 작성 중 holdout 접근,
-초기 스텁이 가드 위반 등). Phase 1 은 사람이 자유롭게 만들고, Phase 2 진입 시점에
-가드레일 *일괄 활성화* 후 에이전트에 넘긴다.
+**왜 분리**:
+- Phase 1 가드레일 켜면 셋업 자체가 막힘 (judge 작성 중 holdout 접근, 초기 스텁이 가드 위반).
+- 평가 인프라(Phase 2) 를 잡 *전* 에 만들지 않으면, 잡 후 관측한 결과에 분석을 reverse-fit 할 위험.
+- Phase 3 진입 시점에 가드레일 *일괄 활성화* 후 에이전트에 넘긴다.
 
 ---
 
@@ -31,13 +33,15 @@ aig/
 │   ├── STT-PIPELINE-SPEC.md     # 도메인 명세 (변경 금지)
 │   ├── DESIGN.md                # 본 문서
 │   ├── PHASE1-PLAN.md           # Harness 구축 절차
-│   ├── PHASE2-PLAN.md           # autoresearch 자동화 절차 (예정)
+│   ├── PHASE2-PLAN.md           # 평가 인프라 구축 절차
+│   ├── PHASE3-PLAN.md           # autoresearch 실행 + 분석 절차
+│   ├── templates/REPORT.md      # Phase 3 보고 양식 (Phase 2 에서 생성)
 │   └── SELF-EVOLVE-HARNESS-SPEC.md # 참고용 일반 하네스 원리
 ├── data/
 │   └── raw/
 │       ├── wav/AIG_녹취반출_20250715/*_l.wav
 │       ├── label/AIG_녹취반출_20250715/*_l.txt
-│       ├── wav/AIG_녹취반출_20250813/   ← holdout (Phase 2에서 chmod)
+│       ├── wav/AIG_녹취반출_20250813/   ← holdout (Phase 3 에서 chmod)
 │       └── label/AIG_녹취반출_20250813/
 ├── .cache/
 │   └── ct2_models/whisper-large-v3-turbo/   # CT2 변환 캐시
@@ -50,18 +54,21 @@ aig/
 │   ├── pairing.py               # label-driven _l 페어링
 │   └── evaluate.py              # entry point: run → score_report.json
 ├── scripts/
-│   ├── verify.sh                # autoresearch Verify 명령 (Phase 2 진입 시 가드 추가)
+│   ├── verify.sh                # autoresearch Verify 명령 (Phase 3 진입 시 가드 추가)
 │   ├── measure_baseline.py      # faster-whisper 1회 측정
 │   ├── measure_sigma.py         # 동일 스텁 3회 반복 → σ
-│   └── seal_holdout.sh          # Phase 2 진입 시 holdout chmod
+│   ├── seal_holdout.sh          # Phase 3 진입 시 holdout chmod
+│   ├── analyze_run.py           # Phase 2 산출 — runs/ 종합 분석 → REPORT.md
+│   └── evaluate_holdout.py      # Phase 2 산출 — holdout 1 회 평가 + overfit 진단
 ├── baseline/
 │   ├── target_cer.json          # 봉인된 oracle (Phase 1 종료 시 생성)
 │   └── noise_floor.json         # σ (Phase 1 종료 시 생성)
 ├── runs/
-│   └── <hyp_id>/                # autoresearch iteration별 산출물
-│       ├── score_report.json
-│       ├── per_file.jsonl
-│       └── _telemetry/*.jsonl   # optional pipeline sidecar
+│   ├── <hyp_id>/                # autoresearch iteration별 산출물
+│   │   ├── score_report.json
+│   │   ├── per_file.jsonl
+│   │   └── _telemetry/*.jsonl   # optional pipeline sidecar
+│   └── _summary/                # Phase 3 종료 시 산출 (REPORT.md, HOLDOUT.md)
 ├── tests/
 ├── pyproject.toml or requirements.txt
 └── README.md
@@ -91,7 +98,7 @@ aig/
 5. 환경변수 `ASR_RAW_DATA_ROOT` 로 루트 오버라이드 가능 (기본 `data/raw`)
 
 Phase 1 에서 `AIG_녹취반출_20250715` 만 사용. holdout 배치명은 `workspace/`, `judge/`,
-prompt 에서 *언급하지 않음* (Phase 2 에서 chmod 로 강제하기 전이라도 실수로 건드리지
+prompt 에서 *언급하지 않음* (Phase 3 에서 chmod 로 강제하기 전이라도 실수로 건드리지
 않게).
 
 ### 2.3 정규화 (`judge/normalize.py`)
@@ -240,39 +247,54 @@ python -m judge.evaluate \
 
 ---
 
-## 3. Phase 2 — Autoresearch 자동화
+## 3. Phase 2 — 평가 인프라
 
-상세 운영 절차 (가드레일 활성화, `/autoresearch` 호출, 노출/숨김, 산출물, 종료
-조건, 종료 후 holdout 복구·수동 평가, DoD) 는 [`PHASE2-PLAN.md`](PHASE2-PLAN.md) 에
-정본으로 둔다.
+상세는 [`PHASE2-PLAN.md`](PHASE2-PLAN.md). 정본으로 둔다.
 
 요점만:
-- 진입 시점: Phase 1 DoD 전부 통과 + baseline/σ 봉인 직후
-- 진입 직전 일괄 활성화: holdout chmod, verify 가드 hard-fail
-- `workspace/transcribe.py` 만 scope, `corpus_cer` 만 metric
-- 결정 = autoresearch (keep/revert), 가드 위반 = 점수 무관 즉시 ROLLBACK
+- 진입 시점: Phase 1 DoD 통과 직후, autoresearch 잡 *전*
+- 산출물: `scripts/analyze_run.py`, `scripts/evaluate_holdout.py`, `docs/templates/REPORT.md`
+- 평가 8 개 축 (A 결과 / B 하네스 구멍 / C 에이전트 시야 / D 탐색 다양성 / E 메트릭 적절성 / F 비용 / G Attribution / H Reasoning 품질)
+- 합성 데이터로 smoke test — 실제 잡 결과 없이 분석 도구 검증
+
+> 잡 끝나고 분석 도구 만들면 *관측한 결과에 분석을 reverse-fit* 할 위험.
 
 ---
 
-## 4. 열려 있는 질문 (셋업 시 확인)
+## 4. Phase 3 — Autoresearch 실행 + 분석
+
+상세는 [`PHASE3-PLAN.md`](PHASE3-PLAN.md). 정본으로 둔다.
+
+요점만:
+- 진입 시점: Phase 1 + Phase 2 DoD 통과 직후
+- 진입 직전 일괄 활성화: holdout chmod, verify 가드 hard-fail
+- `workspace/transcribe.py` 만 scope, `corpus_cer` 만 metric
+- 결정 = autoresearch (keep/revert), 가드 위반 = 점수 무관 즉시 ROLLBACK
+- 잡 종료 후 Phase 2 도구로 평가 — REPORT.md + HOLDOUT.md
+
+---
+
+## 5. 열려 있는 질문 (셋업 시 확인)
 
 - GPU 사양·메모리: large-v3-turbo float16 + faster-whisper 동시 적재 가능한지
 - Python 버전, ctranslate2 버전 호환성
 - 데이터 실제 절대경로 — `ASR_RAW_DATA_ROOT` 설정 여부
-- autoresearch 의 노이즈 σ 임계 지원 여부 (3.2.2 검토 항목)
-- autoresearch 의 파일 접근 권한 / 디렉토리 제한 메커니즘 (3.4 검토 항목)
+- autoresearch 의 노이즈 σ 임계 지원 여부 (PHASE3 §1.2)
+- autoresearch 의 파일 접근 권한 / 디렉토리 제한 메커니즘 (PHASE3 §3)
 - backend 보호 계층을 둘지 여부: 현 설계는 `workspace/transcribe.py` 가 CT2 호출을 직접
-  담는다. Phase 2 전에 `frozen/asr_backend.py` 같은 읽기 전용 계층으로 모델 로드·호출을
+  담는다. Phase 3 전에 `frozen/asr_backend.py` 같은 읽기 전용 계층으로 모델 로드·호출을
   분리할지 결정한다.
 - 25 iter 총 소요 시간 추정 (per-iter verify 시간 측정 후)
 
 ---
 
-## 5. 안티 패턴 (해선 안 되는 것)
+## 6. 안티 패턴 (해선 안 되는 것)
 
 - Phase 1 단계에서 가드레일을 미리 활성화 (코드 작성 막힘)
-- Phase 2 에서 가드 임계를 baseline 측정 *전에* 정함 (실측 분포 없이 임계 못 정함)
+- Phase 3 에서 가드 임계를 baseline 측정 *전에* 정함 (실측 분포 없이 임계 못 정함)
+- 평가 도구를 Phase 3 *후* 에 만듦 (결과에 분석을 맞추는 reverse-fit)
 - baseline/target_cer.json 을 잡 도중 갱신 (결정론 깨짐)
 - σ 를 단일 측정으로 산출 (최소 3회)
 - holdout 을 `workspace/`, `judge/`, prompt 에서 *언급* (실수로 참조 가능)
 - judge 와 transcribe 가 같은 정규화 모듈을 import 하지 않고 각자 구현
+- 8 개 축을 단일 점수로 환원해 자동 판정 — 사람 판단 항목은 사람이 채움

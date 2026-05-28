@@ -30,7 +30,8 @@ pip install -r requirements.txt
 | 단계 | 무엇 | 어디 |
 |------|------|------|
 | Phase 1 | Harness 구축 (사람) | [`docs/PHASE1-PLAN.md`](docs/PHASE1-PLAN.md) |
-| Phase 2 | autoresearch 자동화 (에이전트) | [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md) |
+| Phase 2 | 평가 인프라 구축 (사람) | [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md) |
+| Phase 3 | autoresearch 실행 + 분석 (에이전트) | [`docs/PHASE3-PLAN.md`](docs/PHASE3-PLAN.md) |
 
 ---
 
@@ -51,7 +52,8 @@ pip install -r requirements.txt
 | [`docs/STT-PIPELINE-SPEC.md`](docs/STT-PIPELINE-SPEC.md) | 문제 정의·정규화·가드 (정본) |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | 시스템 설계 (2 단계 구조, 디렉토리) |
 | [`docs/PHASE1-PLAN.md`](docs/PHASE1-PLAN.md) | Harness 구축 단계별 |
-| [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md) | autoresearch 운영 절차 |
+| [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md) | 평가 인프라 구축 단계별 |
+| [`docs/PHASE3-PLAN.md`](docs/PHASE3-PLAN.md) | autoresearch 실행 + 분석 절차 |
 | [`docs/SELF-EVOLVE-HARNESS-SPEC.md`](docs/SELF-EVOLVE-HARNESS-SPEC.md) | 참고용 일반 하네스 원리 (정본 아님) |
 | [`AGENTS.md`](AGENTS.md) | 에이전트 공통 규약 |
 | [`CLAUDE.md`](CLAUDE.md) | Claude Code 보충 |

@@ -5,10 +5,10 @@ Code 세션 특화 보충만.
 
 ---
 
-## 1. Phase 2 호출
+## 1. Phase 3 호출
 
-`/autoresearch` 호출 형태·운영 절차는 [`docs/PHASE2-PLAN.md §2`](docs/PHASE2-PLAN.md).
-산출물 위치는 PHASE2-PLAN §5.
+`/autoresearch` 호출 형태·운영 절차는 [`docs/PHASE3-PLAN.md §2`](docs/PHASE3-PLAN.md).
+산출물 위치는 PHASE3-PLAN §5.
 
 ---
 

@@ -14,15 +14,24 @@ faster-whisper baseline 이하로 낮춘다.
 
 ## 1. 무엇을 만지고 무엇을 만지지 않는가
 
-| 영역 | 권한 |
+> **본 권한 표는 Phase 3 (autoresearch 잡 실행 중) 기준**.
+>
+> Phase 1·2 (셋업 / 평가 인프라 구축) 에서는 사람 또는 사람이 명시 지시한
+> 에이전트가 `judge/`, `scripts/`, `docs/`, `tests/`, `workspace/` 를 자유롭게
+> 작성·수정한다. Phase 3 진입 시점 ([`docs/PHASE3-PLAN.md §1`](docs/PHASE3-PLAN.md))
+> 에 본 표의 제한이 *일괄 활성화* 된다.
+
+| 영역 | Phase 3 권한 |
 |------|------|
 | `workspace/transcribe.py` | **편집 OK — 유일한 표면** |
 | `judge/` | **편집 금지** — 평가자 본문 |
 | `baseline/` | **편집 금지** — 봉인됨. 재측정 금지 |
+| `scripts/` | **편집 금지** — verify / measure / analyze / evaluate_holdout 보호 |
+| `docs/` | **편집 금지** — 정본·운영 문서 |
+| `tests/` | **편집 금지** |
 | `data/raw/.../AIG_녹취반출_20250715/` | **읽기만** — eval 데이터셋 |
-| `data/raw/.../AIG_녹취반출_20250813/` | **접근 절대 금지** — holdout |
-| `scripts/`, `docs/` | 사람 영역. 에이전트는 수정 X |
-| `runs/` | iteration 산출물. 읽기만 |
+| `data/raw/.../AIG_녹취반출_20250813/` | **접근 절대 금지** — holdout (chmod 000) |
+| `runs/` | iteration 산출물. 읽기만 (verify 가 작성) |
 
 holdout 이름·경로 참조 금지 범위는 `workspace/`, `judge/`, prompt, 운영 wrapper 를
 제외한 `scripts/`. 정본·운영 문서 (`docs/`, `README.md`, `AGENTS.md`, `CLAUDE.md`)
@@ -37,7 +46,7 @@ holdout 이름·경로 참조 금지 범위는 `workspace/`, `judge/`, prompt, �
 | Primary metric | `corpus_cer` (lower is better) |
 | Target | `baseline/target_cer.json` 의 `target_cer` 이하 |
 | 의미 있는 개선 | `Δcer ≥ 2σ` (σ = `baseline/noise_floor.json`) |
-| 가드 (Phase 2) | `hallucination_hit_rate`, `empty_output_rate`, `length_ratio`, `repeated_text_rate` 임계 초과 시 ROLLBACK. `audio_coverage_rate` 는 sidecar telemetry 있을 때만 |
+| 가드 (Phase 3) | `hallucination_hit_rate`, `empty_output_rate`, `length_ratio`, `repeated_text_rate` 임계 초과 시 ROLLBACK. `audio_coverage_rate` 는 sidecar telemetry 있을 때만 |
 
 판단의 근거는 항상 `runs/<hyp_id>/score_report.json`. 추측/자기 보고 금지.
 
@@ -64,22 +73,23 @@ holdout 이름·경로 참조 금지 범위는 `workspace/`, `judge/`, prompt, �
 
 ## 5. Phase 별 행동 규약
 
-- **Phase 1** (사람 주도, 가드레일 OFF): 절차는 [`docs/PHASE1-PLAN.md`](docs/PHASE1-PLAN.md). 에이전트는 지시 받은 부분 보조만.
-- **Phase 2** (autoresearch 자동화, 가드레일 ON): 절차는 [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md). `workspace/transcribe.py` 만 수정.
+- **Phase 1** — Harness 구축 (사람 주도, 가드레일 OFF). 절차: [`docs/PHASE1-PLAN.md`](docs/PHASE1-PLAN.md). 에이전트는 지시 받은 부분 보조만.
+- **Phase 2** — 평가 인프라 구축 (사람 주도, 가드레일 OFF). 절차: [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md). `analyze_run.py` / `evaluate_holdout.py` / REPORT 템플릿.
+- **Phase 3** — autoresearch 실행 + 분석 (에이전트 자동, 가드레일 ON). 절차: [`docs/PHASE3-PLAN.md`](docs/PHASE3-PLAN.md). `workspace/transcribe.py` 만 수정.
 
 ---
 
 ## 6. 검증 흐름
 
-`bash scripts/verify.sh` → 마지막 줄에 `corpus_cer` 한 숫자. 가드 위반은 (Phase 2)
-exit 1 → ROLLBACK. 자세히는 PHASE2-PLAN §1.2.
+`bash scripts/verify.sh` → 마지막 줄에 `corpus_cer` 한 숫자. 가드 위반은 (Phase 3)
+exit 1 → ROLLBACK. 자세히는 [`PHASE3-PLAN.md §1.2`](docs/PHASE3-PLAN.md).
 
 ---
 
 ## 7. Commit / 브랜치
 
-Phase 2 commit/revert 는 autoresearch 가 처리. 에이전트가 명시적으로 git 호출 X.
-Phase 1 에서 사람 정상 커밋만.
+Phase 3 commit/revert 는 autoresearch 가 처리. 에이전트가 명시적으로 git 호출 X.
+Phase 1·2 에서 사람 정상 커밋만.
 
 ---
 
