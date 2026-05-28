@@ -37,7 +37,6 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             [prompt_tokens],
             beam_size=5,
             length_penalty=2.0,
-            repetition_penalty=1.1,
             sampling_temperature=0.0,
         )
         text = processor.tokenizer.decode(results[0].sequences_ids[0], skip_special_tokens=True)
