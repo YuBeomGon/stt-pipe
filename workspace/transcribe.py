@@ -17,41 +17,29 @@ _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 
 
-_PREV_MAX_TOKENS = 100
-
-
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
     chunk_samples = 30 * sr
     n_chunks = max(1, (len(audio) + chunk_samples - 1) // chunk_samples)
 
-    sot_tokens = processor.tokenizer.convert_tokens_to_ids(
+    prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
     )
-    startofprev_id = processor.tokenizer.convert_tokens_to_ids("<|startofprev|>")
 
-    prev_tokens: list[int] = []
     texts = []
     for i in range(n_chunks):
         chunk = audio[i * chunk_samples : (i + 1) * chunk_samples]
         inputs = processor(chunk, sampling_rate=sr, return_tensors="np")
         features = to_storage_view(inputs.input_features)
-
-        if prev_tokens:
-            prompt = [startofprev_id] + prev_tokens[-_PREV_MAX_TOKENS:] + sot_tokens
-        else:
-            prompt = sot_tokens
-
         results = generate(
             features,
-            [prompt],
+            [prompt_tokens],
             beam_size=5,
             length_penalty=2.0,
             sampling_temperature=0.0,
         )
-        out_tokens = list(results[0].sequences_ids[0])
-        texts.append(processor.tokenizer.decode(out_tokens, skip_special_tokens=True))
-        prev_tokens = out_tokens
+        text = processor.tokenizer.decode(results[0].sequences_ids[0], skip_special_tokens=True)
+        texts.append(text)
 
     return " ".join(texts)
