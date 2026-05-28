@@ -7,8 +7,9 @@ __pycache__/
 venv/
 .pytest_cache/
 
-# Data — wav/label 본문 노출 방지
+# Data — wav/label 본문 노출 방지 (심볼릭 링크 자체도 머신 의존)
 data/raw/
+/data/raw
 
 # 모델 캐시
 .cache/
