@@ -21,7 +21,11 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
     chunk_samples = 30 * sr
-    n_chunks = max(1, (len(audio) + chunk_samples - 1) // chunk_samples)
+    overlap_samples = 5 * sr
+    step_samples = chunk_samples - overlap_samples
+    n_chunks = max(
+        1, (max(0, len(audio) - overlap_samples) + step_samples - 1) // step_samples
+    )
 
     prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
@@ -29,7 +33,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
 
     texts = []
     for i in range(n_chunks):
-        chunk = audio[i * chunk_samples : (i + 1) * chunk_samples]
+        chunk = audio[i * step_samples : i * step_samples + chunk_samples]
         inputs = processor(chunk, sampling_rate=sr, return_tensors="np")
         features = to_storage_view(inputs.input_features)
         results = generate(
