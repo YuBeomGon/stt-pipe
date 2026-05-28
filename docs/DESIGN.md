@@ -64,12 +64,18 @@ aig/
 │   └── evaluate_holdout.py      # Phase 2 산출 — holdout 1 회 평가 + overfit 진단
 ├── baseline/
 │   ├── target_cer.json          # 봉인된 oracle (Phase 1 종료 시 생성)
-│   └── noise_floor.json         # σ (Phase 1 종료 시 생성)
+│   └── noise_floor.json         # σ (Phase 1 종료 시 생성. representative-file proxy)
+├── assets/
+│   └── audio_profile/
+│       └── AIG_녹취반출_20250715.json  # 0715 audio-only 특성 (Phase 1 산출).
+│                                        # 0813 (holdout) 는 Phase 3 *전* 생성 X
 ├── runs/
 │   ├── <hyp_id>/                # autoresearch iteration별 산출물
 │   │   ├── score_report.json
 │   │   ├── per_file.jsonl
-│   │   └── _telemetry/*.jsonl   # optional pipeline sidecar
+│   │   └── _telemetry/
+│   │       ├── <file_id>.jsonl   # 정본 segment telemetry (optional)
+│   │       └── <file_id>.srt     # JSONL 에서 일방향 변환된 사람용 view
 │   └── _summary/                # Phase 3 종료 시 산출 (REPORT.md, HOLDOUT.md)
 ├── tests/
 ├── pyproject.toml or requirements.txt
@@ -235,22 +241,33 @@ python -m judge.evaluate \
 
 이후 **재실행 금지** (결정론 보장). 한 번 봉인되면 모든 의사결정의 기준점.
 
-### 2.10 σ 측정 (`scripts/measure_sigma.py`)
+### 2.10 σ 측정 (`scripts/measure_sigma.py`) — representative-file proxy
 
-`workspace/transcribe.py` 초기 스텁으로 0715 평가를 **3회 반복** → corpus_cer 분포의
-표준편차 → `baseline/noise_floor.json`:
+비용 절감을 위해 corpus 전체 12 파일 3 회 대신 **대표 파일 1 개 3 회** 로 σ proxy
+산출. SPEC §6.1 의 운영 옵션을 따른다.
+
+**대표 파일 선정**: 0715 eval 페어 중 `audio_s` 최장 _l.wav. tie-break = path
+lexical sort. 한 번 결정되면 noise_floor.json 에 박혀 잡 동안 고정.
 
 ```json
 {
-  "sigma": 0.00XX,
+  "scope": "representative_file_proxy",
+  "method": "longest _l.wav by audio_s, 3 runs, lexical tie-break",
+  "representative_file": "data/raw/wav/AIG_녹취반출_20250715/<...>_l.wav",
+  "representative_audio_s": ...,
   "samples": [0.XXX, 0.XXX, 0.XXX],
+  "sigma": 0.00XX,
+  "applies_to": "corpus_cer Δ threshold",
   "measured_against": "initial transcribe stub",
   "measured_at": "2026-05-28T..."
 }
 ```
 
-> 주의: 스텁이 *돌긴 돌아야* σ 측정 가능. 스텁이 너무 망가져 corpus_cer 산출 자체가
-> 깨지면 σ 측정은 첫 정상 가설 이후로 미룬다.
+> 주의 1: 이 σ 는 corpus_cer 의 진짜 노이즈가 *아님* — 대표 파일 cer 의 노이즈 proxy.
+> 의사결정 임계 (`Δcer ≥ 2σ`) 에 *근사* 로 차용. 정확한 corpus σ 는 비용 큼.
+>
+> 주의 2: 스텁이 *돌긴 돌아야* σ 측정 가능. σ ≈ 0 이거나 스텁이 깨지면 σ 측정은
+> 첫 정상 가설 이후로 미룬다 (deferred 정책).
 
 ### 2.11 Phase 1 완료 기준 (Definition of Done)
 

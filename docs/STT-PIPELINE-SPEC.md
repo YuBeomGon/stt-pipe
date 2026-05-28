@@ -181,6 +181,9 @@ corpus_cer 하나만 보면 회귀의 원인을 알 수 없다. 다음 가드를
 
 - `Δcer ≥ 2σ` 만 "의미 있는 개선" — 그 이하는 노이즈로 간주
 - 측정 대상과 시점은 운영 설계에서 정하고, σ는 한 번 산출한 뒤 잡 동안 고정
+- **운영상 비용이 크면 corpus 전체 대신 *representative-file proxy* 도 허용** —
+  대표 파일 하나의 cer 분포 σ 를 corpus_cer 임계로 차용. 이는 *근사* 이며 corpus σ
+  와 동일성 보장 X (대표 파일 선정 규칙·산출 메서드를 산출물에 기록)
 
 ### 6.2 Corpus-level 가드
 
@@ -419,12 +422,18 @@ for wav_path in sorted(glob("data/raw/wav/AIG_녹취반출_20250715/*_l.wav")):
 
 가드 산출과 회귀 추적을 위해 chunk/segment-level telemetry를 **옵셔널** 로 emit하는
 것을 권장한다. `transcribe(audio, sr) -> str` 반환 계약은 바꾸지 않으며, 구현체가
-sidecar log file 같은 외부 채널을 쓰는 방식이 기본이다.
+sidecar 파일을 쓰는 방식이 기본이다.
 
-권장 telemetry 필드 (구현 시 채울 수 있는 만큼만):
+**산출 정책**:
+- **JSONL 이 정본** — `_telemetry/<file_id>.jsonl`, 라인당 segment 1 개
+- **SRT 는 파생 view** — `_telemetry/<file_id>.srt`, JSONL 에서 *일방향 변환* 으로
+  생성한다 (text + start_s + end_s 만 옮김). 둘을 독립 emit 하면 어긋날 위험이 있어
+  금지.
+
+권장 JSONL segment 필드 (구현 시 채울 수 있는 만큼만):
 
 ```
-chunk_idx, start_s, end_s, duration_s,
+chunk_idx, start_s, end_s, duration_s, text,
 overlap_left_s, overlap_right_s,
 decode_params, fallback_used, fallback_attempts, selected_temperature,
 decoded_text_len, chars_per_sec, segment_count,
@@ -434,7 +443,8 @@ text_pre_merge_len, text_post_merge_len, overlap_dedup_chars
 
 `audio_coverage_rate` 를 hard gate 로 쓰려면 telemetry 에 파일별 처리 구간 또는
 `audio_coverage_s` 를 제공해야 한다. telemetry 가 없으면 evaluator 는 coverage 값을
-`null` 또는 omit 하고, coverage hard gate 는 적용하지 않는다.
+`null` 또는 omit 하고, coverage hard gate 는 적용하지 않는다. **즉 telemetry 는 권장
+지만 강제는 아님** — pipeline 이 안 emit 해도 coverage 외 가드는 작동.
 
 `no_speech_prob`는 Whisper-large-v3-turbo에서 부정확하므로 *판정에 쓰지 않는다*.
 기록은 선택.

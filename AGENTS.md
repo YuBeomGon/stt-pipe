@@ -17,8 +17,8 @@ faster-whisper baseline 이하로 낮춘다.
 > **본 권한 표는 Phase 3 (autoresearch 잡 실행 중) 기준**.
 >
 > Phase 1·2 (셋업 / 평가 인프라 구축) 에서는 사람 또는 사람이 명시 지시한
-> 에이전트가 `judge/`, `frozen/`, `scripts/`, `docs/`, `tests/`, `workspace/` 를
-> 자유롭게 작성·수정한다. Phase 3 진입 시점 ([`docs/PHASE3-PLAN.md §1`](docs/PHASE3-PLAN.md))
+> 에이전트가 `judge/`, `frozen/`, `scripts/`, `docs/`, `tests/`, `workspace/`,
+> `assets/` 를 자유롭게 작성·수정한다. Phase 3 진입 시점 ([`docs/PHASE3-PLAN.md §1`](docs/PHASE3-PLAN.md))
 > 에 본 표의 제한이 *일괄 활성화* 된다.
 
 | 영역 | Phase 3 권한 |
@@ -27,6 +27,7 @@ faster-whisper baseline 이하로 낮춘다.
 | `frozen/` | **편집 금지** — backend(CT2 + whisper-large-v3-turbo) 봉인. decoding params 는 workspace 에서 자유 |
 | `judge/` | **편집 금지** — 평가자 본문 |
 | `baseline/` | **편집 금지** — 봉인됨. 재측정 금지 |
+| `assets/audio_profile/` | **편집 금지** — Phase 1 산출 봉인. 0715 만, 0813 (holdout) 은 Phase 3 *전* 생성 X. 읽기 허용 |
 | `scripts/` | **편집 금지** — verify / measure / analyze / evaluate_holdout 보호 |
 | `docs/` | **편집 금지** — 정본·운영 문서 |
 | `tests/` | **편집 금지** |

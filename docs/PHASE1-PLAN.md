@@ -53,7 +53,8 @@ Git 이 아직 없으면 Phase 1 시작 전에 초기화한다. `data/raw/`, `.c
 
 ### 1.1 디렉토리 생성
 ```
-mkdir -p workspace judge frozen scripts baseline runs tests .cache/ct2_models notes
+mkdir -p workspace judge frozen scripts baseline runs tests \
+         .cache/ct2_models notes assets/audio_profile
 touch workspace/__init__.py judge/__init__.py frozen/__init__.py
 ```
 
@@ -346,9 +347,58 @@ bash scripts/verify.sh
 
 ---
 
-## Step 7 — Baseline 측정 (faster-whisper)
+## Step 7 — Audio profile build (`scripts/build_audio_profile.py`)
 
-### 7.1 `scripts/measure_baseline.py`
+정답 라벨과 *무관* 한 오디오 자체 특성을 한 번 산출 → `assets/audio_profile/<batch>.json`
+에 봉인. Phase 3 에서 분석 시 "긴 무음 구간에서 깨졌는가" 같은 가설 검증에 참조.
+
+**적용 대상**: 0715 (eval) 만. **holdout (0813) profile 은 Phase 3 *전* 절대 생성
+하지 않음** — holdout 접근 금지 원칙.
+
+### 7.1 산출 필드 (audio-only)
+
+```json
+{
+  "batch": "AIG_녹취반출_20250715",
+  "method": "librosa.effects.split + RMS aggregates",
+  "produced_at": "2026-05-28T...",
+  "per_file": [
+    {
+      "wav": "data/raw/wav/AIG_녹취반출_20250715/<...>_l.wav",
+      "duration_s": 1234.56,
+      "speech_segments": [[start_s, end_s], ...],
+      "silence_ratio": 0.18,
+      "longest_silence_s": 12.3,
+      "longest_speech_s": 240.1,
+      "rms_db_mean": -22.1,
+      "rms_db_p05": -38.4,
+      "rms_db_p95": -15.2
+    },
+    ...
+  ]
+}
+```
+
+**라벨 기반 필드 (예: speech_rate_proxy = ref_chars / speech_s) 는 여기 넣지 않음** —
+audio-only 원칙. 필요하면 별도 `assets/label_profile/<batch>.json` 으로 분리.
+
+### 7.2 구현 메모
+
+- VAD: `librosa.effects.split(top_db=...)` 로 시작 (RMS threshold). 추가 deps X.
+- 품질 부족 검출 시 `silero-vad` 또는 `webrtcvad` 로 교체 — *그때* requirements 갱신.
+- 산출은 1 회. 봉인. Phase 3 에서 read-only.
+
+### 7.3 검증
+
+- per_file 12 행 (0715)
+- duration_s 합산이 12 페어 wav 의 librosa.get_duration 합과 일치
+- speech_segments 가 [0, duration_s] 안에 들어옴
+
+---
+
+## Step 8 — Baseline 측정 (faster-whisper)
+
+### 8.1 `scripts/measure_baseline.py`
 
 흐름:
 1. faster-whisper 로드 (`large-v3-turbo`, float16, GPU)
@@ -356,7 +406,7 @@ bash scripts/verify.sh
 3. **동일 judge 의 normalize + metrics** 사용 (transcribe 만 다른 백엔드)
 4. `baseline/target_cer.json` 작성 (DESIGN §2.8 형식)
 
-### 7.2 봉인
+### 8.2 봉인
 
 - 작성 후 git 커밋
 - 파일 상단 또는 `baseline/README.md` 에 "재실행 금지" 명시
@@ -371,37 +421,59 @@ bash scripts/verify.sh
 
 ---
 
-## Step 8 — σ 측정
+## Step 9 — σ 측정
 
-### 8.1 `scripts/measure_sigma.py`
+### 9.1 `scripts/measure_sigma.py`
+
+**비용 절감**: corpus 전체 12 페어 × 3 회 (=수십 시간) 대신 **대표 파일 1 개 × 3 회**.
+SPEC §6.1 의 representative-file proxy 옵션. 정직하게 *근사* 임을 기록.
 
 흐름:
-1. `workspace/transcribe.py` (Step 6 스텁) 로 0715 평가 3회 반복
-2. 매번 새 `HYP_ID` 로 `runs/` 에 저장
-3. corpus_cer 3개의 표준편차 → `baseline/noise_floor.json`
+1. **대표 파일 선정**: 0715 _l.wav 중 `audio_s` 최장. tie-break = path lexical sort.
+   `assets/audio_profile/AIG_녹취반출_20250715.json` 의 `duration_s` 로 선정.
+2. `workspace/transcribe.py` (Step 6 스텁) 로 *해당 파일 1 개만* 평가 3 회 반복
+3. 매번 새 `HYP_ID` 로 `runs/` 에 저장 (judge 는 single-file 모드 또는 batch 무시)
+4. 그 파일의 cer 3 개 표준편차 → `baseline/noise_floor.json`
 
-### 8.2 스텁이 너무 깨졌을 때
+### 9.2 산출 스키마
 
-스텁의 corpus_cer 이 1.0 이상 (= 사실상 빈 출력) 이거나 매 실행 동일 (= 결정론) 이면
+```json
+{
+  "scope": "representative_file_proxy",
+  "method": "longest _l.wav by audio_s, 3 runs, lexical tie-break",
+  "representative_file": "data/raw/wav/AIG_녹취반출_20250715/<...>_l.wav",
+  "representative_audio_s": ...,
+  "samples": [0.XXX, 0.XXX, 0.XXX],
+  "sigma": 0.00XX,
+  "applies_to": "corpus_cer Δ threshold (근사 — corpus σ 와 동일성 보장 X)",
+  "measured_against": "initial transcribe stub",
+  "measured_at": "2026-05-28T..."
+}
+```
+
+### 9.3 스텁이 너무 깨졌을 때
+
+대표 파일 cer 이 1.0 이상 (= 사실상 빈 출력) 이거나 매 실행 동일 (= 결정론) 이면
 σ ≈ 0 으로 나옴. 이 경우 σ 측정은 **Phase 3 첫 정상 가설 이후로 미룸** — 노이즈
 임계 적용을 그만큼 늦춤.
 
 **검증**:
-- 3 samples 기록
+- 3 samples 기록 + sigma + representative_file 명시
 - σ 가 0 이 아니면 OK, 0 이면 위 노트 적용
 
 ---
 
-## Step 9 — DoD 점검
+## Step 10 — DoD 점검
 
 `DESIGN.md §2.10` 체크리스트 그대로:
 
 - [ ] 데이터 페어링 코드가 0715 12 페어 정확히 매칭
 - [ ] judge 가 스텁 transcribe 에 대해 score_report.json 산출
 - [ ] `scripts/verify.sh` 실행 시 corpus_cer 숫자가 마지막 줄에 출력
+- [ ] `assets/audio_profile/AIG_녹취반출_20250715.json` 생성 (0715 only — 0813 미생성)
 - [ ] `baseline/target_cer.json` 생성 + 봉인
 - [ ] `baseline/target_cer.json` 에 versions/model/decoding_params/hardware 메타데이터 기록
-- [ ] `baseline/noise_floor.json` 생성
+- [ ] `baseline/noise_floor.json` 생성 — representative-file proxy 스키마 (scope/method/representative_file/samples/sigma)
 - [ ] `pytest` 로 normalize/pairing/metrics/evaluate smoke 통과
 - [ ] 사람이 수동으로 verify.sh 1 회 돌려서 cer 숫자 확인
 - [ ] holdout 배치명은 `workspace/`, `judge/`, prompt, 운영 wrapper 를 제외한 `scripts/` 에서
