@@ -16,6 +16,7 @@ from frozen.asr_backend import generate, load, to_storage_view
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 _PREV_MAX_TOKENS = 200
+_INITIAL_PROMPT_TEXT = "보험 약관 청구 가입 보장 동의 고객 어머니 선생님 계약"
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -32,6 +33,9 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
     )
     startofprev_id = processor.tokenizer.convert_tokens_to_ids("<|startofprev|>")
+    initial_prompt_tokens = processor.tokenizer.encode(
+        _INITIAL_PROMPT_TEXT, add_special_tokens=False
+    )
 
     prev_tokens: list[int] = []
     texts = []
@@ -43,7 +47,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         if prev_tokens:
             prompt = [startofprev_id] + prev_tokens[-_PREV_MAX_TOKENS:] + sot_tokens
         else:
-            prompt = sot_tokens
+            prompt = [startofprev_id] + initial_prompt_tokens + sot_tokens
 
         results = generate(
             features,
