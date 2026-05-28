@@ -5,16 +5,28 @@
 > 루프에 `workspace/transcribe.py` 의 진화를 맡긴다. 잡 종료 후 Phase 2 의 분석 도구
 > 로 평가한다.
 
-전제: Phase 1 산출물(`judge/`, `scripts/verify.sh`, `baseline/*.json`) + Phase 2
-산출물(`scripts/analyze_run.py`, `scripts/evaluate_holdout.py`, REPORT 템플릿) 이
-존재하고 정상 동작.
+전제:
+- Phase 1 산출물 (`judge/`, `scripts/verify.sh`, `baseline/*.json`)
+- Phase 2 산출물 (`scripts/analyze_run.py`, `scripts/evaluate_holdout.py`, REPORT 템플릿)
+- [`docs/AUTORESEARCH.md`](AUTORESEARCH.md) — autoresearch 정본 (정체·동작·가드 함의).
+  본 문서 §1·§3·§8 은 AUTORESEARCH.md 의 사실을 전제로 작성됨. 핵심: autoresearch
+  의 `Scope` 는 prompt-only — sandbox 가 아니다. 9가지 자체 훅은 일반 안전만 다루고
+  본 프로젝트의 scope (workspace/transcribe.py 만 편집) 는 보호하지 않는다. 또한
+  `AR_DISABLE_*` ENV 한 줄로 우회 가능 → 1차 layer 로 의존 X.
 
 ---
 
 ## 1. 진입 직전 액션 — 가드레일 일괄 활성화
 
-> **순서**: §1.1 (verify swap, 사람) → §1.2 가드 표 확인 → §1.3 smoke →
-> §1.4 holdout seal → `/autoresearch`. 모두 사람이 수동.
+> **순서** (모두 사람 수동, 1줄씩):
+>
+> 1. §1.1 verify.sh swap → Phase 3 본문 활성
+> 2. §1.2 .claude swap → 프로젝트 PreToolUse 가드 + autoresearch 설치 확인
+> 3. §1.3 holdout 물리 차단 (chmod 000)
+> 4. §1.5 사전 smoke — 가드 동작 의도적 위반 검증
+> 5. `/autoresearch` 호출 (§2)
+>
+> §1.4 는 판정 정책 표 — 실행 단계가 아닌 *참조*. 위 순서에 포함되지 않음.
 
 ### 1.1 `verify.sh` swap (사람 전용)
 
@@ -32,7 +44,50 @@ head -3 scripts/verify.sh    # "Phase 3 verify" 헤더 확인
 > 보호 대상이다 (AGENTS.md §1 표). 어떤 에이전트도 (Claude, autoresearch,
 > 보조 스크립트 포함) 본 스크립트를 직접 실행하지 않는다.
 
-### 1.2 Holdout 물리 차단 (`scripts/seal_holdout.sh`)
+### 1.2 `.claude` swap (사람 전용) — 프로젝트 PreToolUse 가드 활성화
+
+[`AUTORESEARCH.md §6`](AUTORESEARCH.md) 의 결론: autoresearch 의 `Scope` 는
+prompt 일 뿐, Claude Code 의 Edit/Write 도구를 Scope 밖 파일에 대해 차단해
+주지 않는다. 또한 autoresearch 자체의 9가지 훅 ([`AUTORESEARCH.md §7`](AUTORESEARCH.md))
+은 일반 안전만 다루고 본 프로젝트의 scope (`workspace/transcribe.py` 만 편집)
+는 보호하지 않으며 `AR_DISABLE_*` ENV 로 우회 가능하다.
+
+따라서 **본 프로젝트의 scope 가드는 우리 저장소의 `.claude/`** 가 책임진다.
+구성:
+
+- `.claude/settings.json` — `permissions.deny` allowlist (Edit/Write 대상 제한)
+- `.claude/hooks/` — PreToolUse 훅으로 `judge/`, `frozen/`, `baseline/`,
+  `assets/`, `scripts/swap_verify.sh`, `scripts/seal_holdout.sh`,
+  `scripts/evaluate_holdout.py` 편집 시도 거부. ENV 토글로 끄지 *못하게* 구현.
+- `.ckignore` — scout-block 확장 (읽기 차단). holdout / baseline / judge /
+  frozen / audio_profile 패턴 추가. (편집 차단은 위 PreToolUse 훅이 책임,
+  `.ckignore` 는 컨텍스트 채우기 방지용.)
+- PostToolUse 훅 — `workspace/transcribe.py` 편집 후 verify 자동 호출 (옵션)
+
+평소 (Phase 1·2) 우리 저장소의 `.claude/` 는 가드 OFF (또는 *부재*) 본문.
+Phase 3 본문은 `.claude.alt/` (또는 동등 구조) 에 보관. 사람이 1줄로 교환:
+
+```bash
+bash scripts/swap_claude.sh
+ls .claude/hooks/                # 활성 본문에 hooks 디렉토리 있는지 확인
+```
+
+다시 Phase 1·2 로 돌아갈 때도 같은 명령 한 번 더 → 원복.
+
+> **에이전트 호출 금지**: `scripts/swap_claude.sh` 도 `scripts/swap_verify.sh`
+> 와 동급. 사람 전용 (AGENTS.md §1 표).
+>
+> **autoresearch 본체 설치는 별도**: 사람이 `npx skills add uditgoenka/autoresearch`
+> 로 ~/.claude/ 또는 프로젝트 .claude/ 에 autoresearch 의 commands/skills/hooks
+> 를 설치. 본 §1.2 의 우리 저장소 `.claude/` 자산은 *그 위에 얹는 프로젝트 scope
+> 가드* 다. 설치 위치 (글로벌 vs 프로젝트) 와 우리 가드 자산이 충돌하지 않는지는
+> 자산 작성 시 검증.
+>
+> **상태**: `.claude/` / `.claude.alt/` / `scripts/swap_claude.sh` 자산 자체는
+> 본 문서 갱신 시점에 *미작성*. 작성은 본 §1.2 의 후속 작업이며 `phase3`
+> 브랜치에서 진행된다 (verify 가드와 동일 패턴).
+
+### 1.3 Holdout 물리 차단 (`scripts/seal_holdout.sh`)
 
 ```bash
 chmod -R 000 data/raw/wav/AIG_녹취반출_20250813
@@ -41,7 +96,7 @@ chmod -R 000 data/raw/label/AIG_녹취반출_20250813
 
 잡 종료 후 §6 의 절차로 복구.
 
-### 1.3 Verify 판정 정책
+### 1.4 Verify 판정 정책
 
 Phase 3 의 최종 목표점은 사람이 정한 `target_cer` (현재 `0.10`) 다. faster-whisper
 `baseline_cer` 은 그 목표까지 거리를 보기 위한 참조 앵커일 뿐 성공 기준이 아니다
@@ -83,7 +138,7 @@ baseline 목표 대비 큰 악화 여부와 diagnosis 로 다룬다.
 > 지원 안 하면 verify 가 이전 best metric 을 읽어 노이즈 이하 변화면 exit 1 처리하는
 > 방안 추가.
 
-### 1.4 사전 smoke
+### 1.5 사전 smoke
 
 가드가 실제로 작동하는지 의도적 위반으로 1회 검증 (사람 수동):
 
@@ -97,11 +152,16 @@ git checkout -- workspace/transcribe.py
 #     bash scripts/verify.sh  # → exit 1, "static backend" 메시지
 #     git checkout -- workspace/transcribe.py
 
-# (c) 정상 1 iter
+# (c) .claude PreToolUse 가드 — judge/ 또는 baseline/ 또는 frozen/ 안 파일을
+#     Claude Code 세션에서 Edit 시도. 훅이 거부해야 함. (스크립트로 자동화하기
+#     어려우니 사람이 직접 시도)
+
+# (d) 정상 1 iter
 bash scripts/verify.sh        # → exit 0, 마지막 줄에 corpus_cer 한 숫자
 ```
 
-(b) 까지 확인하면 가드 ON 상태 신뢰 가능. 그 다음 §1.2 holdout seal → `/autoresearch`.
+(a)·(b)·(c) 까지 확인하면 가드 ON 상태 신뢰 가능. 그 다음 §1.3 holdout seal →
+`/autoresearch`.
 
 ---
 
@@ -135,8 +195,20 @@ Iterations: 25
 | 자기 `runs/<hyp_id>/per_file.jsonl`, `_telemetry/` 결과 | baseline 산출 코드와 봉인 파일 본문 |
 | 자기 `runs/<hyp_id>/diagnosis_report.json` — 11파일 profile summary + focus file 최대 2개 | `assets/audio_profile/` 원본 (workspace 직접 참조 금지) |
 
-> **검토 필요**: autoresearch 의 파일 접근 권한 제어 메커니즘 확인. 못 막으면 명세
-> 텍스트 + 권한(chmod) + 신뢰 모델 조합으로 운영.
+> **권한 모델 — 결론** (AUTORESEARCH.md §6 참조): autoresearch 자체는 파일 접근
+> 권한 제어를 *하지 않는다*. Scope 는 prompt 일 뿐. 본 표의 "숨김" 열은 다음
+> 4개 레이어로 강제된다:
+>
+> 1. OS chmod 000 — holdout (0813) 디렉토리
+> 2. `scripts/verify.sh` (Phase 3 본문) 의 정적 grep — workspace 안 backend /
+>    profile 직접참조 차단 (§1.4 표 1·2 행)
+> 3. 우리 저장소 `.claude/` 의 PreToolUse 훅 (§1.2 참조) — judge/, frozen/,
+>    baseline/, assets/, 보호 scripts 편집 거부
+> 4. `.ckignore` — 컨텍스트 채우기 방지 (읽기 차단, 편집 차단 아님)
+>
+> autoresearch 의 9가지 자체 훅 (§7 of AUTORESEARCH.md) 은 일반 안전만 다루며
+> 본 표의 scope 보호를 *대체하지 않는다*. ENV 한 줄 우회 가능하므로 1차 layer
+> 로 의존 X.
 
 ---
 
@@ -226,8 +298,12 @@ overfit 된 신호.
 
 - [ ] `scripts/swap_verify.sh` 로 verify.sh → Phase 3 본문 swap 완료 (사람, 1회)
 - [ ] `head -3 scripts/verify.sh` 에 "Phase 3 verify" 헤더 확인
+- [ ] `scripts/swap_claude.sh` 로 `.claude` → Phase 3 본문 swap 완료 (사람, 1회)
+- [ ] `ls .claude/hooks/` 에 PreToolUse 훅 본문 존재 확인
+- [ ] autoresearch 본체 설치 확인 (글로벌 또는 프로젝트). `/autoresearch` 슬래시 커맨드 인식
 - [ ] holdout chmod 적용 확인 (`ls data/raw/wav/AIG_녹취반출_20250813` → permission denied)
 - [ ] verify hard-fail / runtime cap / baseline-relative budget smoke 통과
+- [ ] `.claude` PreToolUse 훅 smoke 통과 (judge/ 또는 baseline/ 안 파일 Edit 시도 → 거부)
 - [ ] autoresearch 1 iter 정상 종료 확인 (dry run)
 - [ ] 25 iter 완주 또는 target 도달
 - [ ] `analyze_run.py` 로 REPORT.md 생성
@@ -238,17 +314,30 @@ overfit 된 신호.
 
 ## 8. 열린 검토 항목
 
-- autoresearch 의 `Δcer ≥ 2σ` 노이즈 임계 지원 (§1.2)
-- autoresearch 의 파일 접근 권한 제어 메커니즘 (§3)
+- autoresearch 의 `Δcer ≥ 2σ` 노이즈 임계 자체 지원 여부 (AUTORESEARCH.md §11
+  의 미확인 항목). 미지원 가정으로, verify 가 이전 best metric 을 읽어 노이즈
+  이하 변화면 거부하는 보조 가드 추가 필요 여부 검토.
 - 25 iter 총 소요 시간 (Phase 1 verify 측정값 기준 추정 후 확정)
 - quality budget 허용폭 (baseline guard 분포 측정 후 확정)
-- (frozen layer 는 도입 완료 — `frozen/asr_backend.py`. Phase 3 진입 시 권한 차단 + 정적 import 검사 둘 다 작동하는지 smoke)
+- autoresearch 본체 설치 위치 (글로벌 `~/.claude/` vs 프로젝트 `.claude/`) 와
+  우리 프로젝트 `.claude/` 자산의 공존 — §1.2 자산 작성 시 검증
+- autoresearch 의 `experiment:` 커밋 빈도 / git 히스토리 오염 정도. 잡 종료 후
+  squash 정책 필요 여부
+
+**결정됨** (이전 "검토 필요" 에서 옮김):
+- autoresearch 의 파일 접근 권한 제어 메커니즘 → AUTORESEARCH.md §6 으로 해소.
+  Scope 는 prompt-only. 우리 `.claude/` PreToolUse 훅 + verify 정적 grep + OS
+  chmod 의 3중 가드로 대체 (§3 권한 모델 결론 참조).
+- frozen layer 도입 완료 (`frozen/asr_backend.py`). Phase 3 진입 §1.5 smoke
+  에서 권한 차단 + 정적 import 검사 둘 다 작동 검증.
 
 ---
 
 ## 9. 안티 패턴
 
-- 에이전트가 `scripts/swap_verify.sh` 호출 (사람 전용 — AGENTS.md §1)
+- 에이전트가 `scripts/swap_verify.sh` 또는 `scripts/swap_claude.sh` 호출 (둘 다 사람 전용 — AGENTS.md §1)
+- autoresearch 의 9가지 자체 훅 / Scope 만 믿고 `.claude/` PreToolUse 가드 생략
+- `AR_DISABLE_*` ENV 로 autoresearch 자체 훅을 우회하는 형태로 운영 — Phase 3 entry 시점에 ENV 미설정 확인
 - target 도달 전에 baseline/target_cer.json 갱신
 - σ 가 너무 낮다고 (= 결정론) 노이즈 임계 자체를 제거
 - 잡 도중 holdout 에 접근 (chmod 우회 포함)
