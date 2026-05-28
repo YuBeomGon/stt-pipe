@@ -157,30 +157,33 @@ coverage guard 를 skip 한다.
 
 ### 2.6 Frozen layer (`frozen/asr_backend.py`)
 
-backend 봉인. workspace 는 `load()` 와 `generate()` 만 호출하며, 모델·디바이스·precision
-은 이 layer 가 hard-code. Phase 3 진입 시 편집 금지.
+backend 봉인. workspace 는 `load()` / `generate()` / `to_storage_view()` 세 helper
+만 호출하며, 모델·디바이스·precision 은 이 layer 가 hard-code. workspace 가
+`ctranslate2` / `transformers` 를 직접 import 할 필요가 없도록 한다. Phase 3 진입
+시 편집 금지.
 
 ```python
 # frozen/asr_backend.py
 def load() -> tuple[Whisper, WhisperProcessor]: ...     # 모델 캐시·고정 로드
 def generate(features, prompts, **decoding_kwargs): ... # CT2 generate passthrough
+def to_storage_view(np_array): ...                      # numpy → ctranslate2.StorageView wrap
 ```
 
 - 봉인: 모델 이름, 변환 캐시 경로, device, compute_type
 - workspace 자유: decoding_kwargs (beam, temperature, fallback, sampling 등 전부)
-- 추가 보호: Phase 3 verify 가 workspace 의 `import ctranslate2.models` / `from_pretrained` 패턴 정적 검사 (PHASE3 §1.2)
+- 추가 보호: Phase 3 verify 가 workspace 에 `import ctranslate2` / `import transformers` / `from_pretrained` / `Whisper(` 중 어느 패턴이라도 출현 시 fail (PHASE3 §1.2)
 
 ### 2.7 초기 transcribe 스텁 (`workspace/transcribe.py`)
 
-가장 단순한 호출 — `frozen.load()` + `frozen.generate()` 로 chunking 없이 1 회.
+가장 단순한 호출 — frozen helper 3 개만 사용, chunking 없이 1 회.
 30 초 초과 long-form 은 깨질 거고, **그게 autoresearch 가 풀어야 할 출발점**.
 
 ```python
-from frozen.asr_backend import load, generate
+from frozen.asr_backend import load, generate, to_storage_view
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, proc = load()
-    # feature 추출 → prompt 구성 → generate (단일 호출, chunking 없음) → decode → str
+    # feature 추출 → to_storage_view → prompt 구성 → generate → decode → str
     ...
 ```
 
