@@ -34,9 +34,19 @@ _NOISE_DEFAULT_DELTA = 0.01
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
+    """Read JSON, returning ``None`` if missing or unparseable.
+
+    Consistent with ``analyze_run._read_json`` — a corrupt sidecar or score
+    report must not crash the 1-shot holdout flow before the chmod re-seal
+    can run. Unparseable input gets logged once and treated as absent.
+    """
     if not path.is_file():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        log.warning("bad json %s: %s", path, exc)
+        return None
 
 
 def _resolve_data_root() -> Path:
@@ -316,14 +326,17 @@ def main(argv: list[str] | None = None) -> int:
         print("refused: chmod 복구는 --unseal 명시 필요 — Phase 3 §6.3", file=sys.stderr)
         return 4
 
-    # 2. chmod 복구
-    if wav_dir.exists():
-        _chmod_recursive(wav_dir, 0o755)
-    if label_dir.exists():
-        _chmod_recursive(label_dir, 0o755)
-    log.info("holdout dirs unsealed: %s, %s", wav_dir, label_dir)
-
+    # 2-5. unseal → evaluate → report → 재봉인.
+    # chmod 복구는 try 블록 *안* 에서 수행한다. 그래야 wav unseal 성공 후 label
+    # unseal 실패 같은 케이스에서도 finally 가 두 디렉토리를 무조건 다시 봉인
+    # 한다 — PHASE2-PLAN §8 안티패턴 "chmod 복구만 하고 재봉인 안 하기" 방지.
     try:
+        if wav_dir.exists():
+            _chmod_recursive(wav_dir, 0o755)
+        if label_dir.exists():
+            _chmod_recursive(label_dir, 0o755)
+        log.info("holdout dirs unsealed: %s, %s", wav_dir, label_dir)
+
         # 3. evaluate (judge.evaluate 동일 경로)
         from judge.evaluate import evaluate_batch  # local import — avoids loading GPU stack on smoke
         eval_run = _last_accepted_eval_run(runs_dir)
@@ -354,11 +367,15 @@ def main(argv: list[str] | None = None) -> int:
         log.info("wrote %s and %s", summary_dir / "HOLDOUT.md", summary_dir / "HOLDOUT.json")
 
     finally:
-        # 5. 재봉인 — 평가 후 chmod 000 으로 다시 잠가 재호출 차단
-        if wav_dir.exists():
-            _chmod_recursive(wav_dir, 0o000)
-        if label_dir.exists():
-            _chmod_recursive(label_dir, 0o000)
+        # 5. 재봉인 — 평가 후 chmod 000 으로 다시 잠가 재호출 차단.
+        # chmod 가 한 번 실패하더라도 다른 한 쪽은 시도하도록 분리.
+        for target in (wav_dir, label_dir):
+            if not target.exists():
+                continue
+            try:
+                _chmod_recursive(target, 0o000)
+            except (subprocess.CalledProcessError, OSError) as exc:
+                log.error("re-seal failed on %s: %s", target, exc)
         log.info("holdout dirs re-sealed (chmod 000)")
 
     print(f"holdout evaluation complete — see {summary_dir / 'HOLDOUT.md'}")
