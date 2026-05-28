@@ -129,7 +129,7 @@ ct2-transformers-converter \
 - 나머지 줄을 공백 한 칸으로 concat → 한 줄 reference
 
 **검증 (이 Step 종료 시)**:
-- 0715 label 14개 모두 정상 파싱 (빈 reference 없음)
+- 0715 label 12개 모두 정상 파싱 (빈 reference 없음)
 - `normalize("[INAUDIBLE] 안녕하세요!")` → `"안녕하세요"`
 - 동일 정규화 함수가 hypothesis 와 reference 양쪽에 쓰일 것을 의식하고 작성
 
@@ -275,6 +275,11 @@ def generate(features, prompts, **decoding_kwargs):
     """
     model, _ = load()
     return model.generate(features, prompts, **decoding_kwargs)
+
+
+def to_storage_view(np_array):
+    """numpy array → ctranslate2.StorageView. workspace 가 ctranslate2 import 없이 사용."""
+    return ctranslate2.StorageView.from_array(np_array)
 ```
 
 ### 5.2 워크스페이스에 노출되는 것 / 막히는 것
@@ -282,13 +287,13 @@ def generate(features, prompts, **decoding_kwargs):
 | 자유 | 봉인 |
 |------|------|
 | decoding kwargs (beam, temperature, fallback options 전부) | 모델 이름·경로·디바이스·precision |
-| chunking, prompt 구성, feature extraction 정책 | model.generate 외 ctranslate2 API 직접 호출 (Phase 3 정적 검사로 차단) |
-| post-processing, merging | — |
+| chunking, prompt 구성, feature extraction 정책 | ctranslate2 직접 import (workspace 는 frozen helper 만 사용) |
+| post-processing, merging | model.generate 외 ctranslate2 API |
 
 ### 5.3 검증
 
 ```
-python -c "from frozen.asr_backend import load, generate; m, p = load(); print('ok')"
+python -c "from frozen.asr_backend import load, generate, to_storage_view; m, p = load(); print('ok')"
 ```
 
 → 첫 호출 시 모델 다운로드/변환·로드 완료까지 시간 걸림. 이후 캐시.
@@ -304,13 +309,12 @@ python -c "from frozen.asr_backend import load, generate; m, p = load(); print('
 
 ```python
 import numpy as np
-from frozen.asr_backend import load, generate
-import ctranslate2  # StorageView 만 — Phase 3 에서 이 import 도 검사 대상이 될 수 있음
+from frozen.asr_backend import load, generate, to_storage_view
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, proc = load()
     inputs = proc(audio, sampling_rate=sr, return_tensors="np")
-    features = ctranslate2.StorageView.from_array(inputs.input_features)
+    features = to_storage_view(inputs.input_features)
     prompt = proc.tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", "<|ko|>", "<|transcribe|>", "<|notimestamps|>"]
     )
@@ -321,7 +325,8 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
 ```
 
 > 위는 의사 코드. 실제 ctranslate2 API 와 일치하지 않을 수 있으므로 첫 작성 시
-> 공식 문서 확인. **모델 로드는 절대 workspace 에서 직접 안 함** — frozen.load() 만.
+> 공식 문서 확인. **workspace 는 ctranslate2 / transformers 를 직접 import 하지 않는다**
+> — `frozen.asr_backend` 의 `load / generate / to_storage_view` 만 사용. (Phase 3 정적 검사로 강제)
 
 ### 6.1 수동 스모크
 
@@ -335,7 +340,7 @@ bash scripts/verify.sh
 **검증**:
 - exit code 0
 - corpus_cer ≤ 1.5 정도 (말도 안 되게 큰 값이면 정규화/페어링 의심)
-- per_file 14 행
+- per_file 12 행
 - hallucination_hits 들이 산출됨
 
 ---
@@ -361,7 +366,7 @@ bash scripts/verify.sh
 - `target_cer` 가 합리적 범위 (보험 콜센터 한국어로 0.05~0.20 추정)
 - `total_inference_time_s`, `total_audio_s` 기록됨
 - faster-whisper / ctranslate2 / transformers 버전, HF revision, decoding params 기록됨
-- per_file 14 행, edits 합산이 corpus_cer 와 일치
+- per_file 12 행, edits 합산이 corpus_cer 와 일치
 
 ---
 

@@ -34,7 +34,7 @@ chmod -R 000 data/raw/label/AIG_녹취반출_20250813
 | `length_ratio.p95` | `> 3.0` | exit 1 (출력 너무 김) |
 | `audio_coverage_rate` | `< 0.8` | sidecar telemetry 가 있을 때만 exit 1 |
 | `repeated_text_rate` | `> 0.20` | exit 1 |
-| **정적 backend 보호** | `workspace/transcribe.py` 가 `import ctranslate2.models` / `from_pretrained` / `ctranslate2.models.Whisper(` 등 backend 직접 로드 패턴 포함 | exit 1 (frozen 우회 시도) |
+| **정적 backend 보호** | `workspace/transcribe.py` 에 `import ctranslate2` / `import transformers` / `from_pretrained` / `Whisper(` 중 어느 패턴이라도 출현 | exit 1 (frozen 우회 시도. workspace 는 `frozen.asr_backend` 의 `load / generate / to_storage_view` 만 사용) |
 
 `corpus_cer` 자체는 *메트릭으로만 출력* — keep/discard 판정은 autoresearch 가 한다.
 가드 위반은 점수 무관 즉시 ROLLBACK.
@@ -182,8 +182,7 @@ overfit 된 신호.
 - autoresearch 의 `Δcer ≥ 2σ` 노이즈 임계 지원 (§1.2)
 - autoresearch 의 파일 접근 권한 제어 메커니즘 (§3)
 - 25 iter 총 소요 시간 (Phase 1 verify 측정값 기준 추정 후 확정)
-- backend 보호 계층(`frozen/asr_backend.py`) 도입 여부 — 도입 시 Phase 3 진입 *전*
-  workspace 와 분리
+- (frozen layer 는 도입 완료 — `frozen/asr_backend.py`. Phase 3 진입 시 권한 차단 + 정적 import 검사 둘 다 작동하는지 smoke)
 
 ---
 
