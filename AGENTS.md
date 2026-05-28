@@ -8,7 +8,9 @@
 
 한국어 보험 콜센터 음성에 대해, `ctranslate2 + whisper-large-v3-turbo` 위에
 `transcribe(audio, sr) -> str` 파이프라인을 자동 진화시켜 corpus-level CER 을
-faster-whisper baseline 이하로 낮춘다.
+사람이 정한 `target_cer` (현재 0.10) 이하로 낮춘다. `total_inference_time_s` 는
+baseline time budget 안에 들어야 한다. faster-whisper `baseline_cer` 은 거리감
+앵커일 뿐 성공 기준은 아니다 (§2 표 / `STT-PIPELINE-SPEC.md §7`).
 
 ---
 

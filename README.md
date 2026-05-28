@@ -1,7 +1,9 @@
 # AIG STT
 
 한국어 보험 콜센터 통화에 대해 `ctranslate2 + whisper-large-v3-turbo` 추론 파이프라인을
-자동 진화시켜 `corpus-level CER` 을 faster-whisper baseline 이하로 낮추는 실험.
+자동 진화시켜 `corpus-level CER` 을 사람이 정한 목표 (`baseline/target_cer.json:target_cer`,
+현재 0.10) 이하로 낮추는 실험. `faster-whisper baseline_cer` (현재 0.43) 은 동일 데이터에서의
+거리감 측정용 참조 앵커일 뿐 성공 기준은 아니다.
 
 루프 엔진: [`uditgoenka/autoresearch`](https://github.com/uditgoenka/autoresearch).
 
