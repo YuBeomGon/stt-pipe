@@ -84,8 +84,12 @@ label 파일을 source of truth로 한다 (label이 wav보다 적거나 같음).
 
 | Batch | _l 페어 수 | 용도 |
 |-------|------------|------|
-| `AIG_녹취반출_20250715` | 14 | eval (primary) |
-| `AIG_녹취반출_20250813` | 16 | **holdout — 접근 금지 (§8)** |
+| `AIG_녹취반출_20250715` | 12 | eval (primary) |
+| `AIG_녹취반출_20250813` | 13 | **holdout — 접근 금지 (§8)** |
+
+> 운영 환경에 `AIG_녹취반출_20250704` 등 다른 batch 가 함께 존재할 수 있으나,
+> 본 문제는 위 두 batch 만 사용한다. pairing 단계에서 다른 batch 는 통과하지
+> 않는다.
 
 ---
 
@@ -191,7 +195,7 @@ corpus_cer 하나만 보면 회귀의 원인을 알 수 없다. 다음 가드를
 | `audio_coverage_rate` | 디코더가 처리한 누적 audio_s / 전체 audio_s. pipeline 이 telemetry 를 제공할 때 산출하며, 미제공 시 hard gate 에 쓰지 않는다 |
 | **`hallucination_hit_rate`** | **§6.4 패턴 중 어느 하나라도 hyp에 매치된 파일 비율 (Whisper 알려진 환각 검출)** |
 | `hallucination_hits_total` | 모든 파일·모든 패턴 누적 매치 횟수 (per-file `hallucination_hits` 합) |
-| **`total_inference_time_s`** | **14 파일 전체 처리 wall clock 합** (절대 시간) |
+| **`total_inference_time_s`** | **12 파일 전체 처리 wall clock 합** (절대 시간) |
 | `runtime_s_per_audio_min` | `total_inference_time_s / (total_audio_s / 60)` (단위 시간당 처리 시간 — 1.0이면 실시간) |
 | `avg_rtf` | per-file Real-Time Factor (`decode_s / audio_s`) 평균 |
 
@@ -260,7 +264,7 @@ blocking_patterns:
 
 ### 7.1 정의
 
-`faster-whisper` (CT2 위에 빌드된 핸드튠 추론 라이브러리)로 §3.5의 0715 14 _l
+`faster-whisper` (CT2 위에 빌드된 핸드튠 추론 라이브러리)로 §3.5의 0715 12 _l
 페어를 1회 transcribe하여 산출한 corpus_cer.
 
 - 동일한 §5.1 정규화 적용
@@ -272,7 +276,7 @@ blocking_patterns:
 {
   "target_cer": 0.0XXX,
   "macro_cer": 0.0XXX,
-  "num_files": 14,
+  "num_files": 12,
   "batches": ["AIG_녹취반출_20250715"],
   "total_audio_s": 1245.7,
   "total_inference_time_s": 24.7,
@@ -307,7 +311,7 @@ blocking_patterns:
 
 ### 8.1 대상
 
-- `AIG_녹취반출_20250813` (16 _l 페어, ≈ 4 시간)
+- `AIG_녹취반출_20250813` (13 _l 페어, ≈ 4 시간)
 
 ### 8.2 정책
 
@@ -454,7 +458,7 @@ text_pre_merge_len, text_post_merge_len, overlap_dedup_chars
 | 단계 | 단일 책임 |
 |------|----------|
 | (1) Backend | 모델 가중치 동결 — 동일 출발선 보장 |
-| (2) Dataset | label-driven, _l only, 0715 14 페어 |
+| (2) Dataset | label-driven, _l only, 0715 12 페어 |
 | (3) Labels | turn 구조 + `[INAUDIBLE]` 제거 + 1줄 reference |
 | (4) Normalization | NFC + INAUDIBLE 제거 + 구두점 제거 + lowercase + whitespace 제거 |
 | (5) Aggregation | corpus-level char-weighted CER |

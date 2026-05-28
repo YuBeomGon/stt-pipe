@@ -142,7 +142,7 @@ python scripts/analyze_run.py \
 1. **잠금 확인**: `runs/_summary/JOB_DONE.lock` 또는 동등 마커가 있어야 진행. 진행 중인
    autoresearch 잡 있으면 거부.
 2. holdout chmod 복구 (`u+rwX`)
-3. 현재 best `workspace/transcribe.py` 로 0813 16 페어 evaluate
+3. 현재 best `workspace/transcribe.py` 로 0813 13 페어 evaluate
    - `judge/evaluate.py` 와 동일 코드 경로
    - 결과: `runs/holdout_<ts>/score_report.json`
 4. 0715 (잡 마지막 채택) 결과와 비교

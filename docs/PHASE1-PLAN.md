@@ -16,13 +16,30 @@
 |------|----------|--------|
 | GPU 가용성 | `nvidia-smi` — float16 14GB 정도 여유? | CUDA 환경 정비 |
 | Python 3.10+ | `python --version` | venv 따로 |
-| 데이터 존재 | `ls data/raw/wav/AIG_녹취반출_20250715/*_l.wav \| wc -l` → 14 기대 | 사용자에게 위치 확인 |
-| label 매칭 | 동일 디렉토리 label 도 14개 | 사용자에게 확인 |
-| holdout 존재 (참고만) | 0813 존재 확인, **건드리지 않음** | — |
+| 데이터 존재 | `ls $ASR_RAW_DATA_ROOT/wav/AIG_녹취반출_20250715/*_l.wav \| wc -l` → 12 기대 | 사용자에게 위치 확인 |
+| label 매칭 | 동일 디렉토리 label 도 12개 | 사용자에게 확인 |
+| holdout 존재 (참고만) | 0813 존재 확인 (13 페어 기대), **건드리지 않음** | — |
 | Git 초기화 | `git rev-parse --show-toplevel` | `git init` 후 `.gitignore` 작성 |
 | 인터넷 | HF model 다운로드 가능 | proxy/mirror 설정 |
 
 **산출물**: `notes/env-check.txt` (선택) 에 GPU·Python·데이터 카운트 기록.
+
+### 0.1 데이터 경로 config
+
+`ASR_RAW_DATA_ROOT` env var 로 데이터 루트를 설정. 기본은 프로젝트 상대 `data/raw`.
+다른 머신에서는 절대경로로 override.
+
+`.env` 또는 venv activate 스크립트에 추가:
+```bash
+export ASR_RAW_DATA_ROOT=/home/jake/MyProject/stt/data-gen/aig-audio-3/data/raw
+```
+
+또는 프로젝트 상대 경로를 쓰고 싶으면 심볼릭 링크:
+```bash
+ln -s /home/jake/MyProject/stt/data-gen/aig-audio-3/data/raw data/raw
+```
+
+### 0.2 Git 초기화
 
 Git 이 아직 없으면 Phase 1 시작 전에 초기화한다. `data/raw/`, `.cache/`, `runs/`,
 `.venv/`, `__pycache__/`, `*.pyc` 는 `.gitignore` 에 넣어 음원·라벨 본문과 실행 산출물이
@@ -36,8 +53,8 @@ Git 이 아직 없으면 Phase 1 시작 전에 초기화한다. `data/raw/`, `.c
 
 ### 1.1 디렉토리 생성
 ```
-mkdir -p workspace judge scripts baseline runs tests .cache/ct2_models notes
-touch workspace/__init__.py judge/__init__.py
+mkdir -p workspace judge frozen scripts baseline runs tests .cache/ct2_models notes
+touch workspace/__init__.py judge/__init__.py frozen/__init__.py
 ```
 
 ### 1.2 의존성
@@ -89,7 +106,7 @@ ct2-transformers-converter \
 4. wav 없는 label → skip + log warning
 5. `ASR_RAW_DATA_ROOT` env var 로 root 오버라이드
 
-**검증**: 0715 에 대해 정확히 14 페어 반환.
+**검증**: 0715 에 대해 정확히 12 페어 반환.
 
 ### 2.2 `judge/normalize.py`
 
@@ -165,7 +182,7 @@ def corpus_aggregate(per_file: list[dict]) -> dict:
 
 Phase 1 에서는 얇은 pytest 를 둔다.
 - `tests/test_normalize.py`: 정규화 골든 케이스
-- `tests/test_pairing.py`: 0715 14 페어 매칭
+- `tests/test_pairing.py`: 0715 12 페어 매칭
 - `tests/test_metrics.py`: editops 산술과 corpus 집계
 - `tests/test_evaluate_smoke.py`: fake audio + stub transcribe end-to-end
 
@@ -216,54 +233,97 @@ exec python -m judge.evaluate \
 
 Phase 1 에서는 가드 검사 없음. exit code 는 judge 의 정상/예외만 반영.
 
-**검증**: 일단 transcribe 가 없으므로 ImportError 로 깨질 것. Step 5 에서 스텁 만든
-뒤 함께 검증.
+**검증**: 일단 transcribe 가 없으므로 ImportError 로 깨질 것. Step 5/6 에서 frozen
++ 스텁 만든 뒤 함께 검증.
 
 ---
 
-## Step 5 — Workspace 초기 스텁
+## Step 5 — Frozen layer (`frozen/asr_backend.py`)
+
+backend (모델·디바이스·precision) 를 봉인. workspace 는 이 layer 의 두 함수만 호출.
+Phase 3 진입 시 `frozen/` 은 편집 금지.
+
+### 5.1 시그너처
+
+```python
+# frozen/asr_backend.py — 편집 금지 (Phase 3)
+import ctranslate2
+from transformers import WhisperProcessor
+
+_MODEL_NAME       = "openai/whisper-large-v3-turbo"   # hard-coded
+_MODEL_CACHE_PATH = ".cache/ct2_models/whisper-large-v3-turbo"
+_DEVICE           = "cuda"
+_COMPUTE_TYPE     = "float16"
+
+_model = None
+_processor = None
+
+def load() -> tuple:
+    """(Whisper, WhisperProcessor) 반환. 모델/디바이스/precision 고정·캐시."""
+    global _model, _processor
+    if _model is None:
+        _processor = WhisperProcessor.from_pretrained(_MODEL_NAME)
+        _model = ctranslate2.models.Whisper(
+            _MODEL_CACHE_PATH, device=_DEVICE, compute_type=_COMPUTE_TYPE,
+        )
+    return _model, _processor
+
+
+def generate(features, prompts, **decoding_kwargs):
+    """ctranslate2 model.generate 호출. decoding_kwargs 는 자유 passthrough.
+    (beam_size, temperature, length_penalty, repetition_penalty, sampling_*, 등)
+    """
+    model, _ = load()
+    return model.generate(features, prompts, **decoding_kwargs)
+```
+
+### 5.2 워크스페이스에 노출되는 것 / 막히는 것
+
+| 자유 | 봉인 |
+|------|------|
+| decoding kwargs (beam, temperature, fallback options 전부) | 모델 이름·경로·디바이스·precision |
+| chunking, prompt 구성, feature extraction 정책 | model.generate 외 ctranslate2 API 직접 호출 (Phase 3 정적 검사로 차단) |
+| post-processing, merging | — |
+
+### 5.3 검증
+
+```
+python -c "from frozen.asr_backend import load, generate; m, p = load(); print('ok')"
+```
+
+→ 첫 호출 시 모델 다운로드/변환·로드 완료까지 시간 걸림. 이후 캐시.
+
+---
+
+## Step 6 — Workspace 초기 스텁
 
 `workspace/transcribe.py`:
 
-가장 단순한 CT2 raw 호출. 30 초 초과는 깨져도 좋음 (오히려 권장 — autoresearch 가
-풀 출발점).
+가장 단순한 호출 — frozen.load() + frozen.generate(). 30 초 초과는 깨져도 좋음
+(오히려 권장 — autoresearch 가 풀 출발점).
 
 ```python
-import ctranslate2
 import numpy as np
-from transformers import WhisperProcessor
-
-_MODEL = None
-_PROCESSOR = None
-
-def _load():
-    global _MODEL, _PROCESSOR
-    if _MODEL is None:
-        _PROCESSOR = WhisperProcessor.from_pretrained("openai/whisper-large-v3-turbo")
-        _MODEL = ctranslate2.models.Whisper(
-            ".cache/ct2_models/whisper-large-v3-turbo",
-            device="cuda",
-            compute_type="float16",
-        )
-    return _MODEL, _PROCESSOR
+from frozen.asr_backend import load, generate
+import ctranslate2  # StorageView 만 — Phase 3 에서 이 import 도 검사 대상이 될 수 있음
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
-    model, proc = _load()
-    # 가장 단순한 호출 — 30s 윈도우, 단일 generate
+    model, proc = load()
     inputs = proc(audio, sampling_rate=sr, return_tensors="np")
     features = ctranslate2.StorageView.from_array(inputs.input_features)
     prompt = proc.tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", "<|ko|>", "<|transcribe|>", "<|notimestamps|>"]
     )
-    results = model.generate(features, [prompt])
+    # decoding kwargs 자유 — 아래는 가장 단순한 greedy
+    results = generate(features, [prompt], beam_size=1, sampling_temperature=0.0)
     tokens = results[0].sequences_ids[0]
     return proc.tokenizer.decode(tokens, skip_special_tokens=True)
 ```
 
 > 위는 의사 코드. 실제 ctranslate2 API 와 일치하지 않을 수 있으므로 첫 작성 시
-> 공식 문서 확인.
+> 공식 문서 확인. **모델 로드는 절대 workspace 에서 직접 안 함** — frozen.load() 만.
 
-### 5.1 수동 스모크
+### 6.1 수동 스모크
 
 ```
 bash scripts/verify.sh
@@ -280,17 +340,17 @@ bash scripts/verify.sh
 
 ---
 
-## Step 6 — Baseline 측정 (faster-whisper)
+## Step 7 — Baseline 측정 (faster-whisper)
 
-### 6.1 `scripts/measure_baseline.py`
+### 7.1 `scripts/measure_baseline.py`
 
 흐름:
 1. faster-whisper 로드 (`large-v3-turbo`, float16, GPU)
-2. 0715 14 페어 iterate → `model.transcribe(wav)` → text 합치기
+2. 0715 12 페어 iterate → `model.transcribe(wav)` → text 합치기
 3. **동일 judge 의 normalize + metrics** 사용 (transcribe 만 다른 백엔드)
 4. `baseline/target_cer.json` 작성 (DESIGN §2.8 형식)
 
-### 6.2 봉인
+### 7.2 봉인
 
 - 작성 후 git 커밋
 - 파일 상단 또는 `baseline/README.md` 에 "재실행 금지" 명시
@@ -305,16 +365,16 @@ bash scripts/verify.sh
 
 ---
 
-## Step 7 — σ 측정
+## Step 8 — σ 측정
 
-### 7.1 `scripts/measure_sigma.py`
+### 8.1 `scripts/measure_sigma.py`
 
 흐름:
-1. `workspace/transcribe.py` (Step 5 스텁) 로 0715 평가 3회 반복
+1. `workspace/transcribe.py` (Step 6 스텁) 로 0715 평가 3회 반복
 2. 매번 새 `HYP_ID` 로 `runs/` 에 저장
 3. corpus_cer 3개의 표준편차 → `baseline/noise_floor.json`
 
-### 7.2 스텁이 너무 깨졌을 때
+### 8.2 스텁이 너무 깨졌을 때
 
 스텁의 corpus_cer 이 1.0 이상 (= 사실상 빈 출력) 이거나 매 실행 동일 (= 결정론) 이면
 σ ≈ 0 으로 나옴. 이 경우 σ 측정은 **Phase 3 첫 정상 가설 이후로 미룸** — 노이즈
@@ -326,11 +386,11 @@ bash scripts/verify.sh
 
 ---
 
-## Step 8 — DoD 점검
+## Step 9 — DoD 점검
 
 `DESIGN.md §2.10` 체크리스트 그대로:
 
-- [ ] 데이터 페어링 코드가 0715 14 페어 정확히 매칭
+- [ ] 데이터 페어링 코드가 0715 12 페어 정확히 매칭
 - [ ] judge 가 스텁 transcribe 에 대해 score_report.json 산출
 - [ ] `scripts/verify.sh` 실행 시 corpus_cer 숫자가 마지막 줄에 출력
 - [ ] `baseline/target_cer.json` 생성 + 봉인
@@ -349,7 +409,7 @@ bash scripts/verify.sh
 
 - 각 Step 종료 시 **수동 검증** 한 번 — 다음 Step 들어가기 전에 깨끗한 상태 확인
 - Step 2~3 (judge) 가 가장 중요 — 시간 더 써도 OK
-- Step 5 스텁은 빨리 — autoresearch 가 어차피 다 갈아엎음
+- Step 6 스텁은 빨리 — autoresearch 가 어차피 다 갈아엎음
 - 막히면 멈추고 사용자에 보고 (특히 모델 변환 / GPU 메모리 / 데이터 위치)
 
 ---

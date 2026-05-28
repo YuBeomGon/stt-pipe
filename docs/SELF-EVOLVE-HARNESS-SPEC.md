@@ -25,7 +25,7 @@
 | 입력 | 정의 | 예시 (ASR) |
 |------|------|------------|
 | **목표 (metric)** | deterministic하게 산출되는 단일 수치, lower/higher-is-better 명시 | `corpus_cer` (lower) |
-| **데이터셋** | 평가용 + holdout 분리, 접근 경로 고정 | 0715 14 페어 + 0813 holdout |
+| **데이터셋** | 평가용 + holdout 분리, 접근 경로 고정 | 0715 12 페어 + 0813 holdout |
 | **평가 (judge)** | 인풋·아웃풋 둘 다에 동일 규칙 적용. 정규화 잠금 | §5.1 정규화 + corpus CER |
 | **수정 가능 영역 (workspace surface)** | 에이전트가 만질 수 있는 *유일한* 표면. 최소화. | `transcribe(audio, sr) -> str` 단일 함수 |
 
@@ -78,7 +78,7 @@ agent가 "모델 자체를 바꾸는" 방향으로 빠짐. **모델 호출은 fr
   "target_metric": <number>,
   "metric_name": "corpus_cer",
   "lower_is_better": true,
-  "num_items": 14,
+  "num_items": 12,
   "per_item": [{"id": "...", "metric": 0.04..}],
   "produced_at": <timestamp>,
   "frozen_revision": "<git sha of frozen/ at measurement>"

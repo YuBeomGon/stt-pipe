@@ -24,6 +24,7 @@ faster-whisper baseline 이하로 낮춘다.
 | 영역 | Phase 3 권한 |
 |------|------|
 | `workspace/transcribe.py` | **편집 OK — 유일한 표면** |
+| `frozen/` | **편집 금지** — backend(CT2 + whisper-large-v3-turbo) 봉인. decoding params 는 workspace 에서 자유 |
 | `judge/` | **편집 금지** — 평가자 본문 |
 | `baseline/` | **편집 금지** — 봉인됨. 재측정 금지 |
 | `scripts/` | **편집 금지** — verify / measure / analyze / evaluate_holdout 보호 |

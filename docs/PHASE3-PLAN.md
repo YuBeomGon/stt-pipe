@@ -34,6 +34,7 @@ chmod -R 000 data/raw/label/AIG_녹취반출_20250813
 | `length_ratio.p95` | `> 3.0` | exit 1 (출력 너무 김) |
 | `audio_coverage_rate` | `< 0.8` | sidecar telemetry 가 있을 때만 exit 1 |
 | `repeated_text_rate` | `> 0.20` | exit 1 |
+| **정적 backend 보호** | `workspace/transcribe.py` 가 `import ctranslate2.models` / `from_pretrained` / `ctranslate2.models.Whisper(` 등 backend 직접 로드 패턴 포함 | exit 1 (frozen 우회 시도) |
 
 `corpus_cer` 자체는 *메트릭으로만 출력* — keep/discard 판정은 autoresearch 가 한다.
 가드 위반은 점수 무관 즉시 ROLLBACK.
@@ -56,7 +57,7 @@ Claude Code 세션 안에서:
 
 ```
 /autoresearch
-Goal: workspace/transcribe.py 의 transcribe(audio, sr) 함수를 진화시켜 0715 14 페어 corpus_cer 을 baseline/target_cer.json 의 target_cer 이하로 낮춘다. 어떤 backend·model 변경도 금지 (STT-PIPELINE-SPEC.md §2, §11 참조).
+Goal: workspace/transcribe.py 의 transcribe(audio, sr) 함수를 진화시켜 0715 12 페어 corpus_cer 을 baseline/target_cer.json 의 target_cer 이하로 낮춘다. 어떤 backend·model 변경도 금지 (STT-PIPELINE-SPEC.md §2, §11 참조).
 Scope: workspace/transcribe.py
 Metric: corpus_cer (lower is better)
 Verify: bash scripts/verify.sh
@@ -151,7 +152,7 @@ python scripts/evaluate_holdout.py --unseal
 # 내부 동작:
 #   0. runs/_summary/JOB_DONE.lock 확인 (없으면 거부)
 #   1. holdout chmod 복구 (u+rwX)
-#   2. 0813 16 페어 evaluate
+#   2. 0813 13 페어 evaluate
 #   3. 0715 결과와 비교 → runs/_summary/HOLDOUT.md 산출
 #   4. holdout chmod 000 으로 재봉인 (재호출 차단)
 ```

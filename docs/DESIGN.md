@@ -46,7 +46,9 @@ aig/
 ├── .cache/
 │   └── ct2_models/whisper-large-v3-turbo/   # CT2 변환 캐시
 ├── workspace/
-│   └── transcribe.py            # ← autoresearch가 만질 유일한 파일
+│   └── transcribe.py            # ← autoresearch 가 만질 유일한 파일
+├── frozen/
+│   └── asr_backend.py           # CT2 + whisper-large-v3-turbo 봉인 (Phase 3 편집 금지)
 ├── judge/
 │   ├── __init__.py
 │   ├── normalize.py             # §5.1 정규화
@@ -143,7 +145,7 @@ python -m judge.evaluate \
 ```
 
 동작:
-1. `pairing` 으로 14 페어 로드
+1. `pairing` 으로 12 페어 로드
 2. 각 wav → `librosa.load(sr=16000, mono=True)` → telemetry env 설정 → `transcribe(audio, sr)` 호출
 3. per-file CER + 가드 산출 → `score_report.json` 작성
 4. **마지막 줄에 `corpus_cer` 한 숫자 print** (autoresearch Verify 가 파싱)
@@ -153,24 +155,39 @@ judge 가 설정한 `ASR_TELEMETRY_DIR`, `ASR_TELEMETRY_FILE_ID` 를 사용해
 `runs/<hyp_id>/_telemetry/<file_id>.jsonl` sidecar 를 쓴다. judge 는 있으면 읽고, 없으면
 coverage guard 를 skip 한다.
 
-### 2.6 초기 transcribe 스텁 (`workspace/transcribe.py`)
+### 2.6 Frozen layer (`frozen/asr_backend.py`)
 
-가장 단순한 CT2 raw 호출. 30 초 초과 long-form 은 깨질 거고, **그게 autoresearch
-가 풀어야 할 출발점**.
+backend 봉인. workspace 는 `load()` 와 `generate()` 만 호출하며, 모델·디바이스·precision
+은 이 layer 가 hard-code. Phase 3 진입 시 편집 금지.
 
 ```python
+# frozen/asr_backend.py
+def load() -> tuple[Whisper, WhisperProcessor]: ...     # 모델 캐시·고정 로드
+def generate(features, prompts, **decoding_kwargs): ... # CT2 generate passthrough
+```
+
+- 봉인: 모델 이름, 변환 캐시 경로, device, compute_type
+- workspace 자유: decoding_kwargs (beam, temperature, fallback, sampling 등 전부)
+- 추가 보호: Phase 3 verify 가 workspace 의 `import ctranslate2.models` / `from_pretrained` 패턴 정적 검사 (PHASE3 §1.2)
+
+### 2.7 초기 transcribe 스텁 (`workspace/transcribe.py`)
+
+가장 단순한 호출 — `frozen.load()` + `frozen.generate()` 로 chunking 없이 1 회.
+30 초 초과 long-form 은 깨질 거고, **그게 autoresearch 가 풀어야 할 출발점**.
+
+```python
+from frozen.asr_backend import load, generate
+
 def transcribe(audio: np.ndarray, sr: int) -> str:
-    # CT2 Whisper-large-v3-turbo 로드 (모듈 레벨에서 1회)
-    # tokenizer encode
-    # model.generate (단일 호출, chunking 없음)
-    # decode → str
+    model, proc = load()
+    # feature 추출 → prompt 구성 → generate (단일 호출, chunking 없음) → decode → str
     ...
 ```
 
 스텁 작성 기준: *돌아가기만* 하면 됨. CER 점수는 나쁠 거고, 그래야 autoresearch
 가 개선 여지를 갖는다.
 
-### 2.7 Verify 스크립트 (`scripts/verify.sh`)
+### 2.8 Verify 스크립트 (`scripts/verify.sh`)
 
 **Phase 1 에서는 가드 검사 없음**:
 
@@ -185,15 +202,15 @@ python -m judge.evaluate \
 # 마지막에 corpus_cer 만 한 줄 print (judge 가 이미 함)
 ```
 
-### 2.8 Baseline 측정 (`scripts/measure_baseline.py`)
+### 2.9 Baseline 측정 (`scripts/measure_baseline.py`)
 
-`faster-whisper` 로 0715 14 페어 1회 transcribe → 동일 judge 로 점수 산출 → `baseline/target_cer.json` 작성:
+`faster-whisper` 로 0715 12 페어 1회 transcribe → 동일 judge 로 점수 산출 → `baseline/target_cer.json` 작성:
 
 ```json
 {
   "target_cer": 0.0XXX,
   "macro_cer": 0.0XXX,
-  "num_files": 14,
+  "num_files": 12,
   "batches": ["AIG_녹취반출_20250715"],
   "total_audio_s": ...,
   "total_inference_time_s": ...,
@@ -215,7 +232,7 @@ python -m judge.evaluate \
 
 이후 **재실행 금지** (결정론 보장). 한 번 봉인되면 모든 의사결정의 기준점.
 
-### 2.9 σ 측정 (`scripts/measure_sigma.py`)
+### 2.10 σ 측정 (`scripts/measure_sigma.py`)
 
 `workspace/transcribe.py` 초기 스텁으로 0715 평가를 **3회 반복** → corpus_cer 분포의
 표준편차 → `baseline/noise_floor.json`:
@@ -232,9 +249,9 @@ python -m judge.evaluate \
 > 주의: 스텁이 *돌긴 돌아야* σ 측정 가능. 스텁이 너무 망가져 corpus_cer 산출 자체가
 > 깨지면 σ 측정은 첫 정상 가설 이후로 미룬다.
 
-### 2.10 Phase 1 완료 기준 (Definition of Done)
+### 2.11 Phase 1 완료 기준 (Definition of Done)
 
-- [ ] 데이터 페어링 코드가 0715 14 페어 정확히 매칭
+- [ ] 데이터 페어링 코드가 0715 12 페어 정확히 매칭
 - [ ] judge 가 스텁 transcribe 에 대해 score_report.json 산출
 - [ ] `scripts/verify.sh` 실행 시 corpus_cer 숫자가 마지막 줄에 출력
 - [ ] `baseline/target_cer.json` 생성 + 봉인 (재실행 금지 명시)
@@ -281,9 +298,6 @@ python -m judge.evaluate \
 - 데이터 실제 절대경로 — `ASR_RAW_DATA_ROOT` 설정 여부
 - autoresearch 의 노이즈 σ 임계 지원 여부 (PHASE3 §1.2)
 - autoresearch 의 파일 접근 권한 / 디렉토리 제한 메커니즘 (PHASE3 §3)
-- backend 보호 계층을 둘지 여부: 현 설계는 `workspace/transcribe.py` 가 CT2 호출을 직접
-  담는다. Phase 3 전에 `frozen/asr_backend.py` 같은 읽기 전용 계층으로 모델 로드·호출을
-  분리할지 결정한다.
 - 25 iter 총 소요 시간 추정 (per-iter verify 시간 측정 후)
 
 ---
