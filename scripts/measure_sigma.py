@@ -117,6 +117,22 @@ def measure(
 
     sigma = statistics.pstdev(cers) if len(cers) >= 2 else 0.0
 
+    # PHASE1-PLAN §9.3: a degenerate σ (stub too broken — cer ≈ 1.0 or
+    # samples identical) means we cannot apply the 2σ keep/revert rule
+    # yet. Mark the file provisional so Phase 3 falls back to an absolute
+    # Δcer threshold until σ is re-measured against a working hypothesis.
+    near_one_cer = all(c >= 0.95 for c in cers)
+    is_provisional = sigma == 0.0 or near_one_cer
+    note = None
+    if is_provisional:
+        note = (
+            "PROVISIONAL — σ measured against a degenerate transcribe stub "
+            "(30 s truncation + greedy decoding produced identical near-1.0 "
+            "cer across runs). Re-measure after Phase 3 first valid "
+            "hypothesis (PHASE1-PLAN §9.3). Until then, autoresearch should "
+            "use an absolute Δcer threshold (suggest 0.01)."
+        )
+
     payload = {
         "scope": "representative_file_proxy",
         "method": "longest _l.wav by audio_s, n runs, lexical tie-break",
@@ -124,6 +140,8 @@ def measure(
         "representative_audio_s": dur,
         "samples": cers,
         "sigma": sigma,
+        "is_provisional": is_provisional,
+        "note": note,
         "applies_to": (
             "corpus_cer Δ threshold (approximation — not identical to corpus σ)"
         ),

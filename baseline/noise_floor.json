@@ -1,0 +1,18 @@
+{
+  "scope": "representative_file_proxy",
+  "method": "longest _l.wav by audio_s, n runs, lexical tie-break",
+  "representative_file": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/02_4038_0106613XXXX_2025_07_15_12_06_50_l.wav",
+  "representative_audio_s": 2596.58375,
+  "samples": [
+    0.9953771431915267,
+    0.9953771431915267,
+    0.9953771431915267
+  ],
+  "sigma": 0.0,
+  "is_provisional": true,
+  "note": "PROVISIONAL — σ measured against a degenerate transcribe stub (30 s truncation + greedy decoding produced identical near-1.0 cer across runs). Re-measure after Phase 3 first valid hypothesis (PHASE1-PLAN §9.3). Until then, autoresearch should use an absolute Δcer threshold (suggest 0.01).",
+  "applies_to": "corpus_cer Δ threshold (approximation — not identical to corpus σ)",
+  "measured_against": "workspace.transcribe at sigma-measure time",
+  "measured_at": "2026-05-28T08:21:42.106786+00:00",
+  "repeats": 3
+}
