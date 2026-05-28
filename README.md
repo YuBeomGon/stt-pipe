@@ -7,7 +7,7 @@
 
 정본:
 - 도메인 정의·정규화·가드 — [`docs/STT-PIPELINE-SPEC.md`](docs/STT-PIPELINE-SPEC.md)
-- 시스템 설계·디렉토리·2 단계 구조 — [`docs/DESIGN.md`](docs/DESIGN.md)
+- 시스템 설계·디렉토리·3 단계 구조 — [`docs/DESIGN.md`](docs/DESIGN.md)
 
 ---
 
@@ -19,9 +19,11 @@ pip install -r requirements.txt
 # 첫 실행 시 .cache/ct2_models/ 에 CT2 변환 캐시 자동 생성
 ```
 
-사전 조건: Linux + CUDA float16 GPU (~14GB+), Python 3.10+,
-`data/raw/wav,label/AIG_녹취반출_20250715/*_l.{wav,txt}` 14 페어. `ASR_RAW_DATA_ROOT`
-로 데이터 루트 오버라이드 가능.
+사전 조건: Linux + CUDA float16 GPU (~14GB+), Python 3.10+, 14 페어:
+- `data/raw/wav/AIG_녹취반출_20250715/*_l.wav`
+- `data/raw/label/AIG_녹취반출_20250715/*_l.txt`
+
+`ASR_RAW_DATA_ROOT` 로 데이터 루트 오버라이드 가능.
 
 ---
 
@@ -50,7 +52,7 @@ pip install -r requirements.txt
 | 문서 | 용도 |
 |------|------|
 | [`docs/STT-PIPELINE-SPEC.md`](docs/STT-PIPELINE-SPEC.md) | 문제 정의·정규화·가드 (정본) |
-| [`docs/DESIGN.md`](docs/DESIGN.md) | 시스템 설계 (2 단계 구조, 디렉토리) |
+| [`docs/DESIGN.md`](docs/DESIGN.md) | 시스템 설계 (3 단계 구조, 디렉토리) |
 | [`docs/PHASE1-PLAN.md`](docs/PHASE1-PLAN.md) | Harness 구축 단계별 |
 | [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md) | 평가 인프라 구축 단계별 |
 | [`docs/PHASE3-PLAN.md`](docs/PHASE3-PLAN.md) | autoresearch 실행 + 분석 절차 |

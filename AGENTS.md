@@ -34,8 +34,10 @@ faster-whisper baseline 이하로 낮춘다.
 | `runs/` | iteration 산출물. 읽기만 (verify 가 작성) |
 
 holdout 이름·경로 참조 금지 범위는 `workspace/`, `judge/`, prompt, 운영 wrapper 를
-제외한 `scripts/`. 정본·운영 문서 (`docs/`, `README.md`, `AGENTS.md`, `CLAUDE.md`)
-와 `scripts/seal_holdout.sh` 는 명시적 안내를 위해 예외.
+제외한 `scripts/`. 운영 wrapper 예외: `scripts/seal_holdout.sh`,
+`scripts/evaluate_holdout.py` (Phase 2 산출 — 잡 종료 후 1 회 평가에 holdout
+batch 참조 필수). 정본·운영 문서 (`docs/`, `README.md`, `AGENTS.md`, `CLAUDE.md`)
+도 명시적 안내를 위해 예외.
 
 ---
 
@@ -57,9 +59,10 @@ holdout 이름·경로 참조 금지 범위는 `workspace/`, `judge/`, prompt, �
 1. [`docs/STT-PIPELINE-SPEC.md`](docs/STT-PIPELINE-SPEC.md) — 도메인 명세 (정본)
 2. [`docs/DESIGN.md`](docs/DESIGN.md) — 시스템 설계
 3. [`docs/PHASE1-PLAN.md`](docs/PHASE1-PLAN.md) — Harness 구축
-4. [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md) — autoresearch 자동화
-5. [`README.md`](README.md) — 사람용 진입점
-6. [`docs/SELF-EVOLVE-HARNESS-SPEC.md`](docs/SELF-EVOLVE-HARNESS-SPEC.md) — 참고용. 정본 승격 X
+4. [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md) — 평가 인프라 구축
+5. [`docs/PHASE3-PLAN.md`](docs/PHASE3-PLAN.md) — autoresearch 실행 + 분석
+6. [`README.md`](README.md) — 사람용 진입점
+7. [`docs/SELF-EVOLVE-HARNESS-SPEC.md`](docs/SELF-EVOLVE-HARNESS-SPEC.md) — 참고용. 정본 승격 X
 
 명세 본문의 라벨 문장을 prompt/후처리에 직접 주입 금지 (SPEC §11).
 

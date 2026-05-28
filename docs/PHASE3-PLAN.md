@@ -126,7 +126,16 @@ Iterations: 25
 잡 종료 직후 (holdout 복구 *전*):
 
 ```bash
-python scripts/analyze_run.py --runs-dir runs/ --out runs/_summary/REPORT.md
+# 1. 잡 종료 마커 — evaluate_holdout 잠금 해제용
+mkdir -p runs/_summary
+touch runs/_summary/JOB_DONE.lock
+
+# 2. 분석 리포트 생성
+python scripts/analyze_run.py \
+  --runs-dir runs/ \
+  --baseline baseline/ \
+  --template docs/templates/REPORT.md \
+  --out runs/_summary/REPORT.md
 ```
 
 산출: 8 개 축 (A~H) 의 자동 산출 부분 (cer 추이, 채택률, 가드 위반율, attribution,
@@ -135,11 +144,12 @@ diversity 카테고리 분포, 비용). 사람 판단 항목은 템플릿 빈칸
 
 ### 6.3 Holdout 복구 + 수동 평가
 
-분석 완료 후 *사람이 1 회만*:
+분석 완료 후 *사람이 1 회만* (`--unseal` 명시 필요):
 
 ```bash
-python scripts/evaluate_holdout.py
+python scripts/evaluate_holdout.py --unseal
 # 내부 동작:
+#   0. runs/_summary/JOB_DONE.lock 확인 (없으면 거부)
 #   1. holdout chmod 복구 (u+rwX)
 #   2. 0813 16 페어 evaluate
 #   3. 0715 결과와 비교 → runs/_summary/HOLDOUT.md 산출
