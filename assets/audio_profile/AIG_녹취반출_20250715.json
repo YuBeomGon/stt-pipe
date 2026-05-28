@@ -4,7 +4,7 @@
   "produced_at": "2026-05-28T08:06:35.313413+00:00",
   "per_file": [
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/00003004871752551193_l.wav",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/00003004871752551193_l.wav",
       "duration_s": 1629.18,
       "speech_segments": [
         [
@@ -332,7 +332,7 @@
       "rms_db_p95": -20.074556350708008
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/00003008571752540317_l.wav",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/00003008571752540317_l.wav",
       "duration_s": 1818.02,
       "speech_segments": [
         [
@@ -1416,7 +1416,7 @@
       "rms_db_p95": -19.51426887512207
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/00003011051752540623_l.wav",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/00003011051752540623_l.wav",
       "duration_s": 2426.98,
       "speech_segments": [
         [
@@ -2960,7 +2960,7 @@
       "rms_db_p95": -22.70648956298828
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/00003092151752545949_l.wav",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/00003092151752545949_l.wav",
       "duration_s": 1594.36,
       "speech_segments": [
         [
@@ -3412,7 +3412,7 @@
       "rms_db_p95": -12.246980667114258
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/01_6036_010XXXX0120_2025_07_15_12_35_57_l.wav",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/01_6036_010XXXX0120_2025_07_15_12_35_57_l.wav",
       "duration_s": 657.005,
       "speech_segments": [
         [
@@ -3592,7 +3592,7 @@
       "rms_db_p95": -25.062808990478516
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_09_49_57_l.wav",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_09_49_57_l.wav",
       "duration_s": 564.021875,
       "speech_segments": [
         [
@@ -3928,7 +3928,7 @@
       "rms_db_p95": -7.801139831542969
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_10_01_57_l.wav",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_10_01_57_l.wav",
       "duration_s": 598.109375,
       "speech_segments": [
         [
@@ -4064,7 +4064,7 @@
       "rms_db_p95": -10.913373947143555
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/01_8098_010XXXX8438_2025_07_15_09_34_53_l.wav",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/01_8098_010XXXX8438_2025_07_15_09_34_53_l.wav",
       "duration_s": 1756.074375,
       "speech_segments": [
         [
@@ -4872,7 +4872,7 @@
       "rms_db_p95": -16.786806106567383
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/02_4038_0106613XXXX_2025_07_15_12_06_50_l.wav",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/02_4038_0106613XXXX_2025_07_15_12_06_50_l.wav",
       "duration_s": 2596.58375,
       "speech_segments": [
         [
@@ -6012,7 +6012,7 @@
       "rms_db_p95": -26.84927749633789
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/1065_0105253XXXX_2025_07_15_12_03_28_N_l.wav",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/1065_0105253XXXX_2025_07_15_12_03_28_N_l.wav",
       "duration_s": 2363.905,
       "speech_segments": [
         [
@@ -7056,7 +7056,7 @@
       "rms_db_p95": -12.474459648132324
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/8016_0105616XXXX_2025_07_15_11_09_53_N_l.wav",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/8016_0105616XXXX_2025_07_15_11_09_53_N_l.wav",
       "duration_s": 2037.29625,
       "speech_segments": [
         [

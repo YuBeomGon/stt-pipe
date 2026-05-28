@@ -55,8 +55,8 @@
   "produced_at": "2026-05-28T08:18:57.466393+00:00",
   "per_file": [
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/00003004871752551193_l.wav",
-      "label": "/data/MyProject/side/evolve/aig/data/raw/label/AIG_녹취반출_20250715/00003004871752551193_l.txt",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/00003004871752551193_l.wav",
+      "label": "/home/beomgon/side/agent/stt-pipe/data/raw/label/AIG_녹취반출_20250715/00003004871752551193_l.txt",
       "ref_chars": 12302,
       "hyp_chars": 8891,
       "length_ratio": 0.7227280117054138,
@@ -75,8 +75,8 @@
       "repeated_text": false
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/00003008571752540317_l.wav",
-      "label": "/data/MyProject/side/evolve/aig/data/raw/label/AIG_녹취반출_20250715/00003008571752540317_l.txt",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/00003008571752540317_l.wav",
+      "label": "/home/beomgon/side/agent/stt-pipe/data/raw/label/AIG_녹취반출_20250715/00003008571752540317_l.txt",
       "ref_chars": 11573,
       "hyp_chars": 7051,
       "length_ratio": 0.6092629396007949,
@@ -95,8 +95,8 @@
       "repeated_text": false
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/00003011051752540623_l.wav",
-      "label": "/data/MyProject/side/evolve/aig/data/raw/label/AIG_녹취반출_20250715/00003011051752540623_l.txt",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/00003011051752540623_l.wav",
+      "label": "/home/beomgon/side/agent/stt-pipe/data/raw/label/AIG_녹취반출_20250715/00003011051752540623_l.txt",
       "ref_chars": 12892,
       "hyp_chars": 8254,
       "length_ratio": 0.6402420105491777,
@@ -146,8 +146,8 @@
       "repeated_text": false
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/00003092151752545949_l.wav",
-      "label": "/data/MyProject/side/evolve/aig/data/raw/label/AIG_녹취반출_20250715/00003092151752545949_l.txt",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/00003092151752545949_l.wav",
+      "label": "/home/beomgon/side/agent/stt-pipe/data/raw/label/AIG_녹취반출_20250715/00003092151752545949_l.txt",
       "ref_chars": 10704,
       "hyp_chars": 4676,
       "length_ratio": 0.4368460388639761,
@@ -179,8 +179,8 @@
       "repeated_text": false
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/01_6036_010XXXX0120_2025_07_15_12_35_57_l.wav",
-      "label": "/data/MyProject/side/evolve/aig/data/raw/label/AIG_녹취반출_20250715/01_6036_010XXXX0120_2025_07_15_12_35_57_l.txt",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/01_6036_010XXXX0120_2025_07_15_12_35_57_l.wav",
+      "label": "/home/beomgon/side/agent/stt-pipe/data/raw/label/AIG_녹취반출_20250715/01_6036_010XXXX0120_2025_07_15_12_35_57_l.txt",
       "ref_chars": 5257,
       "hyp_chars": 1836,
       "length_ratio": 0.34924862088643716,
@@ -206,8 +206,8 @@
       "repeated_text": false
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_09_49_57_l.wav",
-      "label": "/data/MyProject/side/evolve/aig/data/raw/label/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_09_49_57_l.txt",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_09_49_57_l.wav",
+      "label": "/home/beomgon/side/agent/stt-pipe/data/raw/label/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_09_49_57_l.txt",
       "ref_chars": 3745,
       "hyp_chars": 1905,
       "length_ratio": 0.5086782376502003,
@@ -226,8 +226,8 @@
       "repeated_text": false
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_10_01_57_l.wav",
-      "label": "/data/MyProject/side/evolve/aig/data/raw/label/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_10_01_57_l.txt",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_10_01_57_l.wav",
+      "label": "/home/beomgon/side/agent/stt-pipe/data/raw/label/AIG_녹취반출_20250715/01_8088_010XXXX3618_2025_07_15_10_01_57_l.txt",
       "ref_chars": 4946,
       "hyp_chars": 1800,
       "length_ratio": 0.3639304488475536,
@@ -246,8 +246,8 @@
       "repeated_text": false
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/01_8098_010XXXX8438_2025_07_15_09_34_53_l.wav",
-      "label": "/data/MyProject/side/evolve/aig/data/raw/label/AIG_녹취반출_20250715/01_8098_010XXXX8438_2025_07_15_09_34_53_l.txt",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/01_8098_010XXXX8438_2025_07_15_09_34_53_l.wav",
+      "label": "/home/beomgon/side/agent/stt-pipe/data/raw/label/AIG_녹취반출_20250715/01_8098_010XXXX8438_2025_07_15_09_34_53_l.txt",
       "ref_chars": 11639,
       "hyp_chars": 9413,
       "length_ratio": 0.8087464558810894,
@@ -266,8 +266,8 @@
       "repeated_text": true
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/02_4038_0106613XXXX_2025_07_15_12_06_50_l.wav",
-      "label": "/data/MyProject/side/evolve/aig/data/raw/label/AIG_녹취반출_20250715/02_4038_0106613XXXX_2025_07_15_12_06_50_l.txt",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/02_4038_0106613XXXX_2025_07_15_12_06_50_l.wav",
+      "label": "/home/beomgon/side/agent/stt-pipe/data/raw/label/AIG_녹취반출_20250715/02_4038_0106613XXXX_2025_07_15_12_06_50_l.txt",
       "ref_chars": 17089,
       "hyp_chars": 13362,
       "length_ratio": 0.7819064895546843,
@@ -286,8 +286,8 @@
       "repeated_text": false
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/1065_0105253XXXX_2025_07_15_12_03_28_N_l.wav",
-      "label": "/data/MyProject/side/evolve/aig/data/raw/label/AIG_녹취반출_20250715/1065_0105253XXXX_2025_07_15_12_03_28_N_l.txt",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/1065_0105253XXXX_2025_07_15_12_03_28_N_l.wav",
+      "label": "/home/beomgon/side/agent/stt-pipe/data/raw/label/AIG_녹취반출_20250715/1065_0105253XXXX_2025_07_15_12_03_28_N_l.txt",
       "ref_chars": 14803,
       "hyp_chars": 8104,
       "length_ratio": 0.547456596635817,
@@ -331,8 +331,8 @@
       "repeated_text": false
     },
     {
-      "wav": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/8016_0105616XXXX_2025_07_15_11_09_53_N_l.wav",
-      "label": "/data/MyProject/side/evolve/aig/data/raw/label/AIG_녹취반출_20250715/8016_0105616XXXX_2025_07_15_11_09_53_N_l.txt",
+      "wav": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/8016_0105616XXXX_2025_07_15_11_09_53_N_l.wav",
+      "label": "/home/beomgon/side/agent/stt-pipe/data/raw/label/AIG_녹취반출_20250715/8016_0105616XXXX_2025_07_15_11_09_53_N_l.txt",
       "ref_chars": 9816,
       "hyp_chars": 7651,
       "length_ratio": 0.779441727791361,

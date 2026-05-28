@@ -1,7 +1,7 @@
 {
   "scope": "representative_file_proxy",
   "method": "longest _l.wav by audio_s, n runs, lexical tie-break",
-  "representative_file": "/data/MyProject/side/evolve/aig/data/raw/wav/AIG_녹취반출_20250715/02_4038_0106613XXXX_2025_07_15_12_06_50_l.wav",
+  "representative_file": "/home/beomgon/side/agent/stt-pipe/data/raw/wav/AIG_녹취반출_20250715/02_4038_0106613XXXX_2025_07_15_12_06_50_l.wav",
   "representative_audio_s": 2596.58375,
   "samples": [
     0.9953771431915267,
