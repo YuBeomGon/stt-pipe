@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.pytest_cache/
+
+# Data — wav/label 본문 노출 방지
+data/raw/
+
+# 모델 캐시
+.cache/
+
+# 실행 산출물
+runs/
+
+# OS
+.DS_Store
+
+# 에디터
+.vscode/
+.idea/
+*.swp
