@@ -16,7 +16,7 @@
 |------|------|----------|------|
 | **Phase 1 — Harness 구축** | 골격·환경·judge·baseline·σ 측정 | **OFF** (자유롭게 수정) | 사람 |
 | **Phase 2 — 평가 인프라** | `analyze_run.py`·`evaluate_holdout.py`·REPORT 템플릿 | OFF | 사람 |
-| **Phase 3 — Autoresearch 실행 + 분석** | autoresearch 가 transcribe.py 진화 + 잡 종료 후 Phase 2 도구로 평가 | **ON** (holdout chmod + guard hard-fail) | 에이전트 + 사람(분석) |
+| **Phase 3 — Autoresearch 실행 + 분석** | autoresearch 가 transcribe.py 진화 + 잡 종료 후 Phase 2 도구로 평가 | **ON** (holdout chmod + baseline-relative verify) | 에이전트 + 사람(분석) |
 
 **왜 분리**:
 - Phase 1 가드레일 켜면 셋업 자체가 막힘 (judge 작성 중 holdout 접근, 초기 스텁이 가드 위반).
@@ -35,6 +35,7 @@ aig/
 │   ├── PHASE1-PLAN.md           # Harness 구축 절차
 │   ├── PHASE2-PLAN.md           # 평가 인프라 구축 절차
 │   ├── PHASE3-PLAN.md           # autoresearch 실행 + 분석 절차
+│   ├── PHASE3-LOOP.md           # Phase 3 loop / agent architecture Mermaid
 │   ├── templates/REPORT.md      # Phase 3 보고 양식 (Phase 2 에서 생성)
 │   └── SELF-EVOLVE-HARNESS-SPEC.md # 참고용 일반 하네스 원리
 ├── data/
@@ -233,6 +234,15 @@ python -m judge.evaluate \
   "batches": ["AIG_녹취반출_20250715"],
   "total_audio_s": ...,
   "total_inference_time_s": ...,
+  "runtime_s_per_audio_min": ...,
+  "guard_baseline": {
+    "empty_output_rate": ...,
+    "length_ratio": {"mean": ..., "p05": ..., "p95": ...},
+    "repeated_text_rate": ...,
+    "audio_coverage_rate": null,
+    "hallucination_hit_rate": ...,
+    "hallucination_hits_total": ...
+  },
   "versions": {
     "ctranslate2": "...",
     "faster_whisper": "...",
@@ -249,7 +259,7 @@ python -m judge.evaluate \
 }
 ```
 
-이후 **재실행 금지** (결정론 보장). 한 번 봉인되면 모든 의사결정의 기준점.
+이후 **재실행 금지** (결정론 보장). 한 번 봉인되면 최종 목표값과 품질 참조값으로 쓴다.
 
 ### 2.10 σ 측정 (`scripts/measure_sigma.py`) — representative-file proxy
 
@@ -287,7 +297,7 @@ lexical sort. 한 번 결정되면 noise_floor.json 에 박혀 잡 동안 고정
 - [ ] `scripts/verify.sh` 실행 시 corpus_cer 숫자가 마지막 줄에 출력
 - [ ] `assets/audio_profile/AIG_녹취반출_20250715.json` 생성 (0715 only — 0813 미생성)
 - [ ] `baseline/target_cer.json` 생성 + 봉인 (재실행 금지 명시)
-- [ ] `baseline/target_cer.json` 에 versions/model/decoding_params/hardware 기록
+- [ ] `baseline/target_cer.json` 에 versions/model/decoding_params/hardware/guard_baseline 기록
 - [ ] `baseline/noise_floor.json` 생성 (σ 측정 완료)
 - [ ] normalize/pairing/metrics/evaluate smoke 테스트 통과
 - [ ] 사람이 수동으로 verify.sh 1 회 돌려서 cer 숫자 확인
@@ -322,9 +332,9 @@ lexical sort. 한 번 결정되면 noise_floor.json 에 박혀 잡 동안 고정
 
 요점만:
 - 진입 시점: Phase 1 + Phase 2 DoD 통과 직후
-- 진입 직전 일괄 활성화: holdout chmod, verify 가드 hard-fail
-- `workspace/transcribe.py` 만 scope, `corpus_cer` 만 metric
-- 결정 = autoresearch (keep/revert), 가드 위반 = 점수 무관 즉시 ROLLBACK
+- 진입 직전 일괄 활성화: holdout chmod, verify baseline-relative policy
+- `workspace/transcribe.py` 만 scope, primary metric 은 `corpus_cer`
+- 결정 = autoresearch (keep/revert), hard-fail 은 무효 후보만 즉시 ROLLBACK
 - 잡 종료 후 Phase 2 도구로 평가 — REPORT.md + HOLDOUT.md
 
 ---
@@ -343,7 +353,7 @@ lexical sort. 한 번 결정되면 noise_floor.json 에 박혀 잡 동안 고정
 ## 6. 안티 패턴 (해선 안 되는 것)
 
 - Phase 1 단계에서 가드레일을 미리 활성화 (코드 작성 막힘)
-- Phase 3 에서 가드 임계를 baseline 측정 *전에* 정함 (실측 분포 없이 임계 못 정함)
+- Phase 3 에서 baseline guard/time 분포 측정 *전에* quality budget 을 확정
 - 평가 도구를 Phase 3 *후* 에 만듦 (결과에 분석을 맞추는 reverse-fit)
 - baseline/target_cer.json 을 잡 도중 갱신 (결정론 깨짐)
 - σ 를 단일 측정으로 산출 (최소 3회)

@@ -22,23 +22,40 @@ chmod -R 000 data/raw/label/AIG_녹취반출_20250813
 
 잡 종료 후 §6 의 절차로 복구.
 
-### 1.2 Verify 가드 hard-fail 추가
+### 1.2 Verify 판정 정책
 
-`scripts/verify.sh` 에 다음 임계를 추가 (초기값 — 실험 보며 조정):
+Phase 3 의 최종 목표점은 Phase 1 에서 봉인한 faster-whisper baseline 이다.
+중간 iteration 은 이 목표점을 매번 넘겨야 하는 것이 아니라, 현재 best 대비
+`2σ` 이상 개선되는지를 보고 keep/revert 한다.
 
-| 가드 | 임계 | 위반 시 |
+- 최종 CER 목표: `baseline/target_cer.json:target_cer`
+- 최종 시간 목표: `baseline/target_cer.json:total_inference_time_s`
+- 중간 keep/revert 기준: 현재 best 대비 `baseline/noise_floor.json:sigma`
+- 품질 참조값: baseline 측정 때 같은 judge 로 산출한 guard 분포
+
+`scripts/verify.sh` 는 너무 많은 품질 지표를 전부 hard-fail 로 만들지 않는다.
+hard-fail 은 “무효 후보”만 즉시 rollback 하고, hallucination/length/repetition/coverage 는
+baseline 목표 대비 큰 악화 여부와 diagnosis 로 다룬다.
+
+| 층위 | 판정 | 위반 시 |
 |------|------|----------|
-| `hallucination_hit_rate` | `> 0.05` | exit 1 → ROLLBACK |
-| `empty_output_rate` | `> 0.10` | exit 1 |
-| `length_ratio.p05` | `< 0.3` | exit 1 (출력 너무 짧음) |
-| `length_ratio.p95` | `> 3.0` | exit 1 (출력 너무 김) |
-| `audio_coverage_rate` | `< 0.8` | sidecar telemetry 가 있을 때만 exit 1 |
-| `repeated_text_rate` | `> 0.20` | exit 1 |
-| **정적 backend 보호** | `workspace/transcribe.py` 에 `import ctranslate2` / `import transformers` / `from_pretrained` / `Whisper(` 중 어느 패턴이라도 출현 | exit 1 (frozen 우회 시도. workspace 는 `frozen.asr_backend` 의 `load / generate / to_storage_view` 만 사용) |
-| **정적 profile 직접참조 차단** | `workspace/transcribe.py` 에 `assets` / `audio_profile` / `silero` 중 어느 substring 이라도 출현 (case-insensitive) | exit 1 (raw profile/VAD 직접 사용 금지. profile 정보는 judge 가 만든 `diagnosis_report.json` summary 로만 노출) |
+| **정적 backend 보호** | `workspace/transcribe.py` 에 `import ctranslate2` / `import transformers` / `from_pretrained` / `Whisper(` 중 어느 패턴이라도 출현 | exit 1 |
+| **정적 profile 직접참조 차단** | `workspace/transcribe.py` 에 `assets` / `audio_profile` / `silero` 중 어느 substring 이라도 출현 (case-insensitive) | exit 1 |
+| **실행 무효** | import 실패, evaluate crash, 마지막 줄 숫자 없음, `score_report.json` 누락 | exit 1 |
+| **산술 무결성** | `Σ edits / Σ ref_chars != corpus_cer` 또는 per-file 합산 불일치 | exit 1 |
+| **catastrophic output** | `empty_output_rate > 0.50` 또는 `length_ratio.p05 < 0.10` 또는 `length_ratio.p95 > 5.0` | exit 1 |
+| **runtime hard cap** | `total_inference_time_s > baseline.total_inference_time_s * RUNTIME_HARD_MULTIPLIER` | exit 1 |
+| **quality budget** | hallucination/repetition/coverage/length 가 최종 목표 baseline 대비 크게 악화 | 기본 warning + diagnosis. 악화 허용폭 초과 시 exit 1 가능 |
+| **keep/revert** | `corpus_cer <= best_cer - 2σ` | autoresearch 가 keep, 아니면 rollback |
+| **success** | `corpus_cer <= target_cer` 그리고 `total_inference_time_s <= baseline.total_inference_time_s * RUNTIME_SUCCESS_MULTIPLIER` | 종료 가능 |
 
-`corpus_cer` 자체는 *메트릭으로만 출력* — keep/discard 판정은 autoresearch 가 한다.
-가드 위반은 점수 무관 즉시 ROLLBACK.
+초기 운영값:
+- `RUNTIME_HARD_MULTIPLIER=3.0` — 폭주 방지용. 너무 빡빡하면 탐색 자체가 막힘.
+- `RUNTIME_SUCCESS_MULTIPLIER=1.0` — 최종 성공 목표는 faster-whisper time 이하.
+- `quality budget` 은 baseline guard 값 + 작은 허용폭으로 시작하되, Phase 1 baseline 측정값을 보고 확정.
+
+`corpus_cer`, runtime, guard 값은 모두 `score_report.json` 에 기록한다. 에이전트의 원인
+추론은 `diagnosis_report.json` 을 본다.
 
 > **검토 필요**: autoresearch 가 `Δcer ≥ 2σ` 노이즈 임계를 자체 지원하는지 확인.
 > 지원 안 하면 verify 가 이전 best metric 을 읽어 노이즈 이하 변화면 exit 1 처리하는
@@ -47,7 +64,7 @@ chmod -R 000 data/raw/label/AIG_녹취반출_20250813
 ### 1.3 사전 smoke
 
 가드가 실제로 작동하는지 의도적 위반으로 1회 검증:
-- `transcribe()` 가 빈 문자열만 반환하도록 임시 패치 → `empty_output_rate = 1.0` → exit 1
+- `transcribe()` 가 빈 문자열만 반환하도록 임시 패치 → catastrophic output → exit 1
 - 원복 후 정상 1 iter 동작 확인
 
 ---
@@ -58,9 +75,9 @@ Claude Code 세션 안에서:
 
 ```
 /autoresearch
-Goal: workspace/transcribe.py 의 transcribe(audio, sr) 함수를 진화시켜 0715 12 페어 corpus_cer 을 baseline/target_cer.json 의 target_cer 이하로 낮춘다. 어떤 backend·model 변경도 금지 (STT-PIPELINE-SPEC.md §2, §11 참조).
+Goal: workspace/transcribe.py 의 transcribe(audio, sr) 함수를 진화시켜 0715 12 페어 corpus_cer 을 baseline/target_cer.json 의 target_cer 이하로 낮추고, total_inference_time_s 는 baseline time budget 안에 둔다. 어떤 backend·model 변경도 금지 (STT-PIPELINE-SPEC.md §2, §11 참조).
 Scope: workspace/transcribe.py
-Metric: corpus_cer (lower is better)
+Metric: corpus_cer (primary, lower is better); runtime and quality budget are verify constraints
 Verify: bash scripts/verify.sh
 Iterations: 25
 ```
@@ -68,6 +85,7 @@ Iterations: 25
 외부 shell wrapper 형태 아님 — Claude Code 가 자기 자신을 루프 컨트롤러로 사용.
 
 선택: `/autoresearch:plan` 을 한 번 돌려 위 4 종 입력을 검증·구체화한 뒤 본 루프 진입.
+루프 구조 그림은 [`PHASE3-LOOP.md`](PHASE3-LOOP.md) 를 참조.
 
 ---
 
@@ -121,7 +139,7 @@ Iterations: 25
 
 ### 6.1 종료 조건
 
-- `corpus_cer ≤ target_cer` 달성 → SUCCESS (자동 종료)
+- `corpus_cer ≤ target_cer` 그리고 time budget 만족 → SUCCESS (자동 종료)
 - 25 iter 소진 → 종료, 결과 분석
 - 무한 가드 위반 / 무진전 → 사람이 중단
 
@@ -171,7 +189,7 @@ overfit 된 신호.
 ## 7. Phase 3 DoD
 
 - [ ] holdout chmod 적용 확인 (`ls data/raw/wav/AIG_녹취반출_20250813` → permission denied)
-- [ ] verify 가드 hard-fail 동작 확인 (의도적 위반 케이스 smoke 통과)
+- [ ] verify hard-fail / runtime cap / baseline-relative budget smoke 통과
 - [ ] autoresearch 1 iter 정상 종료 확인 (dry run)
 - [ ] 25 iter 완주 또는 target 도달
 - [ ] `analyze_run.py` 로 REPORT.md 생성
@@ -185,6 +203,7 @@ overfit 된 신호.
 - autoresearch 의 `Δcer ≥ 2σ` 노이즈 임계 지원 (§1.2)
 - autoresearch 의 파일 접근 권한 제어 메커니즘 (§3)
 - 25 iter 총 소요 시간 (Phase 1 verify 측정값 기준 추정 후 확정)
+- quality budget 허용폭 (baseline guard 분포 측정 후 확정)
 - (frozen layer 는 도입 완료 — `frozen/asr_backend.py`. Phase 3 진입 시 권한 차단 + 정적 import 검사 둘 다 작동하는지 smoke)
 
 ---

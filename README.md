@@ -56,6 +56,7 @@ pip install -r requirements.txt
 | [`docs/PHASE1-PLAN.md`](docs/PHASE1-PLAN.md) | Harness 구축 단계별 |
 | [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md) | 평가 인프라 구축 단계별 |
 | [`docs/PHASE3-PLAN.md`](docs/PHASE3-PLAN.md) | autoresearch 실행 + 분석 절차 |
+| [`docs/PHASE3-LOOP.md`](docs/PHASE3-LOOP.md) | Phase 3 루프/노출/판정 구조 Mermaid |
 | [`docs/SELF-EVOLVE-HARNESS-SPEC.md`](docs/SELF-EVOLVE-HARNESS-SPEC.md) | 참고용 일반 하네스 원리 (정본 아님) |
 | [`AGENTS.md`](AGENTS.md) | 에이전트 공통 규약 |
 | [`CLAUDE.md`](CLAUDE.md) | Claude Code 보충 |

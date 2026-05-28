@@ -48,9 +48,10 @@ batch 참조 필수). 정본·운영 문서 (`docs/`, `README.md`, `AGENTS.md`, 
 | 무엇 | 어디 |
 |------|------|
 | Primary metric | `corpus_cer` (lower is better) |
-| Target | `baseline/target_cer.json` 의 `target_cer` 이하 |
+| Final target | `baseline/target_cer.json` 의 `target_cer` 이하 |
+| Final time target | `baseline/target_cer.json` 의 `total_inference_time_s` budget |
 | 의미 있는 개선 | `Δcer ≥ 2σ` (σ = `baseline/noise_floor.json`) |
-| 가드 (Phase 3) | `hallucination_hit_rate`, `empty_output_rate`, `length_ratio`, `repeated_text_rate` 임계 초과 시 ROLLBACK. `audio_coverage_rate` 는 sidecar telemetry 있을 때만 |
+| 가드 (Phase 3) | backend/profile 직접참조·실행 실패·산술 불일치는 hard-fail. hallucination/length/repetition/coverage 는 `guard_baseline` 대비 quality budget 으로 판단 |
 
 채택/롤백 판단의 근거는 항상 `runs/<hyp_id>/score_report.json`. 원인 추론은
 `runs/<hyp_id>/diagnosis_report.json` 과 per-file 산출물만 사용한다. 추측/자기 보고 금지.
@@ -87,8 +88,8 @@ batch 참조 필수). 정본·운영 문서 (`docs/`, `README.md`, `AGENTS.md`, 
 
 ## 6. 검증 흐름
 
-`bash scripts/verify.sh` → 마지막 줄에 `corpus_cer` 한 숫자. 가드 위반은 (Phase 3)
-exit 1 → ROLLBACK. 자세히는 [`PHASE3-PLAN.md §1.2`](docs/PHASE3-PLAN.md).
+`bash scripts/verify.sh` → 마지막 줄에 `corpus_cer` 한 숫자. Phase 3 에서는 hard-fail
+위반 시 exit 1 → ROLLBACK. 자세히는 [`PHASE3-PLAN.md §1.2`](docs/PHASE3-PLAN.md).
 
 ---
 

@@ -478,18 +478,20 @@ audio-only 원칙. 필요하면 별도 `assets/label_profile/<batch>.json` 으�
 1. faster-whisper 로드 (`large-v3-turbo`, float16, GPU)
 2. 0715 12 페어 iterate → `model.transcribe(wav)` → text 합치기
 3. **동일 judge 의 normalize + metrics** 사용 (transcribe 만 다른 백엔드)
-4. `baseline/target_cer.json` 작성 (DESIGN §2.8 형식)
+4. `baseline/target_cer.json` 작성 (DESIGN §2.9 형식). `target_cer`,
+   `total_inference_time_s`, `runtime_s_per_audio_min`, `guard_baseline` 을 함께 기록
 
 ### 8.2 봉인
 
 - 작성 후 git 커밋
 - 파일 상단 또는 `baseline/README.md` 에 "재실행 금지" 명시
 - chmod 444 (선택)
-- `versions`, `model`, `decoding_params`, `hardware` 메타데이터 기록
+- `versions`, `model`, `decoding_params`, `hardware`, `guard_baseline` 메타데이터 기록
 
 **검증**:
 - `target_cer` 가 합리적 범위 (보험 콜센터 한국어로 0.05~0.20 추정)
-- `total_inference_time_s`, `total_audio_s` 기록됨
+- `total_inference_time_s`, `total_audio_s`, `runtime_s_per_audio_min` 기록됨
+- `guard_baseline` 에 empty/length/repeated/hallucination/audio_coverage 기준값 기록됨
 - faster-whisper / ctranslate2 / transformers 버전, HF revision, decoding params 기록됨
 - per_file 12 행, edits 합산이 corpus_cer 와 일치
 
@@ -547,7 +549,7 @@ SPEC §6.1 의 representative-file proxy 옵션. 정직하게 *근사* 임을 �
 - [ ] `runs/<hyp_id>/diagnosis_report.json` 생성 — per_file_diagnosis 12개, focus file 최대 2개, raw `speech_segments` 미포함
 - [ ] `assets/audio_profile/AIG_녹취반출_20250715.json` 생성 (0715 only — 0813 미생성)
 - [ ] `baseline/target_cer.json` 생성 + 봉인
-- [ ] `baseline/target_cer.json` 에 versions/model/decoding_params/hardware 메타데이터 기록
+- [ ] `baseline/target_cer.json` 에 versions/model/decoding_params/hardware/guard_baseline 메타데이터 기록
 - [ ] `baseline/noise_floor.json` 생성 — representative-file proxy 스키마 (scope/method/representative_file/samples/sigma)
 - [ ] `pytest` 로 normalize/pairing/metrics/evaluate smoke 통과
 - [ ] 사람이 수동으로 verify.sh 1 회 돌려서 cer 숫자 확인

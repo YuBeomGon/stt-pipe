@@ -283,6 +283,15 @@ blocking_patterns:
   "batches": ["AIG_녹취반출_20250715"],
   "total_audio_s": 1245.7,
   "total_inference_time_s": 24.7,
+  "runtime_s_per_audio_min": 1.19,
+  "guard_baseline": {
+    "empty_output_rate": 0.0,
+    "length_ratio": {"mean": 1.02, "p05": 0.86, "p95": 1.18},
+    "repeated_text_rate": 0.0,
+    "audio_coverage_rate": null,
+    "hallucination_hit_rate": 0.0,
+    "hallucination_hits_total": 0
+  },
   "versions": {
     "ctranslate2": "...",
     "faster_whisper": "...",
@@ -305,6 +314,7 @@ blocking_patterns:
 ### 7.3 의미
 
 - `target_cer`는 **달성해야 할 상한** — 추론 파이프라인이 이 값 이하로 가면 성공
+- `total_inference_time_s`는 최종 속도 목표값 — 운영 설계는 이 값을 기준으로 time budget 을 둔다
 - faster-whisper 자체는 **비교 기준일 뿐 해법이 아님** — 우리 파이프라인은
   ctranslate2 raw로 직접 구성
 
