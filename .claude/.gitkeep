@@ -1,0 +1,9 @@
+# Phase 1·2 active body marker — empty directory.
+#
+# 본 디렉토리는 Phase 1·2 (개발) 단계에서 *부재 본문* 으로 활성. Phase 3
+# 진입 시 사람이 `bash scripts/swap_claude.sh` 로 `.claude.alt/` 와 교환 →
+# settings.json + hooks/ 활성화.
+#
+# autoresearch 본체가 ~/.claude/ (글로벌) 에 설치되면 본 디렉토리와 무관하게
+# autoresearch 의 commands/skills/hooks 가 동작. 프로젝트 .claude/ 에 설치되면
+# 본 swap 패턴과 충돌 가능 — 설치 위치 결정은 PHASE3-PLAN §1.2 참조.

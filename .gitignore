@@ -17,7 +17,11 @@ data/raw/
 # 실행 산출물
 runs/
 notes/
-.claude/
+
+# `.claude/` 는 추적함 — Phase 3 가드 본문 (.claude.alt/ 와 swap 짝). swap 시
+# git 이 rename 으로 인식하려면 둘 다 추적 대상이어야 한다. autoresearch 본체를
+# 프로젝트 `.claude/` 에 설치한 경우 추가 디렉토리 (commands/, skills/,
+# hooks/autoresearch/) 가 함께 추적될 수 있음 — 그 시점에 별도 ignore 패턴 검토.
 
 # OS
 .DS_Store
