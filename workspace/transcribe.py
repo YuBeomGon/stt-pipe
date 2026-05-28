@@ -20,7 +20,7 @@ _TASK_TOKEN = "<|transcribe|>"
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
-    chunk_samples = 30 * sr
+    chunk_samples = 25 * sr
     overlap_samples = 5 * sr
     step_samples = chunk_samples - overlap_samples
     n_chunks = max(
