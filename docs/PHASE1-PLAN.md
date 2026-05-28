@@ -240,8 +240,8 @@ Phase 1 에서는 가드 검사 없음. exit code 는 judge 의 정상/예외만
 
 ## Step 5 — Frozen layer (`frozen/asr_backend.py`)
 
-backend (모델·디바이스·precision) 를 봉인. workspace 는 이 layer 의 두 함수만 호출.
-Phase 3 진입 시 `frozen/` 은 편집 금지.
+backend (모델·디바이스·precision) 를 봉인. workspace 는 이 layer 의 세 helper
+(`load` / `generate` / `to_storage_view`) 만 호출. Phase 3 진입 시 `frozen/` 은 편집 금지.
 
 ### 5.1 시그너처
 
@@ -304,8 +304,9 @@ python -c "from frozen.asr_backend import load, generate, to_storage_view; m, p 
 
 `workspace/transcribe.py`:
 
-가장 단순한 호출 — frozen.load() + frozen.generate(). 30 초 초과는 깨져도 좋음
-(오히려 권장 — autoresearch 가 풀 출발점).
+가장 단순한 호출 — `frozen.load()` / `frozen.generate()` / `frozen.to_storage_view()`
+세 helper 만 사용, chunking 없이 1 회. 30 초 초과는 깨져도 좋음 (오히려 권장 —
+autoresearch 가 풀 출발점).
 
 ```python
 import numpy as np
