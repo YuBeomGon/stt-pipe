@@ -35,7 +35,7 @@ chmod -R 000 data/raw/label/AIG_녹취반출_20250813
 | `audio_coverage_rate` | `< 0.8` | sidecar telemetry 가 있을 때만 exit 1 |
 | `repeated_text_rate` | `> 0.20` | exit 1 |
 | **정적 backend 보호** | `workspace/transcribe.py` 에 `import ctranslate2` / `import transformers` / `from_pretrained` / `Whisper(` 중 어느 패턴이라도 출현 | exit 1 (frozen 우회 시도. workspace 는 `frozen.asr_backend` 의 `load / generate / to_storage_view` 만 사용) |
-| **정적 profile 차단** | `workspace/transcribe.py` 에 `assets` / `audio_profile` / `silero` 중 어느 substring 이라도 출현 | exit 1 (audio profile 은 사후 분석용. agent 는 chunking 단서 직접 받지 않음 — zero-base) |
+| **정적 profile 직접참조 차단** | `workspace/transcribe.py` 에 `assets` / `audio_profile` / `silero` 중 어느 substring 이라도 출현 (case-insensitive) | exit 1 (raw profile/VAD 직접 사용 금지. profile 정보는 judge 가 만든 `diagnosis_report.json` summary 로만 노출) |
 
 `corpus_cer` 자체는 *메트릭으로만 출력* — keep/discard 판정은 autoresearch 가 한다.
 가드 위반은 점수 무관 즉시 ROLLBACK.
@@ -79,6 +79,7 @@ Iterations: 25
 | `workspace/transcribe.py` (편집 대상) | `judge/` 본문 (평가자 보호) |
 | 자기 `runs/<hyp_id>/score_report.json` 결과 | holdout 디렉토리 (chmod 차단) |
 | 자기 `runs/<hyp_id>/per_file.jsonl`, `_telemetry/` 결과 | baseline 산출 코드와 봉인 파일 본문 |
+| 자기 `runs/<hyp_id>/diagnosis_report.json` — 12파일 profile summary + focus file 최대 2개 | `assets/audio_profile/` 원본 (workspace 직접 참조 금지) |
 
 > **검토 필요**: autoresearch 의 파일 접근 권한 제어 메커니즘 확인. 못 막으면 명세
 > 텍스트 + 권한(chmod) + 신뢰 모델 조합으로 운영.
@@ -110,6 +111,7 @@ Iterations: 25
 각 iteration:
 - `runs/<hyp_id>/score_report.json` — 메트릭 + 가드
 - `runs/<hyp_id>/per_file.jsonl` — 진단 (per-file telemetry)
+- `runs/<hyp_id>/diagnosis_report.json` — LLM 추론용 12파일 summary + focus file 최대 2개
 - `runs/<hyp_id>/_telemetry/*.jsonl` — sidecar (있을 때)
 - workspace 변경: autoresearch 가 자체 git commit / revert
 
@@ -140,9 +142,9 @@ python scripts/analyze_run.py \
   --out runs/_summary/REPORT.md
 ```
 
-산출: 8 개 축 (A~H) 의 자동 산출 부분 (cer 추이, 채택률, 가드 위반율, attribution,
-diversity 카테고리 분포, 비용). 사람 판단 항목은 템플릿 빈칸으로 남는다 — Phase 2
-의 REPORT 템플릿 참조.
+산출: 8 개 축 (A~H) 의 자동 산출 부분 (cer 추이, 채택률, 가드 위반율, diagnosis
+focus file 추이, attribution, diversity 카테고리 분포, 비용). 사람 판단 항목은
+템플릿 빈칸으로 남는다 — Phase 2 의 REPORT 템플릿 참조.
 
 ### 6.3 Holdout 복구 + 수동 평가
 

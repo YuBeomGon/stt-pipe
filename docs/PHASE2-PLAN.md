@@ -16,8 +16,9 @@
 - agent 가 자기 commit 메시지에 적은 **의도와 실제 메트릭 변화가 일치하는가** (학습 신호를 제대로 읽고 있는가)
 - corpus_cer 평균 뒤에 **한두 파일이 점수를 끌고 갔는가** vs 골고루 개선인가
 - holdout (0813) 에서 **eval (0715) 만큼 동작하는가** (overfit 여부)
+- 매 iter 에이전트가 본 `diagnosis_report.json` focus file 신호가 실제 개선 방향과 맞았는가
 
-이 6 가지를 *결과 보고 그제야 분석* 하면 결과에 맞춰 해석이 휘므로, **잡 전에 도구·
+이 질문들을 *결과 보고 그제야 분석* 하면 결과에 맞춰 해석이 휘므로, **잡 전에 도구·
 질문 양식을 박아두고 잡 끝나면 자동으로 채워지게** 한다.
 
 §1 의 8 개 축 (A~H) 이 위 질문들의 구체화된 자동·수동 측정 항목이다.
@@ -25,7 +26,7 @@
 ---
 
 전제: Phase 1 DoD 통과 — `judge/`, `scripts/verify.sh`, `baseline/*.json` 존재 +
-`score_report.json` / `per_file.jsonl` 스키마 확정.
+`score_report.json` / `per_file.jsonl` / `diagnosis_report.json` 스키마 확정.
 
 ---
 
@@ -38,7 +39,7 @@ Phase 3 종료 후 다음 8 개 축으로 잡을 평가한다. 각 항목은 *�
 |----|------|-----------|
 | **A. 결과** | 최종 cer, target 도달 여부, CONTINUE/ROLLBACK 카운트, 학습 곡선, **holdout (0813) vs eval (0715) 차이** | 자동 |
 | **B. 하네스 구멍** | 가드 위반율, 노출/숨김 우회 시도, 표면 막힘 흔적 | 자동 일부 + 사람 |
-| **C. 에이전트 시야** | per_file 시계열, error_breakdown 추이, length_ratio 분포 변화 | 자동 |
+| **C. 에이전트 시야** | per_file 시계열, diagnosis focus 추이, error_breakdown 추이, length_ratio 분포 변화 | 자동 |
 | **D. 탐색 다양성** | 채택 가설의 카테고리 분포 (chunking/prompt/decode/post/fallback/merge) | 자동 (keyword 분류) + 사람 (수정) |
 | **E. 메트릭 적절성** | corpus vs macro 발산, per-file 분산, guard ↔ cer 상관 | 자동 |
 | **F. 비용 효율** | 총 wall clock, GPU 시간, 개선당 비용 (Δcer/iter, Δcer/min) | 자동 |
@@ -78,13 +79,15 @@ runs/_summary/                # Phase 3 종료 시 산출물 위치
 
 - `runs/<hyp_id>/score_report.json` 전체
 - `runs/<hyp_id>/per_file.jsonl` 전체
+- `runs/<hyp_id>/diagnosis_report.json` 전체 — 당시 에이전트에게 노출된 12파일 summary + focus 표시
 - `runs/<hyp_id>/_telemetry/*.jsonl` (있을 때)
 - `baseline/target_cer.json`, `baseline/noise_floor.json`
-- `assets/audio_profile/AIG_녹취반출_20250715.json` — 사후 분석 단서 (긴 무음/짧은 발화 구간 매칭)
+- `assets/audio_profile/AIG_녹취반출_20250715.json` — 전체 에볼루션 사후 분석용 raw profile
 - `git log --all` (commit 메시지, revert 흔적, timestamp)
 
-> 본 도구는 **사후 분석 컨텍스트** — autoresearch agent (workspace 진화) 와 권한 분리.
-> assets/audio_profile/ 읽기 허용. agent 의 workspace 에서는 차단 (AGENTS §1, PHASE3 §1.2).
+> Phase 3 중 에이전트는 raw profile 원본을 직접 읽지 않고, 각 iter 의
+> `diagnosis_report.json` 에 12파일 summary + focus 표시만 본다. `analyze_run.py` 는 잡 종료 후
+> raw profile 과 모든 diagnosis 를 함께 읽어 전체 에볼루션을 평가한다.
 
 ### 3.2 CLI
 
@@ -114,6 +117,7 @@ python scripts/analyze_run.py \
 - `error_breakdown` 추이 (sub_ratio / del_ratio / ins_ratio 의 iter 별 변화)
 - length_ratio mean / p05 / p95 시계열
 - hallucination_hit_rate 추이
+- diagnosis focus file 선정 추이 — 어떤 파일/오디오 특성이 반복적으로 문제로 노출됐는지
 
 #### D. 탐색 다양성 (자동 부분)
 채택된 commit 의 메시지·diff 에서 키워드 매칭으로 1차 분류:
@@ -219,6 +223,7 @@ python scripts/evaluate_holdout.py [--unseal] [--dry-run]
 - 최대 개선 파일 / 정체 파일: {{per_file_movers}}
 - error_breakdown 추이: {{breakdown_table}}
 - length_ratio 추이: {{lr_table}}
+- diagnosis focus 추이: {{diagnosis_focus_table}}
 
 ## D. 탐색 다양성
 - 카테고리 분포: {{category_distribution}}
@@ -256,7 +261,8 @@ python scripts/evaluate_holdout.py [--unseal] [--dry-run]
 ## 6. 합성 데이터 smoke test
 
 `tests/test_analyze_smoke.py`:
-- 가짜 `runs/<hyp_id>/score_report.json` 5~10 개 생성 (cer 추이 + 가드 + 카테고리 다양하게)
+- 가짜 `runs/<hyp_id>/score_report.json`, `per_file.jsonl`, `diagnosis_report.json` 5~10 개 생성
+  (cer 추이 + 가드 + focus file 카테고리 다양하게)
 - `analyze_run.py` 호출 → REPORT.md 생성 → 변수 치환 모두 성공, 카테고리 분포 합산 = 100% 확인
 - 단조 감소·plateau·regression 패턴 각 1 개씩 케이스 추가
 

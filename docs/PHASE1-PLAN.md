@@ -176,7 +176,64 @@ def corpus_aggregate(per_file: list[dict]) -> dict:
 연속 등장하는 파일 비율). Phase 1 정밀도는 중요치 않음 — 가드 임계는 Phase 3 에서
 조정.
 
-### 3.2 단위 점검 (간이)
+### 3.2 `judge/diagnosis.py`
+
+에이전트가 다음 가설을 세울 수 있도록, 점수와 오디오 특성을 결합한
+`runs/<hyp_id>/diagnosis_report.json` 을 만든다. 원본 `assets/audio_profile/*.json`
+전체를 노출하지 않고, 0715 12개 파일 모두의 요약 summary 를 붙인다. 구체적인
+VAD 경계는 숨기고, focus file 은 그중 우선 볼 파일 최대 2개를 표시하는 인덱스다.
+
+**focus file 선정 (deterministic, 최대 2개)**:
+1. guard 위반 수가 많은 파일
+2. per-file CER 가 높은 파일
+3. baseline per-file CER 대비 악화폭이 큰 파일 (baseline 이 있을 때)
+4. tie-break = path lexical sort
+
+summary 는 모든 파일에 제공한다. 이렇게 해야 LLM 이 특정 1-2개 파일만 보고 과잉
+일반화하지 않고 전체 분포를 볼 수 있다. 대신 raw `speech_segments` 는 제공하지 않는다.
+
+```json
+{
+  "per_file_diagnosis": [
+    {
+      "wav": "data/raw/wav/AIG_녹취반출_20250715/<...>_l.wav",
+      "metrics": {
+        "cer": 0.42,
+        "length_ratio": 0.31,
+        "hallucination_hits": 0
+      },
+      "audio_profile_summary": {
+        "duration_s": 1234.56,
+        "silence_ratio": 0.18,
+        "longest_silence_s": 12.3,
+        "longest_speech_s": 240.1,
+        "rms_db_mean": -22.1,
+        "rms_db_p05": -38.4,
+        "rms_db_p95": -15.2,
+        "speech_segment_summary": {
+          "num_segments": 42,
+          "speech_s_p50": 8.2,
+          "speech_s_p95": 64.1,
+          "silence_gap_p95": 11.7
+        }
+      },
+      "flags": ["length_ratio_low"]
+    }
+  ],
+  "focus_files": [
+    {
+      "wav": "data/raw/wav/AIG_녹취반출_20250715/<...>_l.wav",
+      "why_selected": ["guard_violation", "worst_cer"]
+    }
+  ]
+}
+```
+
+`speech_segments` 원본 경계 리스트는 diagnosis 에 복사하지 않는다. 구체적인
+start/end 경계를 그대로 주면 그 자체가 chunking recipe 가 되므로, LLM 이 원인을
+추론할 수 있을 만큼의 분포 요약만 제공한다.
+
+### 3.3 단위 점검 (간이)
 
 수작업 골든 케이스 1~2개:
 - `ref="안녕하세요" hyp="안녕"` → sub=0, del=3, ins=0, edits=3, cer=0.6
@@ -209,8 +266,14 @@ python -m judge.evaluate \
 4. `parse_label` + `normalize` 로 ref_norm, hyp_norm
 5. `per_file_metrics` → `corpus_aggregate`
 6. `score_report.json` 작성 (DESIGN §2.5 형식)
-7. `per_file.jsonl` 작성 (진단)
-8. **마지막 줄에 corpus_cer 한 숫자만 print** — autoresearch Verify 파싱용
+7. `per_file.jsonl` 작성
+8. `assets/audio_profile/` 원본에서 전체 12파일 summary + focus file 최대 2개를 뽑아
+   `diagnosis_report.json` 작성
+9. **마지막 줄에 corpus_cer 한 숫자만 print** — autoresearch Verify 파싱용
+
+Step 7 전에는 audio profile 이 아직 없으므로 diagnosis 의 profile excerpt 는
+skip/warning 가능. Phase 3 진입 전 최종 verify 에서는 반드시 profile excerpt 가
+채워져야 한다.
 
 telemetry env:
 - `ASR_TELEMETRY_DIR=runs/<hyp_id>/_telemetry`
@@ -338,7 +401,8 @@ bash scripts/verify.sh
 ```
 
 기대: `runs/manual_*/score_report.json` 생성 + 마지막 줄에 corpus_cer 숫자. 점수는
-**나빠도 OK** — 돌기만 하면 됨.
+**나빠도 OK** — 돌기만 하면 됨. `diagnosis_report.json` 의 profile excerpt 는 Step 7
+audio profile 생성 후 최종 verify 에서 확인한다.
 
 **검증**:
 - exit code 0
@@ -351,7 +415,8 @@ bash scripts/verify.sh
 ## Step 7 — Audio profile build (`scripts/build_audio_profile.py`)
 
 정답 라벨과 *무관* 한 오디오 자체 특성을 한 번 산출 → `assets/audio_profile/<batch>.json`
-에 봉인. Phase 3 에서 분석 시 "긴 무음 구간에서 깨졌는가" 같은 가설 검증에 참조.
+에 봉인. Phase 3 매 iter 의 `diagnosis_report.json` 과 잡 종료 후 분석에서
+"긴 무음 구간에서 깨졌는가" 같은 가설 검증에 참조.
 
 **적용 대상**: 0715 (eval) 만. **holdout (0813) profile 은 Phase 3 *전* 절대 생성
 하지 않음** — holdout 접근 금지 원칙.
@@ -388,16 +453,20 @@ audio-only 원칙. 필요하면 별도 `assets/label_profile/<batch>.json` 으�
 - VAD: **silero-vad** (`silero-vad==5.1`, PyTorch 의존). librosa.effects.split 보다
   speech/silence 경계 정확.
 - RMS aggregates 는 librosa.
-- 산출 1 회 봉인. **Phase 3 진입 시 autoresearch agent (workspace 진화 컨텍스트) 는
-  읽기도 차단** — VAD 결과가 chunking 정책에 직접 단서를 주면 zero-base 침해.
-  *사후 분석 도구* (`scripts/analyze_run.py`, `scripts/evaluate_holdout.py`) 만 읽기
-  허용.
+- 산출 1 회 봉인. Phase 3 에서 `workspace/transcribe.py` 는 원본 profile 파일을
+  직접 참조하거나 읽지 않는다.
+- `judge/evaluate.py` 와 `scripts/analyze_run.py` 만 원본 profile 을 읽는다.
+  에이전트에는 매 iter `diagnosis_report.json` 의 전체 파일 summary 와 focus file 표시만 노출한다.
+- `speech_segments` 전체 start/end 리스트는 원본 asset 에만 보관하고, diagnosis 에는
+  segment 개수·분위수 같은 요약만 제공한다. 구체 경계는 chunking 힌트가 되기 때문.
 
 ### 7.3 검증
 
 - per_file 12 행 (0715)
 - duration_s 합산이 12 페어 wav 의 librosa.get_duration 합과 일치
 - speech_segments 가 [0, duration_s] 안에 들어옴
+- profile 생성 후 `bash scripts/verify.sh` 재실행 시 `diagnosis_report.json` 에
+  per_file_diagnosis 12개, focus file ≤ 2, raw `speech_segments` 미포함
 
 ---
 
@@ -475,6 +544,7 @@ SPEC §6.1 의 representative-file proxy 옵션. 정직하게 *근사* 임을 �
 - [ ] 데이터 페어링 코드가 0715 12 페어 정확히 매칭
 - [ ] judge 가 스텁 transcribe 에 대해 score_report.json 산출
 - [ ] `scripts/verify.sh` 실행 시 corpus_cer 숫자가 마지막 줄에 출력
+- [ ] `runs/<hyp_id>/diagnosis_report.json` 생성 — per_file_diagnosis 12개, focus file 최대 2개, raw `speech_segments` 미포함
 - [ ] `assets/audio_profile/AIG_녹취반출_20250715.json` 생성 (0715 only — 0813 미생성)
 - [ ] `baseline/target_cer.json` 생성 + 봉인
 - [ ] `baseline/target_cer.json` 에 versions/model/decoding_params/hardware 메타데이터 기록

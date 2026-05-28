@@ -54,11 +54,12 @@ aig/
 │   ├── normalize.py             # §5.1 정규화
 │   ├── metrics.py               # corpus_cer + edit ops + guards
 │   ├── pairing.py               # label-driven _l 페어링
-│   └── evaluate.py              # entry point: run → score_report.json
+│   └── evaluate.py              # entry point: run → score_report.json + diagnosis_report.json
 ├── scripts/
 │   ├── verify.sh                # autoresearch Verify 명령 (Phase 3 진입 시 가드 추가)
+│   ├── build_audio_profile.py   # 0715 audio-only profile 생성 (Silero VAD)
 │   ├── measure_baseline.py      # faster-whisper 1회 측정
-│   ├── measure_sigma.py         # 동일 스텁 3회 반복 → σ
+│   ├── measure_sigma.py         # 대표 파일 3회 반복 → σ proxy
 │   ├── seal_holdout.sh          # Phase 3 진입 시 holdout chmod
 │   ├── analyze_run.py           # Phase 2 산출 — runs/ 종합 분석 → REPORT.md
 │   └── evaluate_holdout.py      # Phase 2 산출 — holdout 1 회 평가 + overfit 진단
@@ -73,6 +74,7 @@ aig/
 │   ├── <hyp_id>/                # autoresearch iteration별 산출물
 │   │   ├── score_report.json
 │   │   ├── per_file.jsonl
+│   │   ├── diagnosis_report.json # LLM 추론용 12파일 summary + focus 최대 2개
 │   │   └── _telemetry/
 │   │       ├── <file_id>.jsonl   # 정본 segment telemetry (optional)
 │   │       └── <file_id>.srt     # JSONL 에서 일방향 변환된 사람용 view
@@ -92,7 +94,7 @@ aig/
 |------|------|
 | Python | 3.10+ |
 | Runtime | CUDA + float16 (로컬 GPU) |
-| 주요 의존성 | `ctranslate2`, `faster-whisper` (baseline 측정용), `transformers`, `librosa`, `soundfile`, `numpy`, `rapidfuzz`, `huggingface_hub`, `pytest` |
+| 주요 의존성 | `ctranslate2`, `faster-whisper` (baseline 측정용), `transformers`, `librosa`, `soundfile`, `numpy`, `rapidfuzz`, `huggingface_hub`, `silero-vad`, `pytest` |
 | 모델 변환 | HuggingFace `openai/whisper-large-v3-turbo` → CT2 (첫 실행 시 자동, `.cache/ct2_models/` 캐시) |
 
 ### 2.2 데이터 페어링 (`judge/pairing.py`)
@@ -154,12 +156,20 @@ python -m judge.evaluate \
 1. `pairing` 으로 12 페어 로드
 2. 각 wav → `librosa.load(sr=16000, mono=True)` → telemetry env 설정 → `transcribe(audio, sr)` 호출
 3. per-file CER + 가드 산출 → `score_report.json` 작성
-4. **마지막 줄에 `corpus_cer` 한 숫자 print** (autoresearch Verify 가 파싱)
+4. 12파일 전체의 profile summary 와 focus file 최대 2개를 결합해
+   `diagnosis_report.json` 작성
+5. **마지막 줄에 `corpus_cer` 한 숫자 print** (autoresearch Verify 가 파싱)
 
 `transcribe(audio, sr) -> str` 계약은 유지한다. pipeline 이 coverage 를 보고하고 싶으면
 judge 가 설정한 `ASR_TELEMETRY_DIR`, `ASR_TELEMETRY_FILE_ID` 를 사용해
 `runs/<hyp_id>/_telemetry/<file_id>.jsonl` sidecar 를 쓴다. judge 는 있으면 읽고, 없으면
 coverage guard 를 skip 한다.
+
+`diagnosis_report.json` 은 에이전트 추론용이다. raw `assets/audio_profile/*.json` 전체를
+직접 노출하지 않고, 12파일 전체의 summary 만 포함한다. guard 위반·worst CER·baseline
+대비 악화 기준으로 선택된 focus file 최대 2개는 우선순위 표시일 뿐이다.
+`speech_segments` 원본 start/end 리스트는 구체적인 chunking 힌트가 되므로 diagnosis 에
+넣지 않고, segment 개수·발화 길이 분위수·무음 gap 분위수 같은 요약만 제공한다.
 
 ### 2.6 Frozen layer (`frozen/asr_backend.py`)
 
@@ -273,7 +283,9 @@ lexical sort. 한 번 결정되면 noise_floor.json 에 박혀 잡 동안 고정
 
 - [ ] 데이터 페어링 코드가 0715 12 페어 정확히 매칭
 - [ ] judge 가 스텁 transcribe 에 대해 score_report.json 산출
+- [ ] judge 가 `diagnosis_report.json` 산출 (per_file_diagnosis 12개, focus file 최대 2개, raw `speech_segments` 미포함)
 - [ ] `scripts/verify.sh` 실행 시 corpus_cer 숫자가 마지막 줄에 출력
+- [ ] `assets/audio_profile/AIG_녹취반출_20250715.json` 생성 (0715 only — 0813 미생성)
 - [ ] `baseline/target_cer.json` 생성 + 봉인 (재실행 금지 명시)
 - [ ] `baseline/target_cer.json` 에 versions/model/decoding_params/hardware 기록
 - [ ] `baseline/noise_floor.json` 생성 (σ 측정 완료)

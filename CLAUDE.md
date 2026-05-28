@@ -31,6 +31,7 @@ Code 세션 특화 보충만.
 
 ## 4. 디버깅 시
 
-- 가설이 깨지면 `runs/<hyp_id>/per_file.jsonl` per-file telemetry 부터 본다.
+- 가설이 깨지면 `runs/<hyp_id>/diagnosis_report.json` 의 focus file 요약을 먼저 보고,
+  필요하면 `per_file.jsonl` / `_telemetry/` 로 내려간다.
 - `judge/` 본문 의심되면 *제안만* — 사람 확인 없이 편집 X (평가자 보호).
 - holdout (0813) 은 어떤 디버깅 단계에서도 건드리지 않는다.

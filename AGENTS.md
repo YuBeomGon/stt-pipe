@@ -27,13 +27,13 @@ faster-whisper baseline 이하로 낮춘다.
 | `frozen/` | **편집 금지** — backend(CT2 + whisper-large-v3-turbo) 봉인. decoding params 는 workspace 에서 자유 |
 | `judge/` | **편집 금지** — 평가자 본문 |
 | `baseline/` | **편집 금지** — 봉인됨. 재측정 금지 |
-| `assets/audio_profile/` | **편집 금지 + workspace 읽기도 차단**. agent (workspace 진화 컨텍스트) 가 VAD/duration 등 단서를 직접 받으면 zero-base 침해. 사후 분석 도구 (`analyze_run.py`, `evaluate_holdout.py`) 만 읽기 허용. 0715 만, 0813 은 Phase 3 *전* 생성 X |
+| `assets/audio_profile/` | **편집 금지** — 0715 audio-only profile 봉인. 원본은 `judge/verify/analyze` 만 읽고, `workspace/transcribe.py` 의 직접 경로/open 참조는 금지. 에이전트에는 `runs/<hyp_id>/diagnosis_report.json` 의 12파일 summary 와 focus 표시만 노출. 0813 은 Phase 3 *전* 생성 X |
 | `scripts/` | **편집 금지** — verify / measure / analyze / evaluate_holdout 보호 |
 | `docs/` | **편집 금지** — 정본·운영 문서 |
 | `tests/` | **편집 금지** |
 | `data/raw/.../AIG_녹취반출_20250715/` | **읽기만** — eval 데이터셋 |
 | `data/raw/.../AIG_녹취반출_20250813/` | **접근 절대 금지** — holdout (chmod 000) |
-| `runs/` | iteration 산출물. 읽기만 (verify 가 작성) |
+| `runs/` | iteration 산출물. 읽기만 (verify 가 `score_report.json`, `per_file.jsonl`, `diagnosis_report.json`, `_telemetry/` 작성) |
 
 holdout 이름·경로 참조 금지 범위는 `workspace/`, `judge/`, prompt, 운영 wrapper 를
 제외한 `scripts/`. 운영 wrapper 예외: `scripts/seal_holdout.sh`,
@@ -52,7 +52,8 @@ batch 참조 필수). 정본·운영 문서 (`docs/`, `README.md`, `AGENTS.md`, 
 | 의미 있는 개선 | `Δcer ≥ 2σ` (σ = `baseline/noise_floor.json`) |
 | 가드 (Phase 3) | `hallucination_hit_rate`, `empty_output_rate`, `length_ratio`, `repeated_text_rate` 임계 초과 시 ROLLBACK. `audio_coverage_rate` 는 sidecar telemetry 있을 때만 |
 
-판단의 근거는 항상 `runs/<hyp_id>/score_report.json`. 추측/자기 보고 금지.
+채택/롤백 판단의 근거는 항상 `runs/<hyp_id>/score_report.json`. 원인 추론은
+`runs/<hyp_id>/diagnosis_report.json` 과 per-file 산출물만 사용한다. 추측/자기 보고 금지.
 
 ---
 
@@ -100,4 +101,4 @@ Phase 1·2 에서 사람 정상 커밋만.
 
 ## 8. 한 줄 요약
 
-> **`workspace/transcribe.py` 한 파일만 만진다. 결정은 `runs/<hyp_id>/score_report.json` 의 `corpus_cer` 으로. 명세는 `docs/STT-PIPELINE-SPEC.md`.**
+> **`workspace/transcribe.py` 한 파일만 만진다. 결정은 `score_report.json` 의 `corpus_cer`, 원인 추론은 `diagnosis_report.json`. 명세는 `docs/STT-PIPELINE-SPEC.md`.**
