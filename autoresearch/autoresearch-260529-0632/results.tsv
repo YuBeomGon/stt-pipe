@@ -1,0 +1,8 @@
+iteration	commit	metric	delta	status
+1	19fd801	NA	NA	crashed-OOM
+2	6ca5108	0.4104	-0.0216	kept
+3	f280134	0.4059	-0.0046	kept
+4	367ff32	0.3929	-0.0129	kept
+5	a77658e	0.3900	-0.0030	kept
+6	00fba60	0.3985	+0.0085	reverted
+7	0ed3bda	0.4129	+0.0229	reverted
