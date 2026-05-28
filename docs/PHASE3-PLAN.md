@@ -358,7 +358,7 @@ overfit 된 신호.
 - [x] swap_verify 실행 → `head -3 scripts/verify.sh` = "Phase 3 verify (PHASE3-PLAN.md §1.2)."
 - [x] swap_claude 실행 → `ls .claude/hooks/` = restrict_workspace + block_swap_and_seal
 - [x] holdout chmod 적용 확인 (`stat -c '%a'` = 0, `ls` → Permission denied)
-- [ ] autoresearch 본체 설치 확인 (글로벌 또는 프로젝트). `/autoresearch` 슬래시 커맨드 인식
+- [x] autoresearch 본체 설치 확인 (글로벌 `~/.claude/`, 2026-05-29). Skill 13 종 (autoresearch + 12 sub) 인식됨
 - [ ] `/autoresearch:plan` 입력 검증 1 회 (선택)
 - [ ] verify 의도적 위반 smoke 통과 (§1.5 a·b·c)
 - [ ] `.claude` PreToolUse 훅 *수동* smoke (judge/baseline/frozen Edit 시도 → 거부)
