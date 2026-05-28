@@ -95,16 +95,12 @@ ct2-transformers-converter \
 
 함수: `def normalize(text: str) -> str:`
 
-`STT-PIPELINE-SPEC.md §5.1` 의 1~6 단계 문자열 변환을 담당한다:
-1. NFC
-2. `[INAUDIBLE]` 제거 (대소문자 무관)
-3. 구두점 제거 (명세 §5.1.3 문자열 그대로 — 복사 붙여넣기)
-4. 영문 lowercase
-5. 숫자 그대로
-6. whitespace 전부 제거
+[`STT-PIPELINE-SPEC.md §5.1`](STT-PIPELINE-SPEC.md) 의 1~6 단계 문자열 변환을 그대로
+구현한다 (NFC, INAUDIBLE 제거, 구두점 제거, lowercase, 숫자 유지, whitespace 제거).
+명세 본문이 정본이므로 단계 텍스트는 본 문서에 중복하지 않는다.
 
-`normalize()` 는 `str -> str` 만 담당한다. Levenshtein edit distance 와 editops 산출은
-`judge/metrics.py` 책임이다.
+`normalize()` 는 `str -> str` 만 담당. Levenshtein edit distance·editops 산출은
+`judge/metrics.py` 책임.
 
 ### 2.3 Label 파서 (`judge/pairing.py` 안 또는 별도)
 

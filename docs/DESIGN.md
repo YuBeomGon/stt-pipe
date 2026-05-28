@@ -242,84 +242,15 @@ python -m judge.evaluate \
 
 ## 3. Phase 2 — Autoresearch 자동화
 
-### 3.1 진입 시점
+상세 운영 절차 (가드레일 활성화, `/autoresearch` 호출, 노출/숨김, 산출물, 종료
+조건, 종료 후 holdout 복구·수동 평가, DoD) 는 [`PHASE2-PLAN.md`](PHASE2-PLAN.md) 에
+정본으로 둔다.
 
-Phase 1 의 DoD 가 전부 통과한 직후. baseline + σ 가 봉인된 상태.
-
-### 3.2 가드레일 활성화 (이때 일괄)
-
-#### 3.2.1 Holdout 물리 차단 (`scripts/seal_holdout.sh`)
-
-```bash
-chmod -R 000 data/raw/wav/AIG_녹취반출_20250813
-chmod -R 000 data/raw/label/AIG_녹취반출_20250813
-```
-
-잡 종료 후 수동 평가 시 복구.
-
-#### 3.2.2 Verify 가드 hard-fail 추가
-
-`scripts/verify.sh` 에 다음 임계 추가 (초기값 — 실험 보며 조정):
-
-| 가드 | 임계 | 위반 시 |
-|------|------|----------|
-| `hallucination_hit_rate` | `> 0.05` | exit 1 → ROLLBACK |
-| `empty_output_rate` | `> 0.10` | exit 1 |
-| `length_ratio.p05` | `< 0.3` | exit 1 (출력 너무 짧음) |
-| `length_ratio.p95` | `> 3.0` | exit 1 (출력 너무 김) |
-| `audio_coverage_rate` | `< 0.8` | sidecar telemetry 가 있을 때 exit 1 (long-form 커버리지 누락) |
-| `repeated_text_rate` | `> 0.20` | exit 1 |
-
-corpus_cer 자체는 *메트릭으로만 출력* — keep/discard 판정은 autoresearch 가 한다.
-가드 위반은 점수 무관 즉시 ROLLBACK.
-
-> **검토 필요**: autoresearch 가 노이즈 σ 임계(`Δcer ≥ 2σ`) 를 자체 지원하는지
-> 확인 필요. 지원 안 하면 verify 가 이전 best metric 을 읽어 노이즈 이하 변화면
-> exit 1 처리하는 방안 고려.
-
-### 3.3 autoresearch 호출
-
-```
-/autoresearch
-Goal: workspace/transcribe.py 의 transcribe(audio, sr) 함수를 진화시켜 0715 14 페어 corpus_cer 을 baseline/target_cer.json 의 target_cer 이하로 낮춘다. 어떤 backend·model 변경도 금지 (STT-PIPELINE-SPEC.md §2, §11 참조).
-Scope: workspace/transcribe.py
-Metric: corpus_cer (lower is better)
-Verify: bash scripts/verify.sh
-Iterations: 25
-```
-
-### 3.4 에이전트에 노출/숨김
-
-| 노출 | 숨김 |
-|------|------|
-| `docs/STT-PIPELINE-SPEC.md` (도메인 명세) | `baseline/target_cer.json` 본문 (숫자만 noted) |
-| `workspace/transcribe.py` (편집 대상) | `judge/` 본문 (평가자 보호 — Phase 2 에서 권한 제한) |
-| 자기 `runs/<hyp_id>/score_report.json` 결과 | holdout 디렉토리 (chmod 차단) |
-| 자기 `runs/<hyp_id>/per_file.jsonl`, `_telemetry/` 결과 | baseline 산출 코드와 봉인 파일 본문 |
-
-> **검토 필요**: autoresearch 가 파일 접근 권한을 어떻게 제어하는지 확인. 못 하면
-> 명세 텍스트로만 안내하고 신뢰 모델로 운영.
-
-### 3.5 산출물 위치
-
-각 iteration:
-- `runs/<hyp_id>/score_report.json` — 메트릭 + 가드
-- `runs/<hyp_id>/per_file.jsonl` — 진단 (per-file telemetry)
-- workspace 변경은 autoresearch 가 자체 git 으로 commit / revert
-
-### 3.6 종료 조건
-
-- `corpus_cer <= target_cer` 달성 → 성공
-- 25 iter 소진 → 종료, 결과 분석
-- 무한 가드 위반 / 무진전 → 사람이 중단
-
-### 3.7 Phase 2 완료 기준
-
-- [ ] holdout chmod 적용 확인
-- [ ] verify 가드 hard-fail 동작 확인 (의도적 위반 케이스로 사전 smoke)
-- [ ] autoresearch 1 iter 정상 종료 확인 (dry run)
-- [ ] 25 iter 완주 또는 target 도달
-- [ ] 잡 종료 후 사람이 chmod 복구 → 0813 holdout 에 수동 1 회 평가 → 일반화 확인
+요점만:
+- 진입 시점: Phase 1 DoD 전부 통과 + baseline/σ 봉인 직후
+- 진입 직전 일괄 활성화: holdout chmod, verify 가드 hard-fail
+- `workspace/transcribe.py` 만 scope, `corpus_cer` 만 metric
+- 결정 = autoresearch (keep/revert), 가드 위반 = 점수 무관 즉시 ROLLBACK
 
 ---
 
