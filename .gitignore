@@ -14,8 +14,10 @@ data/raw/
 # 모델 캐시
 .cache/
 
-# 실행 산출물
-runs/
+# 실행 산출물 — `runs/_summary/` 만 tracked (HISTORY.md / REPORT.md / HOLDOUT.md
+# / JOB_DONE.lock), per-iter `runs/<hyp_id>/` 는 ignored.
+runs/*
+!runs/_summary/
 notes/
 
 # `.claude/` 는 추적함 — Phase 3 가드 본문 (.claude.alt/ 와 swap 짝). swap 시

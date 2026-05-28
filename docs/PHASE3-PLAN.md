@@ -276,6 +276,44 @@ autoresearch 의 TSV 가 아니라 우리 `runs/<hyp_id>/` 산출이다.
 10 iter 이상 가드 위반만 반복 또는 corpus_cer 변동 < σ — 사람이 중단하고 `runs/`
 분석. 가드 임계가 너무 빡빡한지, scope 가 너무 좁은지 검토.
 
+### 4.4 매 iter 기록 규약 (commit body + HISTORY.md)
+
+**Single source of truth = git commit body**. 다음 iter 의 에이전트가 직전 commit
+body 들을 `git log --format='%h %s%n%b' -n 15` 로 읽고 학습한다. 사람은 derived
+`runs/_summary/HISTORY.md` 로 전체 실험 흐름 검토.
+
+**commit body 3 단락 구조** (subject 는 `iterN: <single-variable change>` 그대로):
+
+```
+## 관찰
+corpus_cer X → Y (Δ ±Z). 핵심 지표 변화 — length_ratio.mean, del/ins/sub
+비중, hallucination_hit_rate, repeated_text_rate. WARN 발생 여부.
+
+## 분석
+왜 그렇게 나왔다고 보는가 — 단일 변경의 인과 추론. 의도 vs 실제 일치
+여부 (analyze_run H 축 자동 검사하지만 narrative 도 남김). plateau /
+local minima 신호 있으면 명시.
+
+## 다음 후보
+남은 미시도 lever 1-3 개 + 우선 순위 + 위험. 다음 iter 의 출발점.
+```
+
+**Revert commit body** 에도 `## 분석` 1-2 줄 — 왜 reverted 됐는지. metric
+악화 + WARN 종류 명시 (예: `repeated_text_rate 0.455 > baseline 0.091 + 0.2`).
+
+**HISTORY.md 자동 append** (매 iter verify 직후 한 줄):
+
+```bash
+bash scripts/append_history.sh "$ITER" "$COMMIT" "$METRIC" "$DELTA" "$STATUS"
+# 내부: runs/_summary/ 생성 + 헤더 한 줄 + `git log -1 <commit>` 의 body 를 append.
+```
+
+- commit body 1 source ⇒ HISTORY.md 는 그것 + 메트릭 요약 시간순 합성 (derived).
+- 사람: 한 파일로 전체 narrative + 수치 검토 (local minima / 다양성 부족 신호).
+- 에이전트: `tail -200 runs/_summary/HISTORY.md` 로 직전 N iter reasoning 회수.
+- analyze_run.py 의 8 축 REPORT.md 와 별개 — REPORT.md 는 사후 종합, HISTORY.md
+  는 실시간 누적 raw narrative.
+
 ---
 
 ## 5. 산출물 위치
@@ -286,6 +324,11 @@ autoresearch 의 TSV 가 아니라 우리 `runs/<hyp_id>/` 산출이다.
 - `runs/<hyp_id>/diagnosis_report.json` — LLM 추론용 11파일 summary + focus file 최대 2개
 - `runs/<hyp_id>/_telemetry/*.jsonl` — sidecar (있을 때)
 - workspace 변경: autoresearch 가 자체 git commit / revert
+  (commit body 는 §4.4 의 3 단락 구조)
+
+누적 (run 전체):
+- `runs/_summary/HISTORY.md` — 매 iter append 되는 narrative + 메트릭 (§4.4 snippet)
+- `autoresearch/<sub>-<YYMMDD>-<HHMM>/results.tsv` — iter / commit / metric / delta / status 표
 
 ---
 
