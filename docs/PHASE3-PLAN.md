@@ -13,7 +13,26 @@
 
 ## 1. 진입 직전 액션 — 가드레일 일괄 활성화
 
-### 1.1 Holdout 물리 차단 (`scripts/seal_holdout.sh`)
+> **순서**: §1.1 (verify swap, 사람) → §1.2 가드 표 확인 → §1.3 smoke →
+> §1.4 holdout seal → `/autoresearch`. 모두 사람이 수동.
+
+### 1.1 `verify.sh` swap (사람 전용)
+
+평소 `scripts/verify.sh` 는 Phase 1·2 미니멀 본문 (가드 OFF). Phase 3 본문은
+`scripts/verify.sh.alt` 에 보관. 사람이 다음 1줄로 둘을 교환:
+
+```bash
+bash scripts/swap_verify.sh
+head -3 scripts/verify.sh    # "Phase 3 verify" 헤더 확인
+```
+
+다시 Phase 1·2 로 돌아갈 때도 같은 명령 한 번 더 → 원복.
+
+> **에이전트 호출 금지**: `scripts/swap_verify.sh` 는 `judge/` 와 동급
+> 보호 대상이다 (AGENTS.md §1 표). 어떤 에이전트도 (Claude, autoresearch,
+> 보조 스크립트 포함) 본 스크립트를 직접 실행하지 않는다.
+
+### 1.2 Holdout 물리 차단 (`scripts/seal_holdout.sh`)
 
 ```bash
 chmod -R 000 data/raw/wav/AIG_녹취반출_20250813
@@ -22,7 +41,7 @@ chmod -R 000 data/raw/label/AIG_녹취반출_20250813
 
 잡 종료 후 §6 의 절차로 복구.
 
-### 1.2 Verify 판정 정책
+### 1.3 Verify 판정 정책
 
 Phase 3 의 최종 목표점은 사람이 정한 `target_cer` (현재 `0.10`) 다. faster-whisper
 `baseline_cer` 은 그 목표까지 거리를 보기 위한 참조 앵커일 뿐 성공 기준이 아니다
@@ -64,11 +83,25 @@ baseline 목표 대비 큰 악화 여부와 diagnosis 로 다룬다.
 > 지원 안 하면 verify 가 이전 best metric 을 읽어 노이즈 이하 변화면 exit 1 처리하는
 > 방안 추가.
 
-### 1.3 사전 smoke
+### 1.4 사전 smoke
 
-가드가 실제로 작동하는지 의도적 위반으로 1회 검증:
-- `transcribe()` 가 빈 문자열만 반환하도록 임시 패치 → catastrophic output → exit 1
-- 원복 후 정상 1 iter 동작 확인
+가드가 실제로 작동하는지 의도적 위반으로 1회 검증 (사람 수동):
+
+```bash
+# (a) catastrophic output 가드 — transcribe() 가 빈 문자열만 반환하도록 임시 패치
+#     workspace/transcribe.py 본문을: def transcribe(audio, sr): return ""
+bash scripts/verify.sh        # → exit 1, "catastrophic output" 메시지
+git checkout -- workspace/transcribe.py
+
+# (b) 정적 backend 가드 — workspace 상단에 `import ctranslate2` 추가
+#     bash scripts/verify.sh  # → exit 1, "static backend" 메시지
+#     git checkout -- workspace/transcribe.py
+
+# (c) 정상 1 iter
+bash scripts/verify.sh        # → exit 0, 마지막 줄에 corpus_cer 한 숫자
+```
+
+(b) 까지 확인하면 가드 ON 상태 신뢰 가능. 그 다음 §1.2 holdout seal → `/autoresearch`.
 
 ---
 
@@ -191,6 +224,8 @@ overfit 된 신호.
 
 ## 7. Phase 3 DoD
 
+- [ ] `scripts/swap_verify.sh` 로 verify.sh → Phase 3 본문 swap 완료 (사람, 1회)
+- [ ] `head -3 scripts/verify.sh` 에 "Phase 3 verify" 헤더 확인
 - [ ] holdout chmod 적용 확인 (`ls data/raw/wav/AIG_녹취반출_20250813` → permission denied)
 - [ ] verify hard-fail / runtime cap / baseline-relative budget smoke 통과
 - [ ] autoresearch 1 iter 정상 종료 확인 (dry run)
@@ -213,6 +248,7 @@ overfit 된 신호.
 
 ## 9. 안티 패턴
 
+- 에이전트가 `scripts/swap_verify.sh` 호출 (사람 전용 — AGENTS.md §1)
 - target 도달 전에 baseline/target_cer.json 갱신
 - σ 가 너무 낮다고 (= 결정론) 노이즈 임계 자체를 제거
 - 잡 도중 holdout 에 접근 (chmod 우회 포함)

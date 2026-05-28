@@ -30,7 +30,7 @@ baseline time budget 안에 들어야 한다. faster-whisper `baseline_cer` 은 
 | `judge/` | **편집 금지** — 평가자 본문 |
 | `baseline/` | **편집 금지** — 봉인됨. 재측정 금지 |
 | `assets/audio_profile/` | **편집 금지** — 0715 audio-only profile 봉인. 원본은 `judge/verify/analyze` 만 읽고, `workspace/transcribe.py` 의 직접 경로/open 참조는 금지. 에이전트에는 `runs/<hyp_id>/diagnosis_report.json` 의 11파일 summary 와 focus 표시만 노출. 0813 은 Phase 3 *전* 생성 X |
-| `scripts/` | **편집 금지** — verify / measure / analyze / evaluate_holdout 보호 |
+| `scripts/` | **편집 금지** — verify / measure / analyze / evaluate_holdout 보호. `scripts/swap_verify.sh` 는 *사람 전용* — 어떤 에이전트도 호출 금지 |
 | `docs/` | **편집 금지** — 정본·운영 문서 |
 | `tests/` | **편집 금지** |
 | `data/raw/.../AIG_녹취반출_20250715/` | **읽기만** — eval 데이터셋 |
@@ -93,6 +93,12 @@ batch 참조 필수). 정본·운영 문서 (`docs/`, `README.md`, `AGENTS.md`, 
 
 `bash scripts/verify.sh` → 마지막 줄에 `corpus_cer` 한 숫자. Phase 3 에서는 hard-fail
 위반 시 exit 1 → ROLLBACK. 자세히는 [`PHASE3-PLAN.md §1.2`](docs/PHASE3-PLAN.md).
+
+`scripts/verify.sh` 본문은 Phase 1·2 (가드 OFF) ↔ Phase 3 (가드 ON, 본문은
+`scripts/verify.sh.alt` 에 보관) 사이를 **사람이 `scripts/swap_verify.sh` 로 1:1
+swap** 한다. 에이전트는 swap 호출 금지 — `judge/` 와 동급의 보호 대상이다.
+한 번 호출하면 swap, 한 번 더 호출하면 원복. swap 후 사람이 `head -3
+scripts/verify.sh` 로 활성 본문 확인.
 
 ---
 
