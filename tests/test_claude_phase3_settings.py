@@ -17,7 +17,23 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ALT = ROOT / ".claude.alt"
+
+
+def _phase3_body() -> Path:
+    """Phase 3 본문이 .claude/ 와 .claude.alt/ 중 어디 있는지 자동 감지.
+
+    settings.json 이 있는 쪽이 활성 Phase 3 본문. swap_claude.sh 호출에 따라
+    매 호출마다 위치가 바뀐다.
+    """
+    for candidate in (ROOT / ".claude", ROOT / ".claude.alt"):
+        if (candidate / "settings.json").is_file():
+            return candidate
+    raise RuntimeError(
+        ".claude/settings.json / .claude.alt/settings.json 둘 다 없음 — Phase 3 본문 누락"
+    )
+
+
+ALT = _phase3_body()
 
 
 # ---------------------------------------------------------------------------
