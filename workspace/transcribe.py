@@ -15,7 +15,7 @@ from frozen.asr_backend import generate, load, to_storage_view
 
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
-_PREV_MAX_TOKENS = 100
+_PREV_MAX_TOKENS = 150
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
