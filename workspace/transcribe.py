@@ -6,6 +6,15 @@ deletes everything past the first 30 seconds on multi-minute 0715 calls. We
 pre-slice the waveform into consecutive 30s windows, decode each on its own,
 and join the transcripts so the long-form tail is recovered.
 
+Timestamp decoding: every prior iter prompted with ``<|notimestamps|>``, which
+leaves the decoder no in-window segment anchor and lets it commit to EOT early
+— the mechanism behind the universal ``length_ratio < 1`` (deletion) that beam
+search and temperature sampling could not break. Dropping ``<|notimestamps|>``
+puts the model in its timestamped long-form mode, where it emits ``<|t|>``
+segment markers and keeps decoding until the 30s window is covered. The
+timestamp tokens are special tokens, so ``skip_special_tokens=True`` still
+yields clean text.
+
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
@@ -24,7 +33,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
     prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
-        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
+        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
     )
 
     chunk_len = _CHUNK_SECONDS * sr
