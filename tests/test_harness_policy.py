@@ -43,15 +43,44 @@ def test_decide_success_when_target_and_runtime_met() -> None:
 
 
 def test_decide_reject_when_improvement_below_threshold() -> None:
+    # Δ=0.001 is below the banking floor (0.002 default) → reject.
     decision = decide_candidate(
-        report={"corpus_cer": 0.395, "total_inference_time_s": 90.0},
+        report={"corpus_cer": 0.399, "total_inference_time_s": 90.0},
         baseline={"target_cer": 0.10, "total_inference_time_s": 100.0},
         best_cer=0.400,
         sigma=0.0,
         sigma_is_provisional=True,
     )
     assert decision.status == "reject"
-    assert decision.threshold == 0.01
+    assert decision.threshold == 0.002
+
+
+def test_default_fallback_banks_sub_one_percent_improvement() -> None:
+    """Review F2 banking: with the default (provisional σ) config, a genuine
+    sub-0.01 improvement (0.169 → 0.161, Δ=0.008) must now be KEPT, not
+    rejected by the old 0.01 floor. Guards the 0.002 default."""
+    decision = decide_candidate(
+        report={"corpus_cer": 0.161, "total_inference_time_s": 90.0},
+        baseline={"target_cer": 0.10, "total_inference_time_s": 100.0},
+        best_cer=0.169,
+        sigma=0.0,
+        sigma_is_provisional=True,
+    )
+    assert decision.status == "keep"
+    assert decision.threshold == 0.002
+
+
+def test_default_fallback_still_rejects_rounding_churn() -> None:
+    """Banking floor is 0.002, not 0 — a rounding-level Δ (0.001) is still
+    rejected so the loop doesn't churn on noise-free-but-trivial moves."""
+    decision = decide_candidate(
+        report={"corpus_cer": 0.1680, "total_inference_time_s": 90.0},
+        baseline={"target_cer": 0.10, "total_inference_time_s": 100.0},
+        best_cer=0.1690,
+        sigma=0.0,
+        sigma_is_provisional=True,
+    )
+    assert decision.status == "reject"
 
 
 def test_decide_rejects_non_finite_corpus_cer() -> None:

@@ -134,8 +134,11 @@
   로 분리. 회귀 테스트 추가.
 - **F3 — 해결**: `_COLD_RESTART_THRESHOLD` 5 → **3** (discovery 모드 조기 발동).
   hard-reject(옵션 a)는 채택 안 함 — refine 차단 우려.
-- **F2 — 진행 중**: 누적 banking 방향 (운영자 선택). σ 가 deterministic eval 상
-  degenerate(provisional)라 run-to-run 잡음은 없음 → 0.01 게이트는 사실상
-  *overfit/triviality* 가드. banking = eval 상 strict 개선이면 채택. 트레이드오프:
-  11파일 eval 과적합 위험(holdout 이 이미 overfit YES) — 잡 종료 holdout 으로 감시.
+- **F2 — 해결** (banking, ε=0.002): `absolute_delta_fallback` 0.01 → **0.002**
+  (policy/runner default + CLI). σ 가 deterministic eval 상 degenerate(provisional)라
+  run-to-run 잡음은 없음 → 0.01 게이트는 사실상 *overfit/triviality* 가드였음.
+  이제 sub-0.01 실질 개선(0.169→0.161, Δ0.008)도 keep+best 갱신 → 작은 이득이
+  compound. rounding churn(Δ<0.002)은 여전히 reject. 테스트 2개 추가.
+  **트레이드오프**: 11파일 eval 과적합 위험(holdout 이미 overfit YES) — 잡 종료
+  holdout 평가로 감시. 정석은 σ 실측(2σ 게이트)이나 baseline 봉인과 충돌 소지로 보류.
 - **F4 / F5 — follow-up**: candidate Bash/probing 정책, 다양성 관측 지표.

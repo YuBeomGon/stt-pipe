@@ -14,7 +14,14 @@ DecisionStatus = Literal["keep", "reject", "success"]
 
 @dataclass(frozen=True)
 class PolicyConfig:
-    absolute_delta_fallback: float = 0.01
+    # Keep/bank threshold used while σ is provisional (review F2 → 0.002).
+    # The eval is deterministic (beam search, temperature=0), so there is no
+    # run-to-run noise and σ is legitimately ~0/provisional — this fallback is
+    # therefore not a noise guard but a "is it worth banking" floor. Lowered
+    # from 0.01 to 0.002 so genuine sub-0.01 improvements (e.g. 0.169→0.161)
+    # are kept and compounded instead of discarded. Trade-off: greedier descent
+    # on the 11-file eval can overfit — watched via the job-end holdout check.
+    absolute_delta_fallback: float = 0.002
     success_runtime_multiplier: float = 1.0
 
 

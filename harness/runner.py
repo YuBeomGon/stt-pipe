@@ -200,7 +200,9 @@ class RunnerConfig:
     batch: str = "AIG_녹취반출_20250715"
     transcribe: str = "workspace.transcribe:transcribe"
     runtime_hard_multiplier: float = 3.0
-    absolute_delta_fallback: float = 0.01
+    # Keep/bank threshold while σ provisional (review F2 banking → 0.002). See
+    # PolicyConfig.absolute_delta_fallback.
+    absolute_delta_fallback: float = 0.002
     commit_results: bool = False
 
 
@@ -1156,7 +1158,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="Do not generate a candidate; verify current workspace state.")
     parser.add_argument("--commit-results", action="store_true")
     parser.add_argument("--repo-root", type=Path, default=Path("."))
-    parser.add_argument("--absolute-delta-fallback", type=float, default=0.01)
+    parser.add_argument(
+        "--absolute-delta-fallback",
+        type=float,
+        default=0.002,
+        help="keep/bank threshold while σ provisional (review F2 banking; default 0.002)",
+    )
     args = parser.parse_args(argv)
 
     if not args.manual and not args.candidate_cmd:
