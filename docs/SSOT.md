@@ -29,6 +29,8 @@
 | candidate runtime profile (역할·접근법·응답 포맷) | [`../harness/prompts/candidate.md`](../harness/prompts/candidate.md) | runner 가 prompt 에 inline. 변경 = candidate 행동 변경 |
 | candidate 컨텍스트 (PUSH/AUTO-PUSH/PULL) + 감사 | [`CANDIDATE-CONTEXT.md`](CANDIDATE-CONTEXT.md) | `claude -p` 가 자동 로드하는 것 + 검증 스크립트 + 누수 baseline |
 | harness 변경 제안 (RFC) | [`proposals/`](proposals/) | 채택 후 정본 갱신 + historical 유지 |
+| Accepted: A' candidate runtime | [`proposals/2026-05-29-agent-design.md`](proposals/2026-05-29-agent-design.md) | §11 Addendum 에 RFC 외 audit 인프라 회고 |
+| Draft: 내부 skill/agent + prompt-eval | [`proposals/2026-05-29-skills-and-prompt-eval.md`](proposals/2026-05-29-skills-and-prompt-eval.md) | 본문은 phase3_002 결과 후 |
 | 세션 종료 인계 메모 | [`status/`](status/) | 날짜별 스냅샷 |
 | 실제 iteration 로그 | [`../runs/_summary/HISTORY.md`](../runs/_summary/HISTORY.md) | 실험 기록 정본 |
 | 종료 후 종합 리포트 | [`reports/`](reports/) | `<job_id>_<KIND>_<YYYY-MM-DD>.{md,json}` |
@@ -43,7 +45,7 @@
 |------|------|
 | `harness/` | Phase 3 controller 로직: guard, policy, state, history, runner |
 | `harness/prompts/candidate.md` | candidate runtime profile — runner 가 매 iter inline |
-| `scripts/` | 사람이 실행하는 thin CLI 또는 일회성 운영 명령 |
+| `scripts/` | 사람이 실행하는 thin CLI 또는 일회성 운영 명령 (`evolve.py`, `analyze_run.py`, `evaluate_holdout.py`, `audit_candidate_context.py` 등) |
 | `judge/` | 평가 산출: score, per-file, diagnosis |
 | `frozen/` | 고정 ASR backend |
 | `workspace/` | 후보 파이프라인 표면 (`transcribe(audio, sr) -> str`) |
