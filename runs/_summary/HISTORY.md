@@ -298,3 +298,14 @@ not enough improvement: Δcer -0.000488 < 0.002000
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 28 · phase3_004_iter_028 · cer=NA (ΔNA) · reject
+
+### 관찰
+score_report 없음
+
+### 분석
+static profile: /home/beomgon/side/agent/stt-pipe/workspace/transcribe.py 에 assets/audio_profile/silero 직접 참조 검출
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
