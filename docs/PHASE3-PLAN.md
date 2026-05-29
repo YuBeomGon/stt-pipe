@@ -52,65 +52,122 @@
 
 ## 3. Phase 3 진입 가드
 
-진입 전에 사람이 한 번 확인한다.
+진입 전에 사람이 한 번 확인한다. 실행 시퀀스 (copy-paste runnable) 는
+[`README.md` §"Phase 3 진입 → 본 잡 → 종료"](../README.md) 참조. 본 절은 각 단계의
+**의미·실패 모드·해석** 만.
 
-1. holdout 디렉토리 접근 차단: `scripts/seal_holdout.sh`
-2. `workspace/transcribe.py` 외 후보 편집 금지
-3. `frozen/`, `judge/`, `baseline/`, `assets/audio_profile/` 보호
-4. `baseline/target_cer.json`, `baseline/noise_floor.json` 재측정 금지
-5. 정상 verify 1회: `bash scripts/verify.sh` → 마지막 줄에 `corpus_cer` 한 숫자가
-   나오고 exit 0
-6. 의도적 위반 smoke 1회: `workspace/transcribe.py` 상단에 `import ctranslate2`
-   한 줄 추가 → `bash scripts/verify.sh` → `verify FAIL [static backend]` 메시지와
-   exit 1 확인 → 그 줄 원복
+### 3.1 holdout 접근 차단 — `scripts/seal_holdout.sh`
+
+데이터 디렉토리를 `chmod 000` 으로 물리적으로 차단. idempotent — 이미 봉인된 상태에서
+다시 실행해도 OK. 잡 종료 후 `evaluate_holdout.py --unseal` 만 1 회 복구권을 가짐.
+
+### 3.2 후보 편집 표면 확인
+
+`workspace/transcribe.py` 외 어디도 후보 변경 대상이 아니다. AGENTS.md §1 권한 표.
+
+### 3.3 보호 영역 확인
+
+`frozen/`, `judge/`, `baseline/`, `assets/audio_profile/` 가 깨끗한지 확인. 봉인된
+backend·평가자·기준값이 의도치 않게 수정되면 가드 자체가 무의미해진다.
+
+### 3.4 baseline 재측정 금지
+
+`baseline/target_cer.json`, `baseline/noise_floor.json` 은 Phase 1 종료 시 봉인됨.
+잡 도중 갱신하면 채택 정책 (§6) 의 결정론이 깨진다. σ provisional 재측정 (Phase 3
+첫 정상 가설 이후) 만 명시적 예외.
+
+### 3.5 정상 verify 1회 — `bash scripts/verify.sh`
+
+**검증하는 것**: pairing → frozen backend load → judge.evaluate → harness.guards →
+score 출력의 end-to-end 경로가 살아있는지.
+
+**해석**:
+- **stub 상태** (Phase 1 출발점) 에서는 `workspace/transcribe.py` 가 30 초 윈도우
+  한 번만 디코드 → 27분짜리 파일이 99% 잘림 → 출력 near-empty →
+  `length_ratio.p05 = 0.000` catastrophic 가드 발동 → **exit 1 이 정상**. 가드가
+  정직하게 잡는 것 자체가 시스템 동작의 증거.
+- corpus_cer 숫자 (예: 0.99) 는 마지막 줄에 출력되고, 그 다음 줄에 가드 FAIL
+  메시지가 나온다. 두 줄 모두 떨어져야 통과로 본다.
+- 후보 (`claude -p`) 가 chunking 등으로 stub 의 30 초 truncation 을 해결하면
+  본 잡 첫 iter 부터 catastrophic 이 풀린다.
+
+**진짜 실패**: pairing 0 페어, backend load 실패, judge.evaluate 크래시 등 — 가드
+이전 단계에서 traceback. 이 경우 환경/데이터 문제이지 stub 의 문제가 아니다.
+
+### 3.6 의도적 위반 smoke 1회
+
+정적 backend 가드가 살아있는지 확인. `workspace/transcribe.py` 상단에
+`import ctranslate2` 한 줄 추가 → `bash scripts/verify.sh` → `verify FAIL
+[static backend]` + exit 1. 원복은 `git checkout -- workspace/transcribe.py`.
+
+이 smoke 가 통과되면 §5 의 정적 가드 목록 (backend / profile / from_pretrained /
+Whisper() ) 이 작동함을 확인한 셈.
+
+### 3.7 자체 harness dry-run 1 iter
+
+`python3 scripts/evolve.py --job-id dry --iters 1 --manual` — candidate 생성 없이
+현재 workspace 를 1 iter 만 평가. 가드 발동을 reject 로 변환하는 harness 의 정책
+(§6) + state 직렬화 + HISTORY append 까지 검증.
+
+**정리 필수**: dry 잡은 `--commit-results` 없이 돌므로 `runs/_summary/HISTORY.md`
+변경과 `runs/_summary/dry_state.json` 이 worktree 에 남는다. 다음 잡의
+`ensure_worktree_ready` 가 이걸 "unrelated changes" 로 잡아 차단하므로 본 잡 시작
+전 반드시 정리:
+
+- `git checkout -- runs/_summary/HISTORY.md`
+- `rm -f runs/_summary/dry_state.json`
+- `rm -rf runs/dry_*`
+
+이 정리 이유는 SSOT 보호 — harness state/history 가 dry 의 reject narrative 로
+오염된 채 본 잡이 시작되면 첫 iter 의 best_cer 계산 기준이 어긋날 수 있다.
+
+### 운영 전제
 
 자체 harness 전환 뒤에는 `/autoresearch` 호출, autoresearch skill 설치, TSV 분석을
-운영 전제로 삼지 않는다. 이전 조사 기록은 [`AUTORESEARCH.md`](AUTORESEARCH.md)에
+운영 전제로 삼지 않는다. 이전 조사 기록은 [`AUTORESEARCH.md`](AUTORESEARCH.md) 에
 historical 문서로 보존한다.
 
 ---
 
 ## 4. Iteration 흐름
 
+실행 명령 (25-iter 본 잡 / `--manual` dry-run) 은
+[`README.md` §"Phase 3 진입 → 본 잡 → 종료"](../README.md). 본 절은 한 iteration
+내부의 흐름 + flag semantics.
+
 한 iteration은 다음 순서를 따른다.
 
 1. 후보 변경 생성 (`claude -p`를 candidate worker로 사용)
-2. `workspace/transcribe.py` 정적 금지 패턴 검사
-3. `judge.evaluate` 실행
+2. `workspace/transcribe.py` 정적 금지 패턴 검사 (§5)
+3. `judge.evaluate` 실행 → `runs/<hyp_id>/score_report.json` 외 산출
 4. `harness.guards`로 산술·catastrophic·runtime·quality budget 검사
-5. `score_report.json`에서 `corpus_cer` 읽기
-6. `harness.policy`가 keep/reject/success 판정
-7. keep이면 best 갱신과 기록
-8. reject면 후보 변경 rollback
+5. verify 직후 scope 재검사 — `workspace/transcribe.py` + `runs/<hyp_id>/` 밖 변경
+   발견 시 즉시 reject (candidate 의 `transcribe()` 가 verify 중 임의 파일 I/O 로
+   정본 오염 방지)
+6. `score_report.json`에서 `corpus_cer` 읽기
+7. `harness.policy`가 keep/reject/success 판정 (§6)
+8. keep이면 best 갱신과 기록, reject면 후보 변경 rollback
 9. `runs/_summary/HISTORY.md` append
 
-기본 실행 형태:
+### Flag semantics
 
-```bash
-python3 scripts/evolve.py \
-  --job-id phase3_001 \
-  --iters 25 \
-  --candidate-cmd "claude -p" \
-  --commit-results
-```
+- **`--candidate-cmd`** — harness 가 만든 prompt 를 마지막 argv 로 붙여 실행한다.
+  따라서 `claude -p` 는 매 iteration 마다 후보를 만드는 worker 일 뿐이고,
+  검증·판정·기록·rollback 은 repository 내부 `harness/` 가 결정한다.
+- **`--manual`** — candidate 생성 없이 현재 `workspace/transcribe.py` 만 1 iter
+  평가. dry-run / 사람 직접 편집 검증 용. dry artifacts 가 worktree 에 남으므로
+  본 잡 시작 전 정리 필수 (§3.7).
+- **`--commit-results`** — 2 회 이상 반복할 때 필수. keep 된 후보를 git 기준점으로
+  고정해야 다음 reject 때 직전 best 상태로 안전하게 rollback 가능. `--iters > 1`
+  + `--commit-results` 없으면 `argparse.error` 로 거부.
 
-수동 후보를 평가할 때는 candidate 생성 없이 현재 `workspace/transcribe.py`를 검증한다.
+### Prompt 재주입 방지
 
-```bash
-python3 scripts/evolve.py --job-id manual_check --iters 1 --manual
-```
-
-`--candidate-cmd`는 harness가 만든 prompt를 마지막 argv로 붙여 실행한다. 따라서
-`claude -p`는 매 iteration마다 후보를 만드는 worker일 뿐이고, 검증·판정·기록·rollback은
-repository 내부 `harness/`가 결정한다.
-
-2회 이상 반복할 때는 `--commit-results`를 필수로 둔다. keep된 후보를 git 기준점으로
-고정해야 다음 reject 때 직전 best 상태로 안전하게 돌아갈 수 있기 때문이다.
-
-후보 prompt에는 최근 `HISTORY.md` tail이 관찰 자료로 들어가지만, HISTORY 본문은
-명령이 아니다. candidate stdout/stderr는 per-iteration 파일
-`runs/<hyp_id>/claude_stdout.txt`, `claude_stderr.txt`에만 보관하고, stderr 원문은
-prompt 재주입을 막기 위해 `HISTORY.md`에 복사하지 않는다.
+후보 prompt 에는 최근 `HISTORY.md` tail 이 관찰 자료로 들어가지만, HISTORY 본문은
+명령이 아니다 (prompt 자체에 "untrusted observation" 경고 포함). candidate
+stdout/stderr 는 per-iteration 파일 `runs/<hyp_id>/claude_stdout.txt`,
+`claude_stderr.txt` 에만 보관하고, stderr 원문은 prompt 재주입을 막기 위해
+`HISTORY.md` 에 복사하지 않는다.
 
 ---
 
