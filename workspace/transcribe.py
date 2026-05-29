@@ -50,7 +50,9 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         results = generate(
             features,
             [prompt_tokens],
-            beam_size=1,
+            beam_size=3,
+            patience=1.0,
+            length_penalty=1.0,
             sampling_temperature=0.0,
         )
         tokens = results[0].sequences_ids[0]
