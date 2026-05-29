@@ -116,16 +116,24 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
-        # Every 0715 file is deletion-dominated (length_ratio 0.50–0.96, all
+        # Every 0715 file is deletion-dominated (length_ratio 0.69–0.96, all
         # < 1.0) while hallucination/insertion stays ~0 — the model under-emits
         # on this long-form conversational audio. length_penalty > 1 biases the
-        # beam toward longer hypotheses, directly shrinking deletions; it is
-        # inert under greedy decode, so widen the beam to let it take effect.
+        # beam toward longer hypotheses, but it saturated by 1.5 (the 2.0 sweep
+        # gave ~0): with the default patience=1, beam search stops the instant
+        # ``beam_size`` hypotheses reach EOS, so the shortest finishers fix the
+        # output before the length bias can prefer a longer one. patience>1 keeps
+        # the search alive until ``beam_size * patience`` hypotheses finish,
+        # giving length_penalty the longer candidates it needs to actually act
+        # on — unlocking further deletion reduction without changing the chunk
+        # count (and thus the runtime budget). Held at 1.5 rather than 2.0 to
+        # keep the extra beam steps modest.
         results = generate(
             features,
             [prompt_tokens],
             beam_size=5,
             length_penalty=1.5,
+            patience=1.5,
             sampling_temperature=0.0,
         )
 
