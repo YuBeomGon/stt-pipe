@@ -434,6 +434,96 @@ self-evolve / harness 시스템에 적용 가능:
 API 직접 호출 (Messages SDK) 로 옮길 땐 본 layer 자체가 불필요
 (§9 참고) — 우리가 system / tools 를 명시 구성하므로 noise 0 from start.
 
+### 7.7 4차 정리 — Tool 차단 + Read deny + body inject (2026-05-29, codex 2차 review)
+
+§7.6 의 skills/MCP hardening 으로 *컨텍스트 누수* 는 4 → 2. 그러나 **컨닝
+경로** (candidate 가 평가자·baseline·과거 결과를 *읽거나 자체 verify 돌리기*)
+는 별도 문제. §7.6 은 노출 줄이기 / §7.7 은 *실행 가능 행동* 줄이기.
+
+#### 7.7.1 동기 — 코덱스 2차 보안 review
+
+3 가지 약점 식별:
+
+1. **Read 가 거의 안 막힘** — settings.json deny 에 Read 는 holdout 디렉토리만.
+   `judge/`, `baseline/`, `harness/`, `docs/`, `runs/` 다 read 가능 →
+   candidate 가 평가 normalize 로직 읽고 우회 가능
+2. **Bash 평가 직접 호출 차단 없음** — `block_swap_and_seal.py` 는
+   swap/seal/unseal/chmod/.claude 만. `bash scripts/verify.sh`,
+   `python -m judge.evaluate` 통과 → 한 iter 안에 multi-attempt cherry-pick
+3. **whack-a-mole**: deny 패턴만 추가하면 `bash cat judge/normalize.py` 같이
+   *Bash 자체로* 우회. Bash deny 패턴을 무한히 늘려야 진짜 차단
+
+#### 7.7.2 구현 — 3 층 동시 보강
+
+| 층 | 변경 | 위치 |
+|---|---|---|
+| (a) Tool 자체 차단 | runner hardening 에 `--disallowedTools=Bash,WebFetch,WebSearch,Task` 추가 | `harness/runner.py::_CLAUDE_HARDENING_ARGS` |
+| (b) Read 경로 deny | settings.json 에 Read 차단 9 패턴 (harness, judge, baseline, runs, frozen, docs, .claude, scripts, tests) | `.claude/settings.json::permissions.deny` |
+| (c) workspace body prompt inject | `build_candidate_prompt` 가 `workspace/transcribe.py` 본문을 prompt 에 inline → Read 의존 ↓ | `harness/runner.py::_load_workspace_body` |
+
+추가:
+- `restrict_workspace.py::ALLOWED_PREFIXES = ()` — 과거 `runs/`, `autoresearch/`
+  허용 제거 (cheating 경로). candidate 의 Edit/Write 는 `workspace/transcribe.py`
+  단일 파일로만 좁힘
+- `_CLAUDE_HARDENING_ARGS` 가 `--disallowedTools=value` (`=` 형식) 사용 —
+  variadic flag 가 candidate prompt 를 tool 이름으로 먹는 버그 회피
+  (audit 첫 시도 시 발견: "Input must be provided…" 에러)
+
+#### 7.7.3 *왜* 이 조합이 robust 한가
+
+- (a) 만 하면: Read 는 살아있어 baseline value / judge code 노출
+- (b) 만 하면: Bash 로 `cat judge/normalize.py` 우회 (whack-a-mole)
+- (a) + (b): Bash 없음 → Read 도 deny → 둘 다 차단 (allowlist 효과 근사)
+- (c) 추가: Edit Tool 이 Read 의존하므로 workspace 본문이 prompt 에 있어야
+  Read 안 써도 candidate 가 현재 코드 판단 가능 → defense in depth
+
+#### 7.7.4 검증 — audit 결과
+
+`python3 scripts/audit_candidate_context.py --candidate-cmd "claude -p
+--disable-slash-commands --strict-mcp-config
+--disallowedTools=Bash,WebFetch,WebSearch,Task"`:
+
+| key | §7.6 (Tool 차단 전) | §7.7 (Tool 차단 후) |
+|---|---|---|
+| `SKILLS_AVAILABLE_COUNT` | 0 | 0 |
+| `MCP_SERVERS_VISIBLE` | NONE | NONE |
+| `HOOKS_FIRED_AT_START` | NO | NO |
+| `PLUGIN_AUTO_INJECTED` | NONE | NONE |
+| Tool catalog (Bash) | 노출 | **차단** (probe 가 Tool 사용 안 해 직접 확인 불가, claude `--help` 으로 flag 의미 검증) |
+| Read deny 패턴 9 종 | 없음 | 적용 |
+| 잔여 LEAK | 2 (email, git) | 2 (동일) |
+
+LEAK 카운트는 동일하지만 *컨닝 가능 행동 표면* 이 크게 축소. probe 만으로는
+Tool 차단 효과를 직접 측정 못 함 — Tool 사용 prompt 를 별도 작성해야 함
+(향후 audit 확장 후보).
+
+#### 7.7.5 단위 테스트
+
+| 테스트 | 검증 |
+|---|---|
+| `test_harden_candidate_cmd_includes_disallowed_tools` | `=` 형식 + 4 종 Tool 다 포함 |
+| `test_harden_candidate_cmd_disallowed_tools_idempotent` | `=` / space 양식 모두 중복 추가 X |
+| `test_build_candidate_prompt_inlines_workspace_body` | prompt 에 workspace 본문 포함 |
+| `test_restrict_workspace_denies_runs_dir` | ALLOWED_PREFIXES = () 검증 |
+
+총 117 pass (이전 109 + 4 신규 + 4 기존 갱신).
+
+#### 7.7.6 운영 효과 요약
+
+| 위협 | §7.6 까지 | §7.7 후 |
+|---|---|---|
+| 외부 skill 노이즈 | 차단 ✅ | 차단 ✅ |
+| MCP server 노출 | 차단 ✅ | 차단 ✅ |
+| baseline / judge / harness 코드 read 컨닝 | **가능** ⚠️ | 차단 ✅ |
+| `bash python -m judge.evaluate` self-verify cherry-pick | **가능** ⚠️ | 차단 ✅ |
+| `cat judge/...` Bash 우회 | **가능** ⚠️ | 차단 ✅ |
+| 과거 runs/ 결과 read / 덮어쓰기 | **가능** ⚠️ | 차단 ✅ |
+| CLAUDE.md 본문 mitigated | gate (LLM 협조) | 동일 |
+| email PII | 잔여 | 잔여 |
+| git recent commits | 잔여 | 잔여 |
+
+→ phase3_002 진입 환경: cheating 경로 거의 0, 잔여 누수 2 (account 레벨, 차단 불가).
+
 ---
 
 ## 8. 누수 정리 가이드

@@ -64,8 +64,9 @@ git checkout -- workspace/transcribe.py
 
 # 1-4. candidate 컨텍스트 감사 (PLAN §3.7)
 python3 scripts/audit_candidate_context.py \
-  --candidate-cmd "claude -p --disable-slash-commands --strict-mcp-config"
-# production runner 가 자동 부착하는 hardening flag 와 동일 조합으로 확인.
+  --candidate-cmd "claude -p --disable-slash-commands --strict-mcp-config --disallowedTools=Bash,WebFetch,WebSearch,Task"
+# production runner 가 자동 부착하는 3 flag 와 동일 조합으로 확인.
+# `--disallowedTools` 는 `=` 형식 필수 (variadic flag 가 prompt 를 tool 이름으로 먹는 버그 회피).
 # 잔여 허용 2 (email/git commits) 만 보고되면 정상. 그 외 누수 → 정리 후 재실행.
 # 운영자 interactive `claude` 세션은 영향 받지 않음 — subprocess hardening 만.
 
@@ -78,18 +79,34 @@ rm -rf runs/dry_*
 git status   # working tree clean 확인
 ```
 
-### 2. 본 잡 (25 iter)
+### 2. 본 잡 (예: phase3_002 50 iter)
 
 ```bash
 python3 scripts/evolve.py \
-  --job-id phase3_001 \
-  --iters 25 \
+  --job-id phase3_002 \
+  --iters 50 \
   --candidate-cmd "claude -p" \
   --commit-results
 ```
 
 `--iters > 1` 이면 `--commit-results` 가 **필수** (직전 best 를 git 기준점으로 고정해야
 reject 시 안전한 rollback 가능 — PLAN §4).
+
+**시간 / 토큰 가이드** (50 iter 기준, phase3_001 25 iter / 2 h 실측 외삽):
+
+| 항목 | 추정 |
+|---|---|
+| 잡 시간 | 3.5 – 4.5 h (iter 당 ~5 min × 50) |
+| iter 당 input | ~10 – 12 k token (profile + state + recent + HISTORY tail + diagnosis + auto-push) |
+| iter 당 output | ~2 – 4 k token (diff + YAML meta) |
+| 총 토큰 | ~600 – 800 k (대부분 input) |
+| 한도 주의 | Claude Max 사용 시 잡 시간 ≈ 한도 리셋 window. 시작 시점 = 한도 리셋 직후 권장. 잡 중 한도 hit = format reject 누적 → abort 가드 발동 위험 |
+
+운영자 interactive `claude` 세션은 `claude -p` subprocess 와 분리됨
+(runner 가 candidate cmd 에만 hardening flag 자동 부착, CANDIDATE-CONTEXT §7.6).
+**`EVOLVE_NO_HARDEN_CLAUDE=1` 환경변수가 켜진 상태에서 `--iters > 1` 또는
+`--commit-results` 가 들어가면 runner 가 잡 시작 거부** — 디버깅 후 unset 잊은
+경우의 silent regression 차단.
 
 ### 3. 종료 후 분석
 

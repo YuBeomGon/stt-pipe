@@ -105,8 +105,12 @@ phase3_002 결과 (RFC §4 판정 표 활용):
 | entropy ≤ 0.8 OR streak ≥ 5 | **전면 도입** — §3.1~3.4 단계적 |
 | LLM 이 권고 lane 무시율 > 60 % | §3.2 lane-cluster jump 우선 |
 
-판정 데이터 = `scripts/analyze_run.py` 의 D 축 산출물 +
-`runs/_summary/HISTORY.md` 의 lane / fingerprint 시계열.
+판정 데이터:
+- **lane / fingerprint per-iter 원자료**: `runs/<hyp_id>/candidate_meta.json`
+  (A' YAML 메타 파싱 결과 정본). HISTORY.md 는 narrative 만 담아 lane 구조
+  데이터는 *없음* — codex 3차 review F4 정정
+- **집계**: `scripts/analyze_run.py` 의 D 축 산출 (lane entropy, fingerprint
+  Jaccard 평균, max streak, format reject 비율) 및 `docs/reports/<job_id>_REPORT_*.md`
 
 ---
 

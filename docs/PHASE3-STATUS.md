@@ -84,6 +84,8 @@
 - [x] PHASE3-PLAN §3.7 에 audit 절차 등록 + README workflow 에 추가
 - [x] 누수 5 → 2 (잔여: email PII, git recent commits — claude CLI 기본 동작, 운영 합의로 허용)
 - [x] runner subprocess hardening — `_harden_candidate_cmd` 가 `--disable-slash-commands` + `--strict-mcp-config` 자동 부착, skills 29→0 + MCP→NONE 검증 (CANDIDATE-CONTEXT §7.6)
+- [x] codex 2차 hardening — `--disallowedTools=Bash,WebFetch,WebSearch,Task` 추가 + settings.json Read deny 9 종 + restrict_workspace ALLOWED_PREFIXES = () + workspace body prompt inject. cheating 표면 거의 0 (CANDIDATE-CONTEXT §7.7)
+- [x] codex 3차 fixes — bypass env production 거부 (`_check_bypass_in_production`), README §2 phase3_002 50 iter + 시간/토큰 가이드, proposal-3 데이터 출처 정정 (candidate_meta.json + analyze_run D 축), hardening wording "skills/MCP 만" 으로 좁힘
 
 ## 8. 후속 RFC
 
