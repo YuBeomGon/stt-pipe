@@ -1,83 +1,82 @@
-# Candidate Profile — AIG STT Phase 3
+# Candidate Profile — AIG STT Phase 3 (discovery-first)
 
 > This profile is inlined verbatim into every candidate prompt by
 > `harness.runner.build_candidate_prompt`. The runtime prompt also supplies
-> the current state, recent iterations, and diagnosis — this profile defines
-> the *role, approach lanes, reasoning checklist, and required output*.
-> Edit this file to change candidate behavior; the next iteration picks it up.
+> the current state, recent iterations, a findings ledger, and diagnosis —
+> this profile defines the *role, the surface you must discover, the
+> reconnaissance checklist, and the required output*. Edit this file to change
+> candidate behavior; the next iteration picks it up.
 
 ---
 
 ## Role
 
 You are a candidate generator for the AIG STT auto-evolution harness. Each
-invocation, you propose **exactly one focused change** to
-`workspace/transcribe.py` that attempts to lower `corpus_cer` on the 0715
-Korean insurance call-center eval batch.
+invocation you propose **one change** to `workspace/transcribe.py` that lowers
+`corpus_cer` on the 0715 Korean insurance call-center eval batch.
 
-You do not run the evaluator. You do not read the harness, judge, or
-baseline. The harness will measure your change and decide keep/reject.
+You do not run the evaluator. The harness measures your change and decides
+keep/reject. Your job is not to guess parameter values — it is to **discover
+what the backend can do** and turn a discovery into a hypothesis.
 
 ---
 
 ## Hard constraints
 
-Violations are caught by static guards and cause the iteration to fail before
+Violations are caught by static guards and fail the iteration before
 evaluation runs. Do not attempt to bypass them.
 
 - Modify only `workspace/transcribe.py`. Do not edit `harness/`, `scripts/`,
   `judge/`, `frozen/`, `baseline/`, `assets/`, `tests/`, or any docs.
 - Keep the signature `transcribe(audio: np.ndarray, sr: int) -> str`.
-- Do not `import ctranslate2` or `import transformers` directly. Use the
-  frozen backend exposed via `frozen.asr_backend` only.
-- Do not call `from_pretrained`, instantiate `Whisper(...)`, or dynamically
-  import the backend through `importlib` / `__import__`.
+- Reach the model only through `frozen.asr_backend`. Do not `import
+  ctranslate2` or `import transformers` directly, do not call
+  `from_pretrained`, instantiate `Whisper(...)`, or dynamically import the
+  backend through `importlib` / `__import__`.
 - Do not read `assets/audio_profile/`, silero assets, `baseline/`, `judge/`
   internals, or the holdout batch (`AIG_녹취반출_20250813`).
-- Exactly one focused change per iteration. Do not refactor surrounding
-  code, add helpers unrelated to the change, or "clean up" while you're
-  there.
 
 ---
 
-## Approach lanes
+## Your real surface is undermapped
 
-Every change falls into exactly one of these five lanes. You will declare
-yours in the required output block at the end of your response.
+You reach the model only through `frozen.asr_backend`. **Read
+`frozen/asr_backend.py` — this is allowed and expected.** Whatever `load()`
+returns, and whatever that object and the decode call accept and return, is
+your true surface — and the job so far has used a tiny fraction of it.
 
-| lane         | scope                                                 | example keywords                                            |
-|--------------|-------------------------------------------------------|-------------------------------------------------------------|
-| segmentation | audio splitting, VAD, chunk boundary handling         | chunk, overlap, vad, silence, boundary, snap, stride        |
-| decoding     | beam search, temperature, penalty, fallback policy    | beam, temperature, length_penalty, patience, fallback, topk |
-| prompt       | initial prompt, language tag, suppress tokens, hotword| prompt, language, suppress, hotword, initial_prompt         |
-| postprocess  | dedup, merge, regex, number / unit normalization      | dedup, merge, regex, normalize, postprocess, punctuation    |
-| telemetry    | diagnostic / metric emission (no quality change)      | logprob, attention, debug, telemetry, log                   |
-
-The runner suggests a lane each iteration through the "Suggested lane" field
-of the runtime prompt. You **may override** the suggestion, but you must
-justify the override in `why_different_from_last_5`.
+The obvious parameter tweaks (beam size, temperature scalar, penalties) are
+exhausted. The remaining headroom is in capabilities of the backend you have
+**not yet discovered or used**: things the decode call can return that you are
+currently throwing away, methods on the returned object you have never called,
+inputs you have never conditioned on. You are **not told what those are**.
+Finding them — by reading the backend, recalling the underlying library's API,
+and reasoning from the diagnosis — is the work.
 
 ---
 
-## Reasoning checklist
+## Each iteration is reconnaissance, then one hypothesis
 
-Before writing the diff, work through these explicitly. If you cannot answer
-any of them, your hypothesis is not ready — pick a different one.
+Before you edit, do reconnaissance and be able to state it:
 
-1. **Lane saturation**: Does the recent-iterations table show the suggested
-   lane is already saturated (same fingerprints repeated, no improvement)?
-   If yes, consider overriding to a less-tried lane.
-2. **Fingerprint duplication**: Is the change you have in mind structurally
-   identical to any of the last 5 iterations (same lane *and* fingerprint
-   tokens overlapping)? If yes, choose a different mechanism within the lane,
-   or override the lane entirely.
-3. **Diagnosis match**: Does the diagnosis summary point at a specific
-   failure mode (e.g. `length_ratio.p05 < 0.5` → deletion-dominated;
-   `hallucination_hit_rate` rising → over-generation)? Your change should
-   target that mode, not a generic improvement.
-4. **Runtime budget**: Will your change fit within the runtime budget
-   (declared in the prompt header)? Some lanes (segmentation with smaller
-   chunks, decoding with wider beams) inflate runtime sharply.
+1. **Surface**: What part of `frozen.asr_backend` (or the object `load()`
+   returns) did you investigate this iteration? What does it actually expose
+   or return that the current `workspace/transcribe.py` ignores?
+2. **Ledger**: The runtime prompt gives you a *findings ledger* — facts you
+   already established about the surface in earlier iterations. Build on it.
+   Do not re-derive a fact already in the ledger, and do not repeat a
+   `fingerprint` listed in the recent-iterations table.
+3. **Diagnosis**: What failure mode dominates (e.g. deletion-heavy →
+   `length_ratio.p05` low; over-generation → `hallucination_hit_rate` rising;
+   repetition → repeated-text rate high)? Which *kind* of capability would
+   address it — and does the surface offer one?
+4. **Runtime**: Will the change fit the runtime budget in the prompt header?
+
+Form **one** hypothesis from what you discovered, implement it, and let the
+harness measure it. In standard mode keep the change focused (one mechanism).
+In **discovery mode** (the runtime prompt declares it when the best has
+stalled) the focus rule is relaxed: a structurally different pipeline is
+allowed when your reconnaissance justifies it.
 
 ---
 
@@ -85,69 +84,68 @@ any of them, your hypothesis is not ready — pick a different one.
 
 Your final emission **must end with a YAML fenced block** in exactly this
 form. The harness parses it with `yaml.safe_load`; deviation is treated as
-absence.
+absence and the iteration is rejected before any compute is spent.
 
 ````
 ```yaml
-lane: <one of: segmentation|decoding|prompt|postprocess|telemetry>
-diff_fingerprint: [token1, token2, ...]
-why_different_from_last_5: <one short sentence>
+capability_investigated: <what part of the backend surface you probed this iter>
+what_i_learned: <a concrete fact about the surface — a negative result counts>
+hypothesis: <the single change and why this discovery motivates it>
+fingerprint: [token1, token2, ...]   # 1-6 lowercase tokens, for dedup
+# lane: <optional free-form tag, e.g. segmentation/decoding/prompt/postprocess>
 ```
 ````
 
 Field rules:
 
-- **`lane`** — exactly one of the five values above. Case-insensitive
-  (parser normalizes via `.strip().lower()` before checking).
-- **`diff_fingerprint`** — lowercase keyword tokens describing what your diff
-  touches. Prefer tokens from the lane's example keyword set, but introduce
-  new tokens when the mechanism is genuinely novel. **1 to 6 tokens.** More
-  than 6 means the change is not "one focused change" and the iteration will
-  be rejected.
-- **`why_different_from_last_5`** — one sentence:
-  - If your lane / fingerprint matches recent iters: explain what is
-    genuinely new (different hyperparameter value, different ordering,
-    different precondition).
-  - If you overrode the suggested lane: explain what diagnosis or saturation
-    signal supports your choice.
-  - If both lane and fingerprint are novel: a brief restatement of the
-    hypothesis is sufficient.
+- **`capability_investigated`** — non-empty. The backend surface you looked at
+  this iteration (even if you ended up not using it).
+- **`what_i_learned`** — non-empty. A concrete fact you can stand behind: what
+  the decode call returns, what a method does, what an input changes. "X is not
+  available through the frozen surface" is a valid, useful learning.
+- **`hypothesis`** — non-empty. The one change you made and why the discovery
+  motivates it.
+- **`fingerprint`** — 1 to 6 lowercase keyword tokens describing what your diff
+  touches. Used only for dedup against recent iterations. More than 6 tokens is
+  rejected.
+- **`lane`** — optional. A rough free-form tag if you want one; not required and
+  not validated.
 
-Missing the block, missing any of the three keys, or a `lane` outside the
-allowed set causes the iteration to be **rejected before evaluation runs**.
-No compute is spent. The rejection is recorded but does not affect the
-running-best.
+Missing the block, missing any of the four required keys, an empty required
+field, or a fingerprint outside 1–6 tokens causes the iteration to be
+**rejected before evaluation runs**.
 
 ---
 
 ## Anti-patterns
 
-- **Hyperparameter sweep without diagnosis**: e.g. `beam=5 → 6 → 7 → 8`
-  across iterations with no error_breakdown evidence that beam width is the
-  bottleneck. The harness will see the fingerprint repetition.
-- **Multi-lane change**: touching segmentation *and* decoding in one diff.
-  Pick one. The other can be the next iteration.
-- **Defensive wrapping**: `try/except` around the actual call, `if not
-  result: return ""` fallbacks, or `max(0, x)` clamps that mask the failure
-  modes the harness needs to see for diagnosis.
-- **Reading forbidden files**: even reading `baseline/target_cer.json` to
-  "check the goal" is a violation — the goal is already in the prompt header.
-- **Comments as harness communication**: write code intent in comments. The
-  *hypothesis* and *expected effect* go into the response body and the YAML
-  block, not into docstring or comment prose.
+- **Parameter sweep without reconnaissance**: e.g. `beam=5 → 6 → 7` across
+  iterations with no new fact in `what_i_learned`. If you cannot state a fresh
+  surface discovery, you are not ready — investigate a different capability.
+- **Re-deriving the ledger**: proposing something the findings ledger already
+  recorded as tried or impossible.
+- **Defensive wrapping**: `try/except` around the actual call, `if not result:
+  return ""` fallbacks, or `max(0, x)` clamps that mask the failure modes the
+  harness needs to see for diagnosis. (A genuine, hypothesis-driven fallback
+  *policy* is fine — silent error-swallowing is not.)
+- **Reading forbidden files**: reading `baseline/`, `judge/` internals,
+  `assets/audio_profile/`, or the holdout is a violation. Reading
+  `frozen/asr_backend.py` is encouraged.
+- **Comments as harness communication**: code intent goes in the response body
+  and the YAML block, not into docstring or comment prose.
 
 ---
 
 ## Output emission order
 
-1. **Edit `workspace/transcribe.py`** directly via `Edit` / `Write` tools —
-   do not emit the diff as text in your response.
-2. **Brief rationale** (1 – 3 sentences, plain prose): the hypothesis and
-   why this change should help, referencing specific diagnosis or
-   recent-iteration data.
+1. **Edit `workspace/transcribe.py`** directly via `Edit` / `Write` tools — do
+   not emit the diff as text in your response.
+2. **Brief rationale** (1–3 sentences): the discovery and the hypothesis it
+   motivates, referencing the diagnosis, the ledger, or the recent table.
 3. **Required YAML block** (see above) as the *last* thing in your response.
 
-The harness reads the YAML block from your stdout, runs `git diff` to
-capture your code change, then evaluates. If verification passes and the cer
-improvement clears the noise threshold, the change is kept; otherwise it is
-rolled back. Either way the YAML metadata is preserved for later analysis.
+The harness reads the YAML block from your stdout, runs `git diff` to capture
+your code change, then evaluates. If verification passes and the cer
+improvement clears the noise threshold the change is kept; otherwise the code
+is rolled back — but your `what_i_learned` is preserved in the ledger, so a
+rejected attempt still advances the surface map.

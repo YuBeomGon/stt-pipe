@@ -230,7 +230,13 @@ def discover_iterations(
                 diagnosis=diagnosis,
                 diff_text=diff_text,
                 candidate_lane=meta.get("lane") if isinstance(meta.get("lane"), str) else None,
-                candidate_fingerprint=meta.get("diff_fingerprint", []) if isinstance(meta.get("diff_fingerprint"), list) else [],
+                # discovery schema uses `fingerprint`; fall back to the legacy
+                # A' `diff_fingerprint` so cross-migration jobs still parse.
+                candidate_fingerprint=(
+                    meta["fingerprint"] if isinstance(meta.get("fingerprint"), list)
+                    else meta.get("diff_fingerprint", []) if isinstance(meta.get("diff_fingerprint"), list)
+                    else []
+                ),
             )
         )
     out.sort(key=lambda r: r.produced_at)

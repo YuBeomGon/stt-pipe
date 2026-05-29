@@ -263,17 +263,22 @@ diagnosis 가 같은 metric(length_ratio/hallucination) 만 반복 인용하면 
 ## 7. 작업 계획
 
 - [x] phase3_002 결과 분석 → 본 proposal 본문 (§0/§2 발견형 재진단)
-- [ ] **분석 인프라 갭 수정**: `candidate_meta.json` (lane/fingerprint/발견필드)
-      을 gitignore 에서 제외하거나 `runs/_summary/` 로 집계 보존 → 다음 잡부터
-      analyze_run.py D축 (entropy/Jaccard) 이 실제로 채워지게. (phase3_002 는
-      runs 0개로 D축 측정 불가였음 — §0 ⚠️)
-- [ ] `candidate.md`: Role/Approach 를 발견형(§3.1)으로 교체, 출력 YAML 을
-      §3.2 필드로 교체, plateau 모드(§3.4) 섹션 신설
-- [ ] `runner.build_candidate_prompt`: findings ledger 주입(§3.3),
-      cold-restart 트리거(§4.1), HISTORY 망각(§4.3); round-robin 제거(§4.2)
-- [ ] `state.py`: `iters_since_best_update`, (필요시) recent `what_i_learned`
-      추적 — 직렬화 하위호환 명시
-- [ ] `analyze_run.py` D 축: 발견 모드 발동 횟수 / capability 신규성 측정 추가
+- [x] **분석 인프라 갭 (보존)**: `commit_iteration` 이 매 iter 메타를
+      `runs/_summary/<job_id>_candidate_meta.jsonl` (추적 대상) 로 append →
+      per-iter `runs/<hyp_id>/` 가 gitignore/정리되어도 lane/fingerprint/발견
+      필드가 durable 하게 남음. (phase3_002 는 runs 0개로 D축 측정 불가였음 — §0 ⚠️)
+- [x] `candidate.md`: Role/Approach 를 발견형(§3.1)으로 교체, 출력 YAML 을
+      §3.2 필드로 교체, plateau/discovery 모드 + 정찰 체크리스트 신설
+- [x] `runner.build_candidate_prompt`: findings ledger 주입(§3.3),
+      cold-restart 트리거(§4.1, `_COLD_RESTART_THRESHOLD=5`), HISTORY 망각(§4.3);
+      round-robin/`_suggested_lane` 제거(§4.2); `parse_candidate_metadata` 새 스키마
+- [x] `state.py`: `iters_since_best_update` (advance++ / record_best→0),
+      직렬화 하위호환 (unknown key 무시 + default 0)
+- [x] `analyze_run.py`: `fingerprint` 키 읽기 (legacy `diff_fingerprint` fallback)
+- [ ] **follow-up**: `analyze_run.py` 가 `runs/<hyp_id>/` 부재 시
+      `<job_id>_candidate_meta.jsonl` 을 D축 source 로 소비 (현재는 보존만,
+      소비는 per-iter 디렉토리가 살아있는 즉시-분석 창에서만)
+- [ ] **follow-up**: `analyze_run.py` D 축에 발견 모드 발동 횟수 / capability 신규성
 - [ ] phase3_003 (phase3-explore 브랜치) 으로 효과 측정
 
 ---

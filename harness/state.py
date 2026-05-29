@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 
@@ -18,11 +18,20 @@ class HarnessState:
     best_cer: float | None = None
     best_hyp_id: str | None = None
     status: str = "running"
+    # Iterations elapsed since best_cer last improved. Drives the cold-restart
+    # / discovery-mode trigger in runner.build_candidate_prompt (proposal
+    # 2026-05-29-prompt-diversification §4.1). advance() increments it;
+    # record_best() resets it to 0. Defaults to 0 so older state files (which
+    # lack the field) load unchanged — backward-compatible.
+    iters_since_best_update: int = 0
 
     @classmethod
     def load(cls, path: Path) -> "HarnessState":
         data = json.loads(path.read_text(encoding="utf-8"))
-        return cls(**data)
+        # Ignore unknown keys so a state file written by a newer schema still
+        # loads on an older codebase; missing keys fall back to field defaults.
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,7 +45,9 @@ class HarnessState:
 
     def advance(self) -> None:
         self.iteration += 1
+        self.iters_since_best_update += 1
 
     def record_best(self, hyp_id: str, corpus_cer: float) -> None:
         self.best_hyp_id = hyp_id
         self.best_cer = corpus_cer
+        self.iters_since_best_update = 0

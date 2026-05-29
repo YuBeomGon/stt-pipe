@@ -12,7 +12,6 @@ import shlex
 from pathlib import Path
 
 from harness.runner import (
-    LANES,
     GitPathStatus,
     RunnerConfig,
     _CLAUDE_HARDENING_FLAGS,
@@ -35,9 +34,10 @@ from harness.verify import VerifyResult, check_workspace_static
 _VALID_META_STDOUT = """diff applied.
 
 ```yaml
-lane: decoding
-diff_fingerprint: [beam, length_penalty]
-why_different_from_last_5: trying widened beam with length bias
+capability_investigated: frozen.asr_backend.generate return values
+what_i_learned: generate accepts a length_penalty kwarg the stub ignored
+hypothesis: add length bias to reduce tail deletion
+fingerprint: [beam, length_penalty]
 ```
 """
 
@@ -374,9 +374,10 @@ _VALID_YAML_BLOCK = """\
 preamble prose
 
 ```yaml
-lane: decoding
-diff_fingerprint: [beam, length_penalty, patience]
-why_different_from_last_5: iter 9 미시도 patience widening
+capability_investigated: frozen.asr_backend.generate decoding kwargs
+what_i_learned: patience is accepted but was never varied
+hypothesis: widen patience to let beam explore longer hypotheses
+fingerprint: [beam, length_penalty, patience]
 ```
 """
 
@@ -385,9 +386,10 @@ def test_parse_meta_happy_path(tmp_path: Path) -> None:
     meta, err = parse_candidate_metadata(_VALID_YAML_BLOCK, tmp_path)
     assert err is None
     assert meta == {
-        "lane": "decoding",
-        "diff_fingerprint": ["beam", "length_penalty", "patience"],
-        "why_different_from_last_5": "iter 9 미시도 patience widening",
+        "capability_investigated": "frozen.asr_backend.generate decoding kwargs",
+        "what_i_learned": "patience is accepted but was never varied",
+        "hypothesis": "widen patience to let beam explore longer hypotheses",
+        "fingerprint": ["beam", "length_penalty", "patience"],
     }
     assert (tmp_path / "candidate_meta.json").is_file()
 
@@ -405,43 +407,63 @@ def test_parse_meta_picks_last_block_when_multiple(tmp_path: Path) -> None:
 example before:
 
 ```yaml
-lane: prompt
-diff_fingerprint: [x]
-why_different_from_last_5: ignored
+capability_investigated: ignored example
+what_i_learned: ignored
+hypothesis: ignored
+fingerprint: [x]
 ```
 
 actual at end:
 
 ```yaml
-lane: telemetry
-diff_fingerprint: [logprob, debug]
-why_different_from_last_5: instrumenting decoder
+capability_investigated: model.align cross-attention alignment
+what_i_learned: load() returns the raw model, so align() is reachable
+hypothesis: use word timestamps to place chunk boundaries
+fingerprint: [align, timestamp, boundary]
 ```
 """
     meta, err = parse_candidate_metadata(stdout, tmp_path)
     assert err is None
-    assert meta["lane"] == "telemetry"
+    assert meta["fingerprint"] == ["align", "timestamp", "boundary"]
 
 
-def test_parse_meta_rejects_invalid_lane(tmp_path: Path) -> None:
+def test_parse_meta_lane_is_optional_free_form(tmp_path: Path) -> None:
+    """lane is demoted to an optional free-form tag (discovery schema): an
+    arbitrary value is accepted and preserved; absence is also fine."""
     stdout = """\
 ```yaml
-lane: refactor
-diff_fingerprint: [misc]
-why_different_from_last_5: x
+capability_investigated: generate return_no_speech_prob
+what_i_learned: generate can return a no-speech probability per segment
+hypothesis: gate empty segments on no-speech prob
+fingerprint: [no_speech, gate]
+lane: anything-goes
+```
+"""
+    meta, err = parse_candidate_metadata(stdout, tmp_path)
+    assert err is None
+    assert meta["lane"] == "anything-goes"
+
+
+def test_parse_meta_rejects_missing_required_key(tmp_path: Path) -> None:
+    stdout = """\
+```yaml
+capability_investigated: x
+what_i_learned: y
+fingerprint: [misc]
 ```
 """
     meta, err = parse_candidate_metadata(stdout, tmp_path)
     assert meta is None
-    assert "invalid lane" in err
+    assert "hypothesis" in err
 
 
 def test_parse_meta_rejects_fingerprint_too_long(tmp_path: Path) -> None:
     stdout = """\
 ```yaml
-lane: decoding
-diff_fingerprint: [a, b, c, d, e, f, g]
-why_different_from_last_5: x
+capability_investigated: x
+what_i_learned: y
+hypothesis: z
+fingerprint: [a, b, c, d, e, f, g]
 ```
 """
     meta, err = parse_candidate_metadata(stdout, tmp_path)
@@ -449,27 +471,33 @@ why_different_from_last_5: x
     assert "length 7" in err
 
 
-def test_parse_meta_rejects_empty_why(tmp_path: Path) -> None:
+def test_parse_meta_rejects_empty_required_text(tmp_path: Path) -> None:
     stdout = """\
 ```yaml
-lane: decoding
-diff_fingerprint: [beam]
-why_different_from_last_5: "   "
+capability_investigated: x
+what_i_learned: y
+hypothesis: "   "
+fingerprint: [beam]
 ```
 """
     meta, err = parse_candidate_metadata(stdout, tmp_path)
     assert meta is None
-    assert "why_different_from_last_5" in err
+    assert "hypothesis" in err
 
 
-def test_lanes_constant_matches_profile() -> None:
-    """Sanity: the LANES tuple in code must match the lane set documented
-    in harness/prompts/candidate.md. Drift between code and profile would
-    cause silent reject of candidate responses."""
+def test_profile_documents_required_fields() -> None:
+    """Sanity: the discovery output fields the parser requires must be
+    documented in harness/prompts/candidate.md. Drift between code and
+    profile would cause silent reject of candidate responses."""
     profile_path = Path(__file__).resolve().parents[1] / "harness/prompts/candidate.md"
     body = profile_path.read_text(encoding="utf-8")
-    for lane in LANES:
-        assert f"| {lane}" in body or f"|{lane}" in body, f"lane {lane!r} not documented in profile"
+    for field in (
+        "capability_investigated",
+        "what_i_learned",
+        "hypothesis",
+        "fingerprint",
+    ):
+        assert field in body, f"required field {field!r} not documented in profile"
 
 
 def test_run_iteration_format_reject_when_no_yaml(tmp_path: Path) -> None:
@@ -631,9 +659,10 @@ def test_parse_meta_rejects_whitespace_only_fingerprint_tokens(
     between unrelated iters. normalize-then-validate must reject."""
     stdout = """\
 ```yaml
-lane: decoding
-diff_fingerprint: ["beam", "   "]
-why_different_from_last_5: x
+capability_investigated: x
+what_i_learned: y
+hypothesis: z
+fingerprint: ["beam", "   "]
 ```
 """
     meta, err = parse_candidate_metadata(stdout, tmp_path)
@@ -648,14 +677,15 @@ def test_parse_meta_falls_back_to_completed_process_stdout(tmp_path: Path) -> No
     rely on it."""
     yaml_inline = """\
 ```yaml
-lane: prompt
-diff_fingerprint: [language]
-why_different_from_last_5: switching language tag
+capability_investigated: prompt token construction
+what_i_learned: the language tag token can be swapped pre-decode
+hypothesis: switch language tag
+fingerprint: [language]
 ```
 """
     meta, err = parse_candidate_metadata(yaml_inline, tmp_path)
     assert err is None
-    assert meta["lane"] == "prompt"
+    assert meta["fingerprint"] == ["language"]
 
 
 def test_run_job_commits_aborted_state_when_commit_results(
