@@ -69,3 +69,21 @@
 - [ ] phase3_002 50 iter 실행 (proposal §10)
 - [ ] phase3_002 REPORT 의 D 축으로 A' 효과 판정 — proposal §4 판정 표
 - [ ] 후속 결정 — C-lite 진행 / SPEC 보강 / profile 재작성
+
+> 주의: phase3_002 는 §7 컨텍스트 정리도 같이 들어간 환경에서 돌므로
+> "A' 단독 효과" 분리 불가 — proposal §11.4 참고. phase3_002 결과를 새 baseline 으로.
+
+## 7. Candidate 컨텍스트 정리 (proposal 2026-05-29-agent-design §11 Addendum)
+
+선행 RFC scope 외 추가 작업. phase3_002 진입 전 정리.
+
+- [x] `docs/CANDIDATE-CONTEXT.md` 작성 — PUSH / AUTO-PUSH / PULL 분류 + 감사 결과
+- [x] `scripts/audit_candidate_context.py` — probe + leak 규칙
+- [x] CLAUDE.md candidate session gate (22 줄로 축소, 본문 자기-면역)
+- [x] superpowers 플러그인 project-scope disable — `.claude/settings.json`
+- [x] PHASE3-PLAN §3.7 에 audit 절차 등록 + README workflow 에 추가
+- [x] 누수 5 → 2 (잔여: email PII, git recent commits — claude CLI 기본 동작, 운영 합의로 허용)
+
+## 8. 후속 RFC
+
+- [ ] [`proposals/2026-05-29-skills-and-prompt-eval.md`](proposals/2026-05-29-skills-and-prompt-eval.md) — 내부 skill/agent + prompt-eval. 본문은 phase3_002 결과 후 채움

@@ -62,9 +62,13 @@ bash scripts/verify.sh
 # "verify FAIL [static backend]" + exit 1 확인 후 원복:
 git checkout -- workspace/transcribe.py
 
-# 1-4. 자체 harness dry-run 1 iter
+# 1-4. candidate 컨텍스트 감사 (PLAN §3.7)
+python3 scripts/audit_candidate_context.py
+# 누수 0 (또는 잔여 허용 2 — email/git commits) → 진행. 그 외 → 정리 후 재실행.
+
+# 1-5. 자체 harness dry-run 1 iter
 python3 scripts/evolve.py --job-id dry --iters 1 --manual
-# 정리 (dry artifacts 가 다음 잡의 ensure_worktree_ready 를 막음 — PLAN §3.7):
+# 정리 (dry artifacts 가 다음 잡의 ensure_worktree_ready 를 막음 — PLAN §3.8):
 git checkout -- runs/_summary/HISTORY.md
 rm -f runs/_summary/dry_state.json
 rm -rf runs/dry_*

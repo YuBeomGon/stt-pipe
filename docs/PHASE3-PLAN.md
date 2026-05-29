@@ -109,7 +109,18 @@ score 출력의 end-to-end 경로가 살아있는지.
 이 smoke 가 통과되면 §5 의 정적 가드 목록 (backend / profile / from_pretrained /
 Whisper() ) 이 작동함을 확인한 셈.
 
-### 3.7 자체 harness dry-run 1 iter
+### 3.7 candidate 컨텍스트 감사 — `python3 scripts/audit_candidate_context.py`
+
+`claude -p` 가 candidate session 에 *자동* 주입하는 것 (CLAUDE.md, 플러그인
+SessionStart 훅, PII, git commits) 을 probe 로 확인하고 누수가 있으면 잡 진입을
+차단. 정본은 [`CANDIDATE-CONTEXT.md`](CANDIDATE-CONTEXT.md), 추가 도입 경위는
+[`proposals/2026-05-29-agent-design.md`](proposals/2026-05-29-agent-design.md) §11.
+
+산출: `docs/reports/<YYYY-MM-DD>_context_audit.json`. 누수 0 → exit 0. 누수
+1 이상 → exit 1 + stderr 한 줄 요약. 잔여 누수 2 (email PII / git commits) 는
+`_LEAK_RULES` 외 (project 레벨 정리 불가, 운영 합의로 허용).
+
+### 3.8 자체 harness dry-run 1 iter
 
 `python3 scripts/evolve.py --job-id dry --iters 1 --manual` — candidate 생성 없이
 현재 workspace 를 1 iter 만 평가. 가드 발동을 reject 로 변환하는 harness 의 정책
@@ -176,7 +187,7 @@ historical 문서로 보존한다.
   검증·판정·기록·rollback 은 repository 내부 `harness/` 가 결정한다.
 - **`--manual`** — candidate 생성 없이 현재 `workspace/transcribe.py` 만 1 iter
   평가. dry-run / 사람 직접 편집 검증 용. dry artifacts 가 worktree 에 남으므로
-  본 잡 시작 전 정리 필수 (§3.7).
+  본 잡 시작 전 정리 필수 (§3.8).
 - **`--commit-results`** — 2 회 이상 반복할 때 필수. keep 된 후보를 git 기준점으로
   고정해야 다음 reject 때 직전 best 상태로 안전하게 rollback 가능. `--iters > 1`
   + `--commit-results` 없으면 `argparse.error` 로 거부.

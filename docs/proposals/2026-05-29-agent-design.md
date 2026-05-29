@@ -281,3 +281,53 @@ run_job():
       와 직접 비교 가능. 잡 시간 ~4 h (phase3_001 2 h × 2)
 - [x] **abort 임계 4/5 보수적** — LLM 이 거의 모든 응답에서 format 못 맞출 때만
       잡 중단. profile 의 명확성 결함 신호로만 활용
+
+---
+
+## 11. Addendum — RFC 외 추가 작업 (2026-05-29, phase3_002 진입 전)
+
+본 RFC §6 작업 계획 (step 1~7) 완료 후, **§8 (phase3_002 실행) 진입 직전**
+candidate 컨텍스트 자동 주입 문제가 별도 발견되어 다음을 추가로 진행했다.
+본 RFC 의 결정 사항은 변경 없음 — 회고 기록 only.
+
+### 11.1 발견
+
+`claude -p` 가 cwd 의 `CLAUDE.md`, `.claude/settings.json` 의 enabled
+플러그인, SessionStart 훅을 *자동* 주입함을 확인. phase3_001 컨텍스트에
+운영자용 가이드 + superpowers 의 "skills BEFORE response" 강제 + 운영자
+email + git recent commits 가 *우리가 모르게* 같이 들어가 있었음.
+
+본 RFC §1.3 의 **L2 (컨텍스트 오염)** 가설이 *예상보다 훨씬 크고 다른
+경로* 임이 드러남 — HISTORY tail 뿐 아니라 CLAUDE.md / 플러그인.
+
+### 11.2 추가 산출 (RFC scope 외)
+
+| 산출 | 위치 |
+|---|---|
+| 컨텍스트 정본 문서 (PUSH / AUTO-PUSH / PULL 분류) | [`docs/CANDIDATE-CONTEXT.md`](../CANDIDATE-CONTEXT.md) |
+| 자동 감사 스크립트 (probe + 누수 규칙 기반) | [`scripts/audit_candidate_context.py`](../../scripts/audit_candidate_context.py) |
+| 정기 결과 (`<YYYY-MM-DD>_context_audit.json`) | [`docs/reports/`](../reports/) |
+| CLAUDE.md candidate session gate (자기 면역) | `CLAUDE.md` 상단 (22 줄로 축소) |
+| superpowers 플러그인 project-scope disable | `.claude/settings.json` |
+
+### 11.3 누수 정리 경과
+
+5 누수 (CLAUDE.md / SessionStart 훅 / 플러그인 / email / git commits)
+→ **2 누수** (email PII, git recent commits — 둘 다 claude CLI 기본 동작이라
+project 레벨 정리 불가). 자세한 baseline 비교는 CANDIDATE-CONTEXT.md §7.
+
+### 11.4 phase3_002 환경 변화
+
+- ✅ phase3_002 는 phase3_001 대비 *추가 변수* (CLAUDE.md / 플러그인 제거) 가
+  들어간 환경. 따라서 ablation 의 *해석 시* "A' 효과 = candidate profile +
+  컨텍스트 정리 합산" 으로 봐야 하며, A' 단독 효과 분리는 불가능.
+- 운영적으론 *더 깨끗한 환경* 이라 phase3_002 결과를 baseline 으로 잡고
+  이후 RFC 는 그 위에서 ablation.
+
+### 11.5 후속 RFC 슬롯
+
+본 RFC 가 다루지 못한 다음 두 주제는 별도 proposal 로 분리:
+
+- 내부 skill / agent 설계 (외부 superpowers 의존 제거 + 운영자 워크플로우
+  표준화) → [`docs/proposals/2026-05-29-skills-and-prompt-eval.md`](2026-05-29-skills-and-prompt-eval.md)
+- candidate profile A/B 측정 메커니즘 (prompt-eval) → 동일 proposal §3
