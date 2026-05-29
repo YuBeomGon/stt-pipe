@@ -91,14 +91,35 @@ def _is_sealed(target: Path) -> bool:
         return False
 
 
-def _last_accepted_eval_run(runs_dir: Path) -> Path | None:
-    """Most recent runs/<hyp_id>/ that scored the eval batch.
+def _best_eval_run(runs_dir: Path, summary_dir: Path) -> Path | None:
+    """Resolve the anchor eval (0715) run for holdout comparison.
 
-    Phase 2 doesn't classify accept/rollback itself; analyze_run.py does. For
-    the holdout comparison we use the *last produced* eval-batch score_report
-    as the comparison anchor (Phase 3 leaves the accepted state as the working
-    tree's final commit, which corresponds to the most recent verify).
+    Priority:
+      1. ``runs/_summary/<job_id>_state.json::best_hyp_id`` — the harness's
+         authoritative pointer to the iter whose ``transcribe.py`` is currently
+         on disk. This is what holdout *actually* evaluates against, so it's
+         the only correct anchor. Auto-detected when exactly one
+         ``*_state.json`` exists; on ties / none, falls back below.
+      2. Last *produced* eval-batch ``score_report`` (the pre-fix behavior) —
+         kept as a defensive fallback so smoke tests that drop synthetic runs
+         without a state file still work.
     """
+    state_candidates = sorted(summary_dir.glob("*_state.json")) if summary_dir.is_dir() else []
+    if len(state_candidates) == 1:
+        state_path = state_candidates[0]
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            state = None
+        if state and state.get("best_hyp_id"):
+            best_dir = runs_dir / state["best_hyp_id"]
+            if (best_dir / "score_report.json").is_file():
+                return best_dir
+            log.warning(
+                "state %s points at %s but no score_report there — falling back to last-produced eval",
+                state_path, best_dir,
+            )
+
     candidates: list[tuple[float, Path]] = []
     for child in runs_dir.iterdir() if runs_dir.is_dir() else []:
         if not child.is_dir() or child.name.startswith("_") or child.name.startswith("holdout"):
@@ -128,6 +149,11 @@ def _last_accepted_eval_run(runs_dir: Path) -> Path | None:
         return None
     candidates.sort(key=lambda t: t[0])
     return candidates[-1][1]
+
+
+# Backwards-compatible alias for existing tests; new code should use
+# ``_best_eval_run`` which is state-aware.
+_last_accepted_eval_run = _best_eval_run
 
 
 def _per_file_table(
@@ -317,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         log.info("dry-run: skipping chmod and evaluate; verifying glue only")
-        eval_run = _last_accepted_eval_run(runs_dir)
+        eval_run = _best_eval_run(runs_dir, summary_dir)
         print("dry-run ok — would evaluate %s and compare against %s" %
               (wav_dir, eval_run.name if eval_run else "<no eval run>"))
         return 0
@@ -339,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
 
         # 3. evaluate (judge.evaluate 동일 경로)
         from judge.evaluate import evaluate_batch  # local import — avoids loading GPU stack on smoke
-        eval_run = _last_accepted_eval_run(runs_dir)
+        eval_run = _best_eval_run(runs_dir, summary_dir)
         if eval_run is None:
             log.warning("no eval (0715) run found to compare against — holdout report will be partial")
             eval_score: dict[str, Any] = {}

@@ -14,7 +14,8 @@
 
 | 항목 | 값 |
 |------|-----|
-| Final `corpus_cer` | {{final_corpus_cer}} |
+| Best `corpus_cer` (`HarnessState.best_cer`) | {{final_corpus_cer}} |
+| Best hyp_id | `{{best_hyp_id}}` |
 | `target_cer` (수동 목표) | {{target_cer}} |
 | `baseline_cer` (faster-whisper, 앵커) | {{baseline_cer}} |
 | Target reached | {{target_reached}} |

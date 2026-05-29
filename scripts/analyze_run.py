@@ -30,9 +30,12 @@ log = logging.getLogger("analyze_run")
 
 # Names matched verbatim against `runs/<name>/` directory entries.
 _EXCLUDED_DIRNAMES = {"_summary", "_telemetry"}
-# Prefixes — covers `holdout_<unix_ts>` (evaluate_holdout output) plus any
-# future "_<bucket>" auxiliary directories.
-_EXCLUDED_PREFIXES = ("_", "holdout_", "holdout")
+# Prefixes — covers `holdout_<unix_ts>` (evaluate_holdout output), `manual_*`
+# / `dry_*` (smoke / dry-run by-products), `sigma_*` (Phase 1 σ measurement
+# runs), plus any future "_<bucket>" auxiliary directories. When --job-id is
+# supplied discovery uses the job-id prefix instead and ignores this list,
+# but the defaults still apply for the legacy no-job-id path.
+_EXCLUDED_PREFIXES = ("_", "holdout_", "holdout", "manual_", "dry_", "sigma_")
 _NOISE_DEFAULT_DELTA = 0.01  # absolute Δcer fallback when sigma is provisional
 _EVAL_BATCH = "AIG_녹취반출_20250715"
 
@@ -93,6 +96,7 @@ class IterRecord:
     score: dict[str, Any]
     per_file: list[dict[str, Any]]
     diagnosis: dict[str, Any] | None = None
+    diff_text: str = ""
     commit_sha: str | None = None
     commit_subject: str | None = None
     commit_ts: datetime | None = None
@@ -158,24 +162,37 @@ def _parse_iso(s: str | None) -> datetime | None:
         return None
 
 
-def discover_iterations(runs_dir: Path) -> list[IterRecord]:
+def discover_iterations(
+    runs_dir: Path,
+    job_id: str | None = None,
+) -> list[IterRecord]:
     """Walk ``runs/`` and load every hyp_id directory with a score_report.
 
-    Skips three classes of directory:
-      * exact names ``_summary`` / ``_telemetry``,
-      * anything starting with ``_`` (auxiliary buckets) or ``holdout``
-        (``evaluate_holdout`` produces ``holdout_<unix_ts>``),
-      * directories whose ``score_report.batch`` is not the eval batch —
-        defense in depth against future name conventions.
+    Two modes:
+
+      * **job-scoped** (``job_id`` given): only ``runs/<job_id>_iter_*/`` are
+        considered. This is the contract for any Phase 3 job that follows the
+        harness naming convention (``<job_id>_iter_NNN``) and is the only mode
+        guaranteed to produce a single-job REPORT free of cross-job pollution.
+      * **legacy** (``job_id`` is ``None``): the pre-harness behaviour kept for
+        smoke tests / ad-hoc analysis — skips ``_summary`` / ``_telemetry``,
+        any ``_*`` / ``holdout*`` / ``manual_*`` / ``dry_*`` / ``sigma_*``
+        prefix, and any directory whose ``score_report.batch`` is not the eval
+        batch.
     """
+    prefix = f"{job_id}_iter_" if job_id else None
     out: list[IterRecord] = []
     for child in sorted(runs_dir.iterdir() if runs_dir.is_dir() else []):
         if not child.is_dir():
             continue
-        if child.name in _EXCLUDED_DIRNAMES:
-            continue
-        if any(child.name.startswith(p) for p in _EXCLUDED_PREFIXES):
-            continue
+        if prefix is not None:
+            if not child.name.startswith(prefix):
+                continue
+        else:
+            if child.name in _EXCLUDED_DIRNAMES:
+                continue
+            if any(child.name.startswith(p) for p in _EXCLUDED_PREFIXES):
+                continue
         score = _read_json(child / "score_report.json")
         if score is None:
             continue
@@ -186,6 +203,8 @@ def discover_iterations(runs_dir: Path) -> list[IterRecord]:
             continue
         per_file = _read_jsonl(child / "per_file.jsonl")
         diagnosis = _read_json(child / "diagnosis_report.json")
+        diff_path = child / "candidate.diff"
+        diff_text = diff_path.read_text(encoding="utf-8") if diff_path.is_file() else ""
         produced_at = _parse_iso(score.get("produced_at")) or datetime.fromtimestamp(
             (child / "score_report.json").stat().st_mtime
         )
@@ -196,6 +215,7 @@ def discover_iterations(runs_dir: Path) -> list[IterRecord]:
                 score=score,
                 per_file=per_file,
                 diagnosis=diagnosis,
+                diff_text=diff_text,
             )
         )
     out.sort(key=lambda r: r.produced_at)
@@ -217,54 +237,45 @@ def _git(*args: str) -> str:
 
 
 def enrich_with_git(iters: list[IterRecord]) -> None:
-    """Best-effort: match each iter's produced_at to the nearest preceding commit.
+    """Attach commit metadata to each iter via subject-embedded hyp_id match.
 
-    Phase 3 autoresearch is expected to commit per hypothesis; the closest
-    earlier commit by timestamp is taken as the iteration's commit. This is a
-    heuristic — when autoresearch writes a `runs/<hyp_id>/commit.txt` sidecar
-    we prefer that instead.
+    The harness writes commit subjects of the form ``iterN: keep|reject <hyp_id>``
+    (`harness/runner.py::commit_iteration`), so each iter's commit can be
+    looked up exactly by searching the log for its own ``hyp_id``. Falling back
+    to nearest-timestamp matching (the previous heuristic) was off-by-one
+    against ``produced_at`` because the ``score_report.produced_at`` is written
+    *before* the commit lands, so ``ts <= target_unix`` picked the *previous*
+    iter's commit for a sizeable fraction of cases.
 
-    All comparisons go through unix-second integers (epoch-naive), which sidesteps
-    the local-vs-UTC ambiguity that ``datetime.fromtimestamp`` introduces on
-    non-UTC hosts.
+    If no commit subject contains the ``hyp_id`` (e.g. iter was generated but
+    never committed, or running with ``--manual``), the iter is simply left
+    without commit metadata — downstream classification falls back to the
+    iter's ``candidate.diff`` body.
     """
     log_out = _git(
         "log", "--all", "--pretty=format:%H%x09%ct%x09%s", "--date=iso"
     )
-    commits: list[tuple[str, int, str]] = []  # (sha, unix_ts, subject)
+    by_hyp: dict[str, tuple[str, int, str]] = {}
     for line in log_out.splitlines():
         try:
             sha, ts, subject = line.split("\t", 2)
-            commits.append((sha, int(ts), subject))
         except ValueError:
             continue
-    commits.sort(key=lambda t: t[1])
+        # Match the hyp_id substring; harness format guarantees it appears in
+        # the subject, and ``hyp_id`` (e.g. ``phase3_001_iter_009``) is unique
+        # per iter so collisions across iters are impossible.
+        for it in iters:
+            if it.hyp_id in subject and it.hyp_id not in by_hyp:
+                by_hyp[it.hyp_id] = (sha, int(ts), subject)
 
     for it in iters:
-        # 1. sidecar
-        sidecar = Path("runs") / it.hyp_id / "commit.txt"
-        if sidecar.is_file():
-            data = sidecar.read_text(encoding="utf-8").strip()
-            if data:
-                first, *rest = data.splitlines()
-                it.commit_sha = first.strip()
-                it.commit_subject = rest[0] if rest else None
-                continue
-        # 2. nearest preceding commit by unix-second timestamp.
-        # produced_at is the score_report's `datetime.now(UTC)` ISO string, so
-        # converting back to epoch seconds is unambiguous regardless of host TZ.
-        target = it.produced_at
-        if target.tzinfo is None:
-            target = target.replace(tzinfo=UTC)
-        target_unix = target.timestamp()
-        best: tuple[str, int, str] | None = None
-        for sha, ts, subject in commits:
-            if ts <= target_unix and (best is None or ts > best[1]):
-                best = (sha, ts, subject)
-        if best is not None:
-            it.commit_sha = best[0]
-            it.commit_ts = datetime.fromtimestamp(best[1], tz=UTC)
-            it.commit_subject = best[2]
+        match = by_hyp.get(it.hyp_id)
+        if match is None:
+            continue
+        sha, ts, subject = match
+        it.commit_sha = sha
+        it.commit_ts = datetime.fromtimestamp(ts, tz=UTC)
+        it.commit_subject = subject
 
 
 # --------------------------------------------------------------------------- #
@@ -309,7 +320,7 @@ def classify_iterations(
                     it.accepted = False
 
         it.guard_flags = _detect_guard_flags(it.score, baseline_guard)
-        it.category = _categorize(it.commit_subject)
+        it.category = _categorize(it.commit_subject, it.diff_text)
 
 
 def _detect_guard_flags(
@@ -350,11 +361,20 @@ def _detect_guard_flags(
     return flags
 
 
-def _categorize(commit_subject: str | None) -> str:
-    if not commit_subject:
+def _categorize(commit_subject: str | None, diff_text: str = "") -> str:
+    """Classify an iter into a lever family by regex match.
+
+    The harness commit subject (``iterN: keep|reject <hyp_id>``) carries no
+    semantic keywords by design — the actual lever lives in ``candidate.diff``
+    (and its added comment/docstring lines). Search both: subject first so a
+    rare keyword-bearing subject wins, then the diff body. The diff is
+    typically a small focused change so a single category match suffices.
+    """
+    haystack = " ".join(filter(None, (commit_subject, diff_text)))
+    if not haystack:
         return "unclassified"
     for name, regex in _CATEGORY_PATTERNS.items():
-        if regex.search(commit_subject):
+        if regex.search(haystack):
             return name
     return "unclassified"
 
@@ -692,9 +712,14 @@ def _reasoning_alignment(iters: list[IterRecord]) -> dict[str, Any]:
     mismatches: list[str] = []
     accepted = [it for it in iters if it.accepted]
     for prev, curr in zip(accepted, accepted[1:]):
-        subject = (curr.commit_subject or "").lower()
+        # Combine subject + diff body — harness commit subjects carry no
+        # keywords, so the diff (which holds the reasoning comment block) is
+        # the primary signal in practice.
+        haystack = " ".join(
+            filter(None, (curr.commit_subject, curr.diff_text))
+        ).lower()
         for keyword, (metric, sign) in _REASONING_RULES.items():
-            if keyword.lower() not in subject:
+            if keyword.lower() not in haystack:
                 continue
             prev_v = prev.metric(metric)
             curr_v = curr.metric(metric)
@@ -732,14 +757,38 @@ def render_report(
     template: str,
     job_id: str,
     holdout: dict[str, Any] | None = None,
+    state: dict[str, Any] | None = None,
 ) -> str:
-    """Substitute `{{...}}` variables in ``template`` from analyzed iters."""
+    """Substitute `{{...}}` variables in ``template`` from analyzed iters.
+
+    ``state`` is the parsed ``runs/_summary/<job_id>_state.json`` (the
+    ``HarnessState`` SSOT); when present its ``best_cer`` / ``best_hyp_id``
+    win over any locally-derived figure. The classifier still runs to populate
+    the timeline / category / guard tables, but the headline "best" number is
+    pulled from the harness so REPORT can never disagree with what the loop
+    actually accepted.
+    """
 
     baseline_guard = target_cer_json.get("guard_baseline") or {}
     classify_iterations(iters, baseline_guard, noise_floor_json)
 
-    final = iters[-1] if iters else None
-    final_cer = final.corpus_cer if final else None
+    # Best = harness state if available, else last classified-accepted iter.
+    # Never use ``iters[-1]`` blindly — a rejected last iter (extremely common
+    # under the harness's reject-on-no-improvement policy) would otherwise
+    # surface as the report's headline corpus_cer.
+    best_iter: IterRecord | None = None
+    if state and state.get("best_hyp_id"):
+        best_hyp = state["best_hyp_id"]
+        best_iter = next((it for it in iters if it.hyp_id == best_hyp), None)
+    if best_iter is None:
+        accepted_iters = [it for it in iters if it.accepted]
+        best_iter = accepted_iters[-1] if accepted_iters else (iters[-1] if iters else None)
+
+    final_cer: float | None
+    if state and isinstance(state.get("best_cer"), (int, float)):
+        final_cer = float(state["best_cer"])
+    else:
+        final_cer = best_iter.corpus_cer if best_iter else None
     target_cer = target_cer_json.get("target_cer")
     target_reached = (
         final_cer is not None and target_cer is not None and final_cer <= target_cer
@@ -765,7 +814,8 @@ def render_report(
 
     substitutions: dict[str, str] = {
         "job_id": job_id,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "best_hyp_id": best_iter.hyp_id if best_iter else "n/a",
         "total_wall_clock": cost["total_wall_clock"],
         "n_iterations_seen": str(n_total),
         "final_corpus_cer": _fmt(final_cer),
@@ -870,14 +920,33 @@ def _threshold_warnings(iters: list[IterRecord]) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def _autodetect_job_id(summary_dir: Path) -> str | None:
+    """Pick the unique ``<job_id>_state.json`` under ``runs/_summary/``.
+
+    Returns the job_id when exactly one state file exists, else ``None`` —
+    multiple state files mean the user has to disambiguate via ``--job-id``,
+    and zero files means there's no harness job to analyze.
+    """
+    if not summary_dir.is_dir():
+        return None
+    candidates = sorted(summary_dir.glob("*_state.json"))
+    if len(candidates) != 1:
+        return None
+    return candidates[0].name[: -len("_state.json")]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Phase 3 사후 분석 → REPORT.md")
     parser.add_argument("--runs-dir", default="runs/")
     parser.add_argument("--baseline", default="baseline/")
     parser.add_argument("--template", default="docs/templates/REPORT.md")
     parser.add_argument("--out", default="runs/_summary/REPORT.md")
-    parser.add_argument("--job-id", default=None,
-                        help="defaults to <runs-dir>'s last commit short sha or directory name")
+    parser.add_argument(
+        "--job-id", default=None,
+        help="harness job-id (prefix filter for runs/<job_id>_iter_*/ "
+             "+ key for runs/_summary/<job_id>_state.json). Auto-detected "
+             "from runs/_summary/*_state.json when exactly one exists.",
+    )
     parser.add_argument(
         "--holdout-report",
         default=None,
@@ -895,31 +964,46 @@ def main(argv: list[str] | None = None) -> int:
     baseline_dir = Path(args.baseline)
     template_path = Path(args.template)
     out_path = Path(args.out)
+    summary_dir = runs_dir / "_summary"
 
     target = _read_json(baseline_dir / "target_cer.json") or {}
     noise = _read_json(baseline_dir / "noise_floor.json")
     template = template_path.read_text(encoding="utf-8")
 
-    iters = discover_iterations(runs_dir)
+    job_id = args.job_id or _autodetect_job_id(summary_dir)
+    state: dict[str, Any] | None = None
+    if job_id:
+        state = _read_json(summary_dir / f"{job_id}_state.json")
+        if state is None:
+            log.warning(
+                "no state file at %s — REPORT will fall back to "
+                "classifier-derived best",
+                summary_dir / f"{job_id}_state.json",
+            )
+
+    iters = discover_iterations(runs_dir, job_id=job_id)
     if not iters:
-        log.warning("no iterations discovered under %s", runs_dir)
+        log.warning(
+            "no iterations discovered under %s (job_id=%s)", runs_dir, job_id
+        )
     enrich_with_git(iters)
 
     holdout = _read_json(Path(args.holdout_report)) if args.holdout_report else None
-    job_id = args.job_id or (_git("rev-parse", "--short", "HEAD").strip() or runs_dir.name)
+    job_id_display = job_id or (_git("rev-parse", "--short", "HEAD").strip() or runs_dir.name)
 
     report = render_report(
         iters=iters,
         target_cer_json=target,
         noise_floor_json=noise,
         template=template,
-        job_id=job_id,
+        job_id=job_id_display,
         holdout=holdout,
+        state=state,
     )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(report, encoding="utf-8")
-    print(f"wrote {out_path} ({len(iters)} iterations analyzed)")
+    print(f"wrote {out_path} ({len(iters)} iterations analyzed, job_id={job_id_display})")
     return 0
 
 

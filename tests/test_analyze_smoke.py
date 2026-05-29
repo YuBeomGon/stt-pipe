@@ -182,13 +182,13 @@ def synthetic_run(tmp_path: Path):
     # Trajectory: monotonic improvement → plateau → regression.
     base_time = datetime(2026, 5, 28, 10, 0, 0, tzinfo=UTC)
     sequence = [
-        ("iter_00", 0.90),
-        ("iter_01", 0.85),
-        ("iter_02", 0.83),
-        ("iter_03", 0.80),
-        ("iter_04", 0.80),  # plateau
-        ("iter_05", 0.85),  # regression
-        ("iter_06", 0.82),
+        ("smoke_iter_00", 0.90),
+        ("smoke_iter_01", 0.85),
+        ("smoke_iter_02", 0.83),
+        ("smoke_iter_03", 0.80),
+        ("smoke_iter_04", 0.80),  # plateau
+        ("smoke_iter_05", 0.85),  # regression
+        ("smoke_iter_06", 0.82),
     ]
     for i, (hyp_id, cer) in enumerate(sequence):
         _write_iter(
@@ -234,8 +234,10 @@ def test_analyze_run_renders_template(synthetic_run, monkeypatch):
     for hyp in (f"iter_0{i}" for i in range(7)):
         assert hyp in text
 
-    # Final corpus_cer is iter_06's value (0.82).
-    assert "0.8200" in text
+    # Best corpus_cer is smoke_iter_03's value (0.80) — the headline number
+    # tracks the running-best accepted iter, not the last-produced iter
+    # (smoke_iter_06 @ 0.82 is a regression that must NOT surface as "Best").
+    assert "0.8000" in text
 
 
 def test_category_distribution_sum_matches_accepted(synthetic_run, monkeypatch):
@@ -265,14 +267,14 @@ def test_category_distribution_sum_matches_accepted(synthetic_run, monkeypatch):
     assert sum(dist.values()) == n_accepted
 
     # Trajectory expectation: iters 0,1,2,3 accept (descending below 2σ=0.04 each).
-    # iter_04 plateau (Δ=0) → revert. iter_05 regression (Δ=+0.05) → revert.
-    # iter_06 (0.82 vs best 0.80, Δ=+0.02) → revert.
+    # smoke_iter_04 plateau (Δ=0) → revert. smoke_iter_05 regression (Δ=+0.05) → revert.
+    # smoke_iter_06 (0.82 vs best 0.80, Δ=+0.02) → revert.
     accepted_ids = [it.hyp_id for it in iters if it.accepted]
-    assert "iter_00" in accepted_ids
-    assert "iter_03" in accepted_ids
+    assert "smoke_iter_00" in accepted_ids
+    assert "smoke_iter_03" in accepted_ids
     # plateau / regression must NOT be in accepted
-    assert "iter_04" not in accepted_ids
-    assert "iter_05" not in accepted_ids
+    assert "smoke_iter_04" not in accepted_ids
+    assert "smoke_iter_05" not in accepted_ids
 
 
 def test_handles_no_iterations(tmp_path, monkeypatch):
