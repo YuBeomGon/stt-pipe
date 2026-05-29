@@ -1,0 +1,12 @@
+{
+  "eval_run": "autoresearch_iter50_20260529_120353",
+  "holdout_run": "holdout_1780063641",
+  "eval_cer": 0.1547845180628409,
+  "holdout_cer": 0.19357237063280663,
+  "delta_cer": 0.038787852569965725,
+  "sigma": 0.0,
+  "sigma_provisional": true,
+  "threshold": 0.01,
+  "overfit_suspected": true,
+  "produced_at": "2026-05-29T14:13:24.833753+00:00"
+}
