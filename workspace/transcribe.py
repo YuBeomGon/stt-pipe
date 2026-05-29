@@ -9,6 +9,7 @@ Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 
 from __future__ import annotations
 
+import librosa
 import numpy as np
 
 from frozen.asr_backend import generate, load, to_storage_view
@@ -23,15 +24,30 @@ _INITIAL_PROMPT_TEXT = (
 )
 
 
+def _vad_chunks(audio: np.ndarray, sr: int, max_seconds: int = 30) -> list[tuple[int, int]]:
+    """librosa.effects.split (top_db=30) → max_seconds 까지 합친 (start, end) 리스트."""
+    max_samples = max_seconds * sr
+    intervals = librosa.effects.split(audio, top_db=30)
+    if len(intervals) == 0:
+        return [(0, len(audio))]
+
+    chunks: list[tuple[int, int]] = []
+    cur_start, cur_end = int(intervals[0][0]), int(intervals[0][1])
+    for s, e in intervals[1:]:
+        s_i, e_i = int(s), int(e)
+        if e_i - cur_start <= max_samples:
+            cur_end = e_i
+        else:
+            chunks.append((cur_start, cur_end))
+            cur_start, cur_end = s_i, e_i
+    chunks.append((cur_start, cur_end))
+    return chunks
+
+
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
-    chunk_samples = 30 * sr
-    overlap_samples = 2 * sr
-    step_samples = chunk_samples - overlap_samples
-    n_chunks = max(
-        1, (max(0, len(audio) - overlap_samples) + step_samples - 1) // step_samples
-    )
+    chunks = _vad_chunks(audio, sr, max_seconds=30)
 
     sot_tokens = processor.tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
@@ -43,8 +59,8 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
 
     prev_tokens: list[int] = []
     texts = []
-    for i in range(n_chunks):
-        chunk = audio[i * step_samples : i * step_samples + chunk_samples]
+    for start, end in chunks:
+        chunk = audio[start:end]
         inputs = processor(chunk, sampling_rate=sr, return_tensors="np")
         features = to_storage_view(inputs.input_features)
 
