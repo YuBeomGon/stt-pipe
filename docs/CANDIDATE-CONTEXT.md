@@ -250,26 +250,59 @@ phase3_001 도 동일 환경에서 돌았으므로 본 baseline 은 phase3_001 �
   모델 처음부터 재구성 필요 (작업량 큼).
 - Email / git: 운영자 환경 의존이라 project 레벨 손 못 댐.
 
-### 7.3 결론 — phase3_002 진입 환경
+### 7.3 2차 정리 후 — 2026-05-29 (superpowers 플러그인 project-scope disable)
 
-| 항목 | 상태 |
-|---|---|
-| Candidate 가 받는 CLAUDE.md 본문 | gate 마커 + 운영자 chat-style 한정 (≈ 8 줄). LLM 이 gate 를 준수하면 무해 |
-| Candidate 가 받는 superpowers 훅 | **그대로** — A’ YAML emission 에 부정적 영향 가능성 잔존 |
-| Candidate 가 받는 email / git commits | **그대로** — 의사결정 영향 작음 (PII 우려만) |
-| Phase3_001 vs Phase3_002 환경 차이 | CLAUDE.md 본문만 (다른 4 누수는 동일) |
+**사이드카**: [`reports/2026-05-29_context_audit_no_superpowers.json`](reports/2026-05-29_context_audit_no_superpowers.json)
 
-**ablation 영향**: phase3_001 은 CLAUDE.md 본문 (특히 "짧고 간결" 규칙) 노출,
-phase3_002 는 gate 적용. 두 잡 비교 시 A’ 효과 + CLAUDE.md 정리 효과가
-같이 측정됨. 분리 위해서는 phase3_003 (A’ 동일, 누수 정리만 변화) 추가 필요.
-*혹은* phase3_001 의 prompt.md 들 분석으로 candidate 가 실제로 CLAUDE.md
-의 "짧게" 를 따랐는지 사후 검증 가능.
+**정리 내용**: `claude plugin disable superpowers@claude-plugins-official --scope project`
+→ `.claude/settings.json` 에 `"enabledPlugins": {"superpowers@claude-plugins-official": false}` 영구 등록.
+repo 동기화되므로 다른 운영자가 clone 해도 candidate session 에 superpowers
+가 자동 비활성. 운영자의 *user-scope* 활성은 그대로 — 다른 프로젝트의 claude
+세션은 영향 없음.
 
-**Probe 응답 한계** (양 차수 공통):
-- 첫 시도 Anthropic API 529 Overloaded 가능 (재시도 로직은 본 스크립트에
-  없음 — 운영자 수동 재시도).
-- LLM 자기 보고 → 거짓말/hallucinate 가능성 X 임을 *증명* 못 함. Probe 결과
-  는 *증거* 일 뿐, 결정적 검증 X.
+**누수 5 → 4 → 2**:
+
+| 누수 | 1 차 (7.2) | 2 차 (7.3) |
+|---|---|---|
+| CLAUDE.md auto-load | ✅ gate | ✅ |
+| superpowers SessionStart 훅 | ⚠️ 잔여 | ✅ **해소** (project-scope disable) |
+| 플러그인 inject | ⚠️ 잔여 | ✅ **해소** (위와 동일) |
+| 운영자 email PII | ⚠️ 잔여 | ⚠️ 잔여 (account 레벨) |
+| Git 최근 commit 5 개 | ⚠️ 잔여 | ⚠️ 잔여 (claude 기본 system prompt) |
+
+**부수 효과**:
+- `SKILLS_AVAILABLE_COUNT`: 43 → 29 (superpowers skills 14 개 제거)
+- `HOOKS_FIRED_AT_START: NO`
+- `PLUGIN_AUTO_INJECTED: NONE`
+
+### 7.4 잔여 2 누수 — 정리 시도 결과
+
+| 누수 | 시도 | 결과 |
+|---|---|---|
+| 운영자 email PII | `git config user.email` 확인 (`jake@aicess.ai`) — 다른 출처. `~/.claude/CLAUDE.md` 부재. `~/.claude/history.jsonl` / `file-history/` 에 historical session 메타에서 잡힘 → 실제 candidate prompt 의 `# userEmail` 은 **claude 계정 로그인 email** (`beomgon.yu@gmail.com`) 으로 추정 | ❌ project-level 차단 불가. 운영자 옵션: account email 변경 / logout + ANTHROPIC_API_KEY 만 사용 (큰 변경) |
+| Git 최근 commit | `claude -p --exclude-dynamic-system-prompt-sections` 시도 — git status 가 system prompt → first user message 로 **위치만 이동**, suppress X. audit 결과 동일 | ❌ project-level 정리 불가. 옵션: `--system-prompt` 로 default 전체 교체 (default 의 유용한 부분 잃음) / shallow clone cwd 로 잡 진행 (rollback / commit 기반 runner 흐름 깨짐) |
+
+### 7.5 결론 — phase3_002 진입 환경
+
+| 항목 | phase3_001 (잡 실행 당시) | phase3_002 (예정) |
+|---|---|---|
+| CLAUDE.md 본문 노출 | 운영자용 §1·§3·§4 전부 (41 줄) | gate + 운영자 chat-style 한정 (22 줄, LLM 이 gate 준수 시 무해) |
+| superpowers SessionStart 훅 | YES — "skills BEFORE response" 강제 | **NO** (project-scope disable) |
+| 사용 가능 skills | 43 | 29 |
+| MCP servers | claude.ai Google Drive 등 | 동일 |
+| 운영자 email PII | YES | YES (잔여) |
+| Git 최근 commit 5 개 | YES | YES (잔여) |
+
+**ablation 영향**: A’ + CLAUDE.md gate + superpowers disable 3 변수 묶음으로
+변경. phase3_001 (모두 무방비) ↔ phase3_002 (3 변수 동시 변경). 효과 분리
+원하면 phase3_003 (A’ 끄고 정리만, 또는 그 반대) 추가 잡 필요. 또는 phase3_001
+의 `prompt.md` / `claude_stdout.txt` 사후 분석으로 CLAUDE.md "짧게" 규칙 /
+superpowers 훅 영향 추정 가능.
+
+**Probe 응답 한계** (공통):
+- 첫 시도 Anthropic API 529 Overloaded 가능 (재시도 로직 X — 운영자 수동).
+- LLM 자기 보고 의존 → 거짓말/hallucinate 검증 불가. Probe 는 *증거* 일 뿐
+  결정적 검증 아님.
 
 <!-- AUDIT-RESULT-END -->
 

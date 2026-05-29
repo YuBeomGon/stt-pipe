@@ -1,6 +1,6 @@
 {
-  "_doc": "Phase 3 active. Activated via `bash scripts/swap_claude.sh` (사람 전용). `.claude.alt/` <-> `.claude/`. AUTORESEARCH.md §6/§7 함의에 따라 우리 scope 가드 4 layer 중 layer 3.",
   "permissions": {
+    "allow": [],
     "deny": [
       "Edit(./judge/**)",
       "Write(./judge/**)",
@@ -40,8 +40,7 @@
       "Bash(./scripts/swap_claude.sh*)",
       "Bash(chmod*data/raw/wav/AIG_녹취반출_20250813*)",
       "Bash(chmod*data/raw/label/AIG_녹취반출_20250813*)"
-    ],
-    "allow": []
+    ]
   },
   "hooks": {
     "PreToolUse": [
@@ -64,5 +63,9 @@
         ]
       }
     ]
+  },
+  "_doc": "Phase 3 active. Activated via `bash scripts/swap_claude.sh` (사람 전용). `.claude.alt/` <-> `.claude/`. AUTORESEARCH.md §6/§7 함의에 따라 우리 scope 가드 4 layer 중 layer 3.",
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": false
   }
 }
