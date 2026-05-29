@@ -97,7 +97,8 @@ why_different_from_last_5: <one short sentence>
 
 Field rules:
 
-- **`lane`** — exactly one of the five values above. Case-sensitive.
+- **`lane`** — exactly one of the five values above. Case-insensitive
+  (parser normalizes via `.strip().lower()` before checking).
 - **`diff_fingerprint`** — lowercase keyword tokens describing what your diff
   touches. Prefer tokens from the lane's example keyword set, but introduce
   new tokens when the mechanism is genuinely novel. **1 to 6 tokens.** More

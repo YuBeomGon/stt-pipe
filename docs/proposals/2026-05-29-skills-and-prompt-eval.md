@@ -29,8 +29,19 @@
 
 ### 2.1 내부 skill — `.claude/skills/aig/*`
 
-운영자 interactive 세션에서 invoke. candidate 세션엔 노출 X (현재 candidate 는
-`--disable-slash-commands` 로 catalog 28 → 1 축소 중이므로 자연 분리).
+운영자 interactive 세션에서 invoke. candidate 세션 노출 분리는 **별도 결정 필요**:
+
+현재 candidate = `claude -p` (README §2, runner default `--candidate-cmd "claude -p"`).
+즉 *모든 user-invocable skill catalog* (audit 측정: 29) + MCP servers
+(Google Drive 등) 가 candidate context 에 잔존. `--disable-slash-commands`
+플래그는 audit 실험에서만 사용 (catalog 1 까지 축소 확인) — production runner
+에는 미적용. 본 RFC 채택 시:
+
+- step A: runner 가 candidate-cmd 에 `--disable-slash-commands` 자동 부착
+  (또는 default cmd 변경) → 외부 skill catalog suppress
+- step B: `.claude/skills/aig/*` 를 *only* invokable 로 (만들면 catalog 1+)
+- 검증: audit 의 `SKILLS_AVAILABLE_COUNT` / `MCP_SERVERS_VISIBLE` 두 키 모두
+  0 또는 우리가 만든 것만 남는지
 
 | 스킬 | 무엇 | 대체 대상 |
 |---|---|---|

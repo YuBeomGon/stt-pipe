@@ -28,9 +28,7 @@
 | Phase 3 구조 그림 | [`PHASE3-LOOP.md`](PHASE3-LOOP.md) | 보조 문서, 정본 아님 |
 | candidate runtime profile (역할·접근법·응답 포맷) | [`../harness/prompts/candidate.md`](../harness/prompts/candidate.md) | runner 가 prompt 에 inline. 변경 = candidate 행동 변경 |
 | candidate 컨텍스트 (PUSH/AUTO-PUSH/PULL) + 감사 | [`CANDIDATE-CONTEXT.md`](CANDIDATE-CONTEXT.md) | `claude -p` 가 자동 로드하는 것 + 검증 스크립트 + 누수 baseline |
-| harness 변경 제안 (RFC) | [`proposals/`](proposals/) | 채택 후 정본 갱신 + historical 유지 |
-| Accepted: A' candidate runtime | [`proposals/2026-05-29-agent-design.md`](proposals/2026-05-29-agent-design.md) | §11 Addendum 에 RFC 외 audit 인프라 회고 |
-| Draft: 내부 skill/agent + prompt-eval | [`proposals/2026-05-29-skills-and-prompt-eval.md`](proposals/2026-05-29-skills-and-prompt-eval.md) | 본문은 phase3_002 결과 후 |
+| harness 변경 제안 (RFC) — *결정 이력 only, 정본 X* | [`proposals/`](proposals/) | 채택되면 §2 의 해당 정본 (PHASE3-PLAN / CANDIDATE-CONTEXT / candidate.md) 에 흡수. 진행 중 목록은 §5 |
 | 세션 종료 인계 메모 | [`status/`](status/) | 날짜별 스냅샷 |
 | 실제 iteration 로그 | [`../runs/_summary/HISTORY.md`](../runs/_summary/HISTORY.md) | 실험 기록 정본 |
 | 종료 후 종합 리포트 | [`reports/`](reports/) | `<job_id>_<KIND>_<YYYY-MM-DD>.{md,json}` |
@@ -67,3 +65,15 @@
 
 문서와 코드가 충돌하면, 정책 충돌은 정본 문서에서 먼저 고치고 구현을 맞춘다.
 실험 결과 충돌은 `score_report.json`과 `runs/_summary/HISTORY.md`를 우선한다.
+
+---
+
+## 5. 결정 이력 (proposals)
+
+| 상태 | proposal | 흡수 위치 |
+|---|---|---|
+| Accepted | [`proposals/2026-05-29-agent-design.md`](proposals/2026-05-29-agent-design.md) — A' candidate runtime | PHASE3-PLAN §2/§4/§5/§7, harness/prompts/candidate.md, scripts/analyze_run.py D 축. §11 Addendum 에 RFC 외 audit 인프라 회고 |
+| Draft | [`proposals/2026-05-29-skills-and-prompt-eval.md`](proposals/2026-05-29-skills-and-prompt-eval.md) — 내부 skill/agent + prompt-eval | 채택 시 .claude/skills/aig/, runner.py default cmd, README workflow. 본문은 phase3_002 결과 후 |
+
+proposal 은 *결정 이력* 이지 운영 정본이 아니다. 운영 정본은 §2 표 (특히
+PHASE3-PLAN, CANDIDATE-CONTEXT, `harness/prompts/candidate.md`) 에만 둔다.

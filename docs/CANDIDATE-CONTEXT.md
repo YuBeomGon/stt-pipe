@@ -260,15 +260,26 @@ repo 동기화되므로 다른 운영자가 clone 해도 candidate session 에 s
 가 자동 비활성. 운영자의 *user-scope* 활성은 그대로 — 다른 프로젝트의 claude
 세션은 영향 없음.
 
-**누수 5 → 4 → 2**:
+**누수 정리 경과**:
 
 | 누수 | 1 차 (7.2) | 2 차 (7.3) |
 |---|---|---|
-| CLAUDE.md auto-load | ✅ gate | ✅ |
+| CLAUDE.md auto-load | ⚠️ mitigated (gate, auto-load 잔존) | ⚠️ mitigated (동일) |
 | superpowers SessionStart 훅 | ⚠️ 잔여 | ✅ **해소** (project-scope disable) |
 | 플러그인 inject | ⚠️ 잔여 | ✅ **해소** (위와 동일) |
 | 운영자 email PII | ⚠️ 잔여 | ⚠️ 잔여 (account 레벨) |
 | Git 최근 commit 5 개 | ⚠️ 잔여 | ⚠️ 잔여 (claude 기본 system prompt) |
+| Skills catalog (29) | — | ⚠️ 잔여 (default `claude -p`, `--disable-slash-commands` 미적용) |
+| MCP servers (Google Drive 등) | — | ⚠️ 잔여 (위와 동일 — production runner 미정리) |
+
+CLAUDE.md 행이 "✅" 아닌 이유: gate 는 *제거* 가 아니라 *완화* (mitigation).
+파일은 여전히 system prompt 에 auto-load 되고, LLM 이 본문 안의 "이 prompt 는
+무시하라" 지시를 *읽고 따르길* 기대하는 협조 의존 안전 장치. CLAUDE.md 가 커지면
+gate 가 의미 흐려질 수 있고, 모델이 gate 를 무시할 수도 있음. audit 가
+gate marker 있으면 leak 에서 제외하는 것도 *진짜 차단 아닌 known-safe 표시*
+(자세한 코드: `scripts/audit_candidate_context.py::detect_leaks`).
+
+Skills/MCP 행은 proposal-2 (skills-and-prompt-eval) §2.1 에서 처리 예정.
 
 **부수 효과**:
 - `SKILLS_AVAILABLE_COUNT`: 43 → 29 (superpowers skills 14 개 제거)
@@ -279,7 +290,7 @@ repo 동기화되므로 다른 운영자가 clone 해도 candidate session 에 s
 
 | 누수 | 시도 | 결과 |
 |---|---|---|
-| 운영자 email PII | `git config user.email` 확인 (`jake@aicess.ai`) — 다른 출처. `~/.claude/CLAUDE.md` 부재. `~/.claude/history.jsonl` / `file-history/` 에 historical session 메타에서 잡힘 → 실제 candidate prompt 의 `# userEmail` 은 **claude 계정 로그인 email** (`beomgon.yu@gmail.com`) 으로 추정 | ❌ project-level 차단 불가. 운영자 옵션: account email 변경 / logout + ANTHROPIC_API_KEY 만 사용 (큰 변경) |
+| 운영자 email PII | 출처 분리 확인: `git config user.email` (operator-specific) ≠ candidate prompt 의 `# userEmail`. 후자는 **claude 계정 로그인 email** 로 추정 (`~/.claude/CLAUDE.md` 부재, `~/.claude/history.jsonl` 메타에서만 잡힘). 실제 값은 audit JSON 산출물에서 직접 확인 가능, 본 정본 문서엔 노출하지 않음 | ❌ project-level 차단 불가. 운영자 옵션: account email 변경 / logout + ANTHROPIC_API_KEY 만 사용 (큰 변경) |
 | Git 최근 commit | `claude -p --exclude-dynamic-system-prompt-sections` 시도 — git status 가 system prompt → first user message 로 **위치만 이동**, suppress X. audit 결과 동일 | ❌ project-level 정리 불가. 옵션: `--system-prompt` 로 default 전체 교체 (default 의 유용한 부분 잃음) / shallow clone cwd 로 잡 진행 (rollback / commit 기반 runner 흐름 깨짐) |
 
 ### 7.5 결론 — phase3_002 진입 환경

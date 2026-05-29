@@ -112,13 +112,17 @@ Whisper() ) 이 작동함을 확인한 셈.
 ### 3.7 candidate 컨텍스트 감사 — `python3 scripts/audit_candidate_context.py`
 
 `claude -p` 가 candidate session 에 *자동* 주입하는 것 (CLAUDE.md, 플러그인
-SessionStart 훅, PII, git commits) 을 probe 로 확인하고 누수가 있으면 잡 진입을
-차단. 정본은 [`CANDIDATE-CONTEXT.md`](CANDIDATE-CONTEXT.md), 추가 도입 경위는
+SessionStart 훅, PII, git commits, skills/MCP catalog) 을 probe 로 확인.
+정본은 [`CANDIDATE-CONTEXT.md`](CANDIDATE-CONTEXT.md), 추가 도입 경위는
 [`proposals/2026-05-29-agent-design.md`](proposals/2026-05-29-agent-design.md) §11.
 
-산출: `docs/reports/<YYYY-MM-DD>_context_audit.json`. 누수 0 → exit 0. 누수
-1 이상 → exit 1 + stderr 한 줄 요약. 잔여 누수 2 (email PII / git commits) 는
-`_LEAK_RULES` 외 (project 레벨 정리 불가, 운영 합의로 허용).
+산출: `docs/reports/<YYYY-MM-DD>_context_audit.json`. **잔여 누수 (email PII,
+git recent commits) 가 `_LEAK_RULES` 안에 있어 정리 시점에 audit 는 항상
+exit 1** — 즉 exit code 는 *경고* 로 취급하고 잡 진입을 자동 차단하지 않는다
+([`CANDIDATE-CONTEXT.md`](CANDIDATE-CONTEXT.md) §6.4 와 동일). 운영자는 직전
+audit JSON 과 diff 해 *신규* 누수만 감시 (예: 새 플러그인 자동 활성, 새 훅
+fire). 임계 누수 (CLAUDE.md gate 깨짐, 새 SessionStart 훅 등) 는 사람이 잡 전
+정리해야 한다.
 
 ### 3.8 자체 harness dry-run 1 iter
 
