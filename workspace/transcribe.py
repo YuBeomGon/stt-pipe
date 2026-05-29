@@ -27,8 +27,13 @@ _TASK_TOKEN = "<|transcribe|>"
 _CHUNK_SECONDS = 30
 # Overlap consecutive windows so a word/phrase straddling a 30s boundary is
 # captured whole in at least one chunk and the following chunk gets lead-in
-# context instead of starting mid-utterance.
-_OVERLAP_SECONDS = 3
+# context instead of starting mid-utterance. A 3s overlap still leaves many
+# chunks starting mid-word on the dense continuous-speech files (longest speech
+# up to ~234s on 0715), the dominant deletion source; widening to 5s gives each
+# chunk more lead-in context so it under-emits less. The duplicated overlap text
+# is removed at the join by ``_drop_overlap`` so insertions stay flat, and the
+# ~8% extra chunks keep runtime within the budget.
+_OVERLAP_SECONDS = 5
 
 
 def _norm(word: str) -> str:
