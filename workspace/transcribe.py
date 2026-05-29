@@ -1,15 +1,21 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Overlapping chunked decode: split audio into Whisper's native 30-second
-windows that overlap by a few seconds, decode each sequentially (batch=1),
+Silence-snapped overlapping chunked decode: split audio into Whisper's native
+30-second windows, but place each window's start at the quietest point near the
+nominal stride instead of on a fixed grid, decode each sequentially (batch=1),
 then dedup the repeated boundary words and join. Whisper's feature extractor
 pads/truncates every call to a fixed 30s window, so a single call drops
-everything past the first 30s. Hard, non-overlapping 30s cuts slice
-mid-utterance — worst on the near-continuous dense-speech files (longest
-speech up to 234s on 0715), where a chunk that *starts* mid-word lacks the
-lead-in context Whisper needs and under-emits, the dominant deletion source.
-Overlapping the windows makes each boundary appear whole inside one chunk;
-the repeated overlap text is removed at the join so it adds no insertions.
+everything past the first 30s. Fixed-grid 25s strides land boundaries at
+arbitrary points — frequently mid-utterance on the near-continuous dense-speech
+files (longest speech up to 234s on 0715), where a chunk that *starts* mid-word
+lacks the lead-in context Whisper needs and under-emits; that under-emission is
+the dominant deletion source (every 0715 file has length_ratio < 1.0 with
+hallucination/insertion ~0). Snapping each boundary to a nearby low-energy frame
+makes chunks begin in a natural pause with a clean onset, so the model stops
+dropping the lead-in of each window. The search window is centred on the nominal
+stride and only a couple seconds wide, so the chunk count — and therefore the
+runtime — stays essentially unchanged, and the variable overlap is still removed
+at the join by ``_drop_overlap``.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -25,15 +31,19 @@ _TASK_TOKEN = "<|transcribe|>"
 
 # Whisper's fixed analysis window is 30s; chunk the waveform to match it.
 _CHUNK_SECONDS = 30
-# Overlap consecutive windows so a word/phrase straddling a 30s boundary is
-# captured whole in at least one chunk and the following chunk gets lead-in
-# context instead of starting mid-utterance. A 3s overlap still leaves many
-# chunks starting mid-word on the dense continuous-speech files (longest speech
-# up to ~234s on 0715), the dominant deletion source; widening to 5s gives each
-# chunk more lead-in context so it under-emits less. The duplicated overlap text
-# is removed at the join by ``_drop_overlap`` so insertions stay flat, and the
-# ~8% extra chunks keep runtime within the budget.
+# Overlap consecutive windows so a word/phrase straddling a boundary is captured
+# whole in at least one chunk and the following chunk gets lead-in context
+# instead of starting mid-utterance. The duplicated overlap text is removed at
+# the join by ``_drop_overlap``.
 _OVERLAP_SECONDS = 5
+# Half-width of the window (seconds) searched around each nominal boundary for
+# the quietest frame to snap to. Kept small so chunk starts stay near the
+# nominal stride: the chunk count, and thus the runtime, barely moves, while the
+# boundary still lands in a pause rather than mid-word. The ~±2s wobble in
+# stride keeps the overlap within the few-words range ``_drop_overlap`` handles.
+_BOUNDARY_SEARCH_SECONDS = 2.0
+# Frame length (seconds) for the coarse RMS energy used to locate pauses.
+_ENERGY_FRAME_SECONDS = 0.03
 
 
 def _norm(word: str) -> str:
@@ -58,6 +68,25 @@ def _drop_overlap(words: list[str], new_words: list[str], max_overlap: int = 24)
     return new_words
 
 
+def _quiet_boundary(audio: np.ndarray, center: int, radius: int, frame: int) -> int:
+    """Return the sample index of the lowest-energy frame near ``center``.
+
+    Searches frames within ``[center - radius, center + radius]`` and returns the
+    start of the quietest one — the natural pause to begin the next chunk at. If
+    the search region is too short to hold a frame (e.g. dense audio at the tail),
+    falls back to ``center`` so the loop keeps making forward progress.
+    """
+    lo = max(0, center - radius)
+    hi = min(audio.shape[0], center + radius)
+    region = audio[lo:hi]
+    n_frames = region.shape[0] // frame
+    if n_frames < 1:
+        return center
+    frames = region[: n_frames * frame].reshape(n_frames, frame)
+    energy = np.mean(frames.astype(np.float32) ** 2, axis=1)
+    return lo + int(np.argmin(energy)) * frame
+
+
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
@@ -70,10 +99,14 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         return ""
 
     overlap_len = _OVERLAP_SECONDS * sr
-    stride = max(chunk_len - overlap_len, 1)
+    nominal_stride = max(chunk_len - overlap_len, 1)
+    radius = int(_BOUNDARY_SEARCH_SECONDS * sr)
+    frame = max(int(_ENERGY_FRAME_SECONDS * sr), 1)
+    n = audio.shape[0]
 
     words: list[str] = []
-    for start in range(0, audio.shape[0], stride):
+    start = 0
+    while start < n:
         chunk = audio[start : start + chunk_len]
 
         inputs = processor(
@@ -83,7 +116,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
-        # Every 0715 file is deletion-dominated (length_ratio 0.32–0.81, all
+        # Every 0715 file is deletion-dominated (length_ratio 0.50–0.96, all
         # < 1.0) while hallucination/insertion stays ~0 — the model under-emits
         # on this long-form conversational audio. length_penalty > 1 biases the
         # beam toward longer hypotheses, directly shrinking deletions; it is
@@ -98,12 +131,18 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
 
         token_ids = results[0].sequences_ids[0]
         text = processor.tokenizer.decode(token_ids, skip_special_tokens=True).strip()
-        if not text:
-            continue
+        if text:
+            new_words = text.split()
+            if words:
+                new_words = _drop_overlap(words, new_words)
+            words.extend(new_words)
 
-        new_words = text.split()
-        if words:
-            new_words = _drop_overlap(words, new_words)
-        words.extend(new_words)
+        if start + chunk_len >= n:
+            break
+        # Advance by the nominal stride, then snap the next start back/forward to
+        # the quietest nearby frame so the chunk begins in a pause. The minimum
+        # possible next start is ``nominal_stride - radius`` ahead, so progress is
+        # always strictly forward and the loop terminates.
+        start = _quiet_boundary(audio, start + nominal_stride, radius, frame)
 
     return " ".join(words)
