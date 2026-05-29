@@ -122,6 +122,14 @@ Hard fail:
 - `length_ratio.p05 < 0.10`
 - `length_ratio.p95 > 5.0`
 - `total_inference_time_s > baseline_time * RUNTIME_HARD_MULTIPLIER`
+- verify 직후 `workspace/transcribe.py` 와 `runs/<hyp_id>/` 밖에 변경 (`runs/_summary/`, `baseline/`, `docs/`, `judge/`, `frozen/` 등) 가 발견되면 reject + rollback. candidate 의 `transcribe()` 가 verify 중 임의 파일 I/O 로 정본을 오염시키는 것을 막는다.
+
+Static guard 한계:
+- `harness.verify.check_workspace_static` 의 AST/regex 검사는 **best-effort** 다. literal `import ctranslate2`, `from transformers import X`, `import frozen.asr_backend as f`, `__import__("frozen.asr_backend")`, `importlib.import_module("frozen.asr_backend")` 같은 명시적 패턴은 잡지만, 다음과 같은 *동적* 우회는 정적으로 차단 불가능하다:
+  - 문자열 조합 후 `importlib.import_module(...)` 호출 (예: `"froz" + "en.asr_backend"`)
+  - `getattr(__builtins__, "__import__")(...)`, `eval(...)`, `exec(...)`, `compile(...)`
+  - `sys.modules` 직조작
+- 따라서 동적 import / `eval` / `exec` / `__builtins__` 우회는 **운영 규약상 금지**이며, 후보 코드 review (사람 또는 candidate 생성자) 의 책임이다. static guard 만으로 안전하다고 가정하지 않는다.
 
 Quality budget:
 - hallucination, repetition, length, coverage가 baseline guard 분포보다 크게 악화되면

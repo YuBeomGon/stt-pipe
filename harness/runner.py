@@ -96,6 +96,30 @@ def disallowed_candidate_paths(
     return out
 
 
+def disallowed_post_verify_paths(
+    statuses: list[GitPathStatus],
+    config: RunnerConfig,
+    hyp_id: str,
+) -> list[GitPathStatus]:
+    """Paths the candidate must not have created/modified during verify.
+
+    `judge.evaluate` runs candidate-controlled `workspace.transcribe`, which
+    can perform arbitrary file I/O. After verify we must catch writes to
+    `runs/_summary/`, `baseline/`, `docs/`, etc. BEFORE reading baseline/noise
+    for the keep/success decision — otherwise a poisoned baseline could
+    influence the policy. Legitimate verify output (`runs/<hyp_id>/*`) is allowed.
+    """
+    hyp_run_dir = ("runs", hyp_id)
+    out: list[GitPathStatus] = []
+    for status in statuses:
+        if status.path == config.allowed_path:
+            continue
+        if status.path.parts[: len(hyp_run_dir)] == hyp_run_dir:
+            continue
+        out.append(status)
+    return out
+
+
 def ensure_worktree_ready(config: RunnerConfig) -> None:
     statuses = git_status(config.repo_root)
     disallowed = disallowed_candidate_paths(statuses, config)
@@ -378,6 +402,38 @@ def run_iteration(
         )
     )
     verify_result = verifier(hyp_id)
+
+    # Post-verify scope re-check. judge.evaluate runs candidate-controlled
+    # workspace.transcribe, so the candidate could have written to runs/_summary/,
+    # baseline/, docs/, etc. during verify. Catch this BEFORE reading baseline
+    # and noise — otherwise a poisoned baseline could influence the decision and
+    # a poisoned HISTORY could be committed by commit_iteration.
+    post_verify_statuses = git_status(repo_root)
+    post_violations = disallowed_post_verify_paths(post_verify_statuses, config, hyp_id)
+    if post_violations:
+        rollback_paths(repo_root, candidate_owned_statuses(post_verify_statuses, config))
+        paths = ", ".join(str(status.path) for status in post_violations)
+        result = IterationResult(
+            hyp_id=hyp_id,
+            status="reject",
+            decision=None,
+            verify_result=verify_result,
+            reason=f"verify 중 scope 위반: {paths}",
+        )
+        append_event(
+            str(state.iteration),
+            hyp_id,
+            "NA",
+            "NA",
+            "reject",
+            _history_body(result),
+            repo_root=repo_root,
+        )
+        state.save(state_path)
+        if config.commit_results:
+            commit_iteration(config, state_path, "reject", hyp_id, state.iteration)
+        return result
+
     baseline = _read_json(repo_root / config.baseline_file)
     noise = _read_json(repo_root / config.noise_floor_file)
 

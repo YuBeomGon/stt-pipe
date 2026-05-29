@@ -5,7 +5,10 @@ Unit tests for Phase 3 harness keep/reject/success policy.
 
 from __future__ import annotations
 
+import json
 import math
+
+import pytest
 
 from harness.policy import PolicyConfig, decide_candidate, improvement_threshold
 from harness.state import HarnessState
@@ -81,3 +84,21 @@ def test_state_save_replaces_without_leaving_temp_file(tmp_path) -> None:
     assert loaded.iteration == 2
     assert loaded.best_cer == 0.39
     assert not path.with_name("state.json.tmp").exists()
+
+
+def test_state_load_raises_on_corrupt_json(tmp_path) -> None:
+    """Corrupt state must fail loud rather than silently reset — otherwise a
+    25-iter job resumes from iteration 0 and loses best_cer."""
+    path = tmp_path / "state.json"
+    path.write_text("{not valid json", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        HarnessState.load(path)
+
+
+def test_state_load_raises_on_missing_required_field(tmp_path) -> None:
+    """A JSON-valid state file without job_id is corrupt at the schema layer
+    and must raise rather than silently fabricate an empty job."""
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"iteration": 5}), encoding="utf-8")
+    with pytest.raises(TypeError):
+        HarnessState.load(path)
