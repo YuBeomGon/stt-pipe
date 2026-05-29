@@ -24,9 +24,12 @@ _SNAP_WINDOW_SECONDS = 0.05
 
 def _silence_snapped_boundaries(audio: np.ndarray, sr: int) -> list[int]:
     """Chunk boundaries near each 30s mark, snapped to the lowest-energy
-    (quietest) sample within a +/-3s search window so cuts land in silence
-    instead of mid-word. Audio remains fully covered and the chunk count is
-    unchanged, so runtime stays flat."""
+    (quietest) sample within a backward-only search window (target-3s .. target)
+    so cuts land in silence instead of mid-word *and* never exceed the 30s
+    Whisper window. Searching forward could place a cut up to 3s past the 30s
+    mark, but the feature extractor truncates anything beyond 30s, silently
+    dropping the chunk tail (the systematic deletion seen as length_ratio<1).
+    Audio remains fully covered."""
     n = len(audio)
     chunk_len = _CHUNK_SECONDS * sr
     if n <= chunk_len:
@@ -42,7 +45,7 @@ def _silence_snapped_boundaries(audio: np.ndarray, sr: int) -> list[int]:
     while pos + chunk_len < n:
         target = pos + chunk_len
         lo = max(pos + half + 1, target - search)
-        hi = min(n - half - 1, target + search)
+        hi = min(n - half - 1, target)
         if hi <= lo:
             cut = target
         else:
