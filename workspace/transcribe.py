@@ -28,6 +28,8 @@ Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 
 from __future__ import annotations
 
+import zlib
+
 import numpy as np
 
 from frozen.asr_backend import generate, load, to_storage_view
@@ -37,6 +39,62 @@ _TASK_TOKEN = "<|transcribe|>"
 _CHUNK_SECONDS = 30
 _TS_RESOLUTION = 0.02  # seconds per Whisper timestamp token
 _MIN_ADVANCE_SECONDS = 2.0  # guard against degenerate tiny advances (progress + runtime)
+
+# Temperature-fallback gate (openai-whisper / faster-whisper generate_with_fallback).
+_FALLBACK_TEMPERATURES = (0.0, 0.4, 0.8)
+_LOGPROB_THRESHOLD = -1.0  # results[0].scores[0] below this => low-confidence window
+_COMPRESSION_RATIO_THRESHOLD = 2.4  # text too repetitive => degenerate decode
+
+
+def _compression_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    data = text.encode("utf-8")
+    return len(data) / len(zlib.compress(data))
+
+
+def _decode_with_fallback(features, prompt_tokens, tokenizer):
+    """Decode one window at temp 0 (beam search); if the decode fails the
+    avg-logprob / compression-ratio quality gate, escalate temperature sampling
+    and keep the best-scoring hypothesis. Only triggered windows pay extra
+    decode passes, so runtime stays near the single-pass cost on clean audio."""
+    best_tokens = None
+    best_score = None
+    for temp in _FALLBACK_TEMPERATURES:
+        if temp == 0.0:
+            results = generate(
+                features,
+                [prompt_tokens],
+                beam_size=5,
+                sampling_temperature=0.0,
+                return_scores=True,
+            )
+        else:
+            results = generate(
+                features,
+                [prompt_tokens],
+                beam_size=1,
+                sampling_topk=0,
+                sampling_temperature=temp,
+                return_scores=True,
+            )
+
+        token_ids = results[0].sequences_ids[0]
+        score = results[0].scores[0]
+        text = tokenizer.decode(token_ids, skip_special_tokens=True)
+
+        if best_score is None or score > best_score:
+            best_tokens, best_score = token_ids, score
+
+        needs_fallback = (
+            score < _LOGPROB_THRESHOLD
+            or _compression_ratio(text) > _COMPRESSION_RATIO_THRESHOLD
+        )
+        if not needs_fallback:
+            return token_ids
+
+    # Every temperature tripped the gate: keep the highest-scoring attempt.
+    return best_tokens
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -64,14 +122,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
-        results = generate(
-            features,
-            [prompt_tokens],
-            beam_size=5,
-            sampling_temperature=0.0,
-        )
-
-        token_ids = results[0].sequences_ids[0]
+        token_ids = _decode_with_fallback(features, prompt_tokens, processor.tokenizer)
 
         # Index of the last segment-closing timestamp token in this window.
         last_ts_idx = None
