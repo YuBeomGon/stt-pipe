@@ -1,6 +1,6 @@
 {
   "target_cer": 0.1,
-  "baseline_cer": 0.43197462663158076,
+  "baseline_cer": 0.46850743809408474,
   "macro_cer": 0.46850743809408474,
   "num_files": 11,
   "num_files_scored": 11,
