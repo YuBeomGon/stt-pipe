@@ -17,27 +17,38 @@ _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 
 
+_CHUNK_SECONDS = 30
+
+
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
-
-    inputs = processor(
-        audio,
-        sampling_rate=sr,
-        return_tensors="np",
-    )
-    features = to_storage_view(inputs.input_features)
 
     prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
     )
 
-    results = generate(
-        features,
-        [prompt_tokens],
-        beam_size=1,
-        sampling_temperature=0.0,
-    )
+    chunk_len = _CHUNK_SECONDS * sr
+    pieces = []
+    for start in range(0, len(audio), chunk_len):
+        chunk = audio[start : start + chunk_len]
 
-    token_ids = results[0].sequences_ids[0]
-    text = processor.tokenizer.decode(token_ids, skip_special_tokens=True)
-    return text
+        inputs = processor(
+            chunk,
+            sampling_rate=sr,
+            return_tensors="np",
+        )
+        features = to_storage_view(inputs.input_features)
+
+        results = generate(
+            features,
+            [prompt_tokens],
+            beam_size=1,
+            sampling_temperature=0.0,
+        )
+
+        token_ids = results[0].sequences_ids[0]
+        pieces.append(
+            processor.tokenizer.decode(token_ids, skip_special_tokens=True)
+        )
+
+    return " ".join(piece.strip() for piece in pieces if piece.strip())
