@@ -23,7 +23,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
     chunk_samples = 30 * sr
-    overlap_samples = 1 * sr
+    overlap_samples = 2 * sr
     step_samples = chunk_samples - overlap_samples
     n_chunks = max(
         1, (max(0, len(audio) - overlap_samples) + step_samples - 1) // step_samples
