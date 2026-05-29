@@ -5,6 +5,8 @@ Unit tests for Phase 3 harness keep/reject/success policy.
 
 from __future__ import annotations
 
+import math
+
 from harness.policy import PolicyConfig, decide_candidate, improvement_threshold
 from harness.state import HarnessState
 
@@ -49,6 +51,18 @@ def test_decide_reject_when_improvement_below_threshold() -> None:
     assert decision.threshold == 0.01
 
 
+def test_decide_rejects_non_finite_corpus_cer() -> None:
+    decision = decide_candidate(
+        report={"corpus_cer": math.nan, "total_inference_time_s": 90.0},
+        baseline={"target_cer": 0.10, "total_inference_time_s": 100.0},
+        best_cer=None,
+        sigma=0.0,
+        sigma_is_provisional=True,
+    )
+    assert decision.status == "reject"
+    assert "non-finite" in decision.reason
+
+
 def test_state_round_trip(tmp_path) -> None:
     path = tmp_path / "state.json"
     state = HarnessState(job_id="job", iteration=2, best_cer=0.39, best_hyp_id="iter_2")
@@ -57,3 +71,13 @@ def test_state_round_trip(tmp_path) -> None:
     loaded = HarnessState.load(path)
     assert loaded == state
 
+
+def test_state_save_replaces_without_leaving_temp_file(tmp_path) -> None:
+    path = tmp_path / "state.json"
+    HarnessState(job_id="job", iteration=1, best_cer=0.42).save(path)
+    HarnessState(job_id="job", iteration=2, best_cer=0.39).save(path)
+
+    loaded = HarnessState.load(path)
+    assert loaded.iteration == 2
+    assert loaded.best_cer == 0.39
+    assert not path.with_name("state.json.tmp").exists()

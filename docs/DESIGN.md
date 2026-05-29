@@ -101,7 +101,7 @@ aig/
 │   │   └── _telemetry/
 │   │       ├── <file_id>.jsonl   # 정본 segment telemetry (optional)
 │   │       └── <file_id>.srt     # JSONL 에서 일방향 변환된 사람용 view
-│   └── _summary/                # Phase 3 종료 시 산출 (REPORT.md, HOLDOUT.md)
+│   └── _summary/                # harness 전용 HISTORY/state + 종료 산출
 ├── .claude/                    # legacy/autoresearch guard 자산 — 정리 대상
 │   ├── settings.json           # tool permissions allowlist (Edit/Write 대상 제한)
 │   ├── hooks/                  # PreToolUse 훅 — judge/, frozen/, baseline/,

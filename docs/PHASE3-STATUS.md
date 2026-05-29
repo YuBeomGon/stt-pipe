@@ -40,6 +40,11 @@
 
 - [x] `pytest tests/test_harness_runner.py tests/test_harness_policy.py tests/test_verify_check.py`
 - [x] 전체 pytest
+- [x] review C1: candidate `runs/_summary/` 수정 scope 위반/rollback 검증 — PLAN §2, §7
+- [x] review C2/I3: NaN/Inf 및 score schema 누락 hard-fail 검증 — PLAN §5, §6
+- [x] review C3: backend static 우회 패턴 검사 강화 — PLAN §5
+- [x] review I1: state 저장 원자 replace 적용 — PLAN §7
+- [x] review I2/I5: HISTORY 기록 git 인자 방어와 stderr 원문 미복사 — PLAN §7
 - [ ] 정상 verify 1회
 - [ ] 의도적 위반 smoke 1회
 - [ ] 자체 harness dry run 1회

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -61,6 +62,14 @@ def check_arithmetic(
     report: dict[str, Any], per_file: list[dict[str, Any]]
 ) -> str | None:
     """Verify ``sum(edits) / sum(ref_chars) == corpus_cer``."""
+    if "corpus_cer" not in report:
+        return "corpus_cer 누락 — score_report 스키마 위반"
+    try:
+        reported = float(report["corpus_cer"])
+    except (TypeError, ValueError):
+        return f"corpus_cer 가 숫자가 아님: {report.get('corpus_cer')!r}"
+    if not math.isfinite(reported):
+        return f"corpus_cer non-finite: {reported!r}"
     if not per_file:
         return "per_file.jsonl 누락 — 산술 검증 불가"
     total_edits = sum(int(record.get("edits", 0)) for record in per_file)
@@ -68,7 +77,6 @@ def check_arithmetic(
     if total_ref == 0:
         return "Σ ref_chars == 0 — 평가 가능한 라벨이 없음"
     derived = total_edits / total_ref
-    reported = float(report.get("corpus_cer", -1))
     if abs(derived - reported) > ARITHMETIC_TOL:
         return (
             f"산술 무결성 위반: Σedits/Σref = {derived:.6f}, "
@@ -78,12 +86,33 @@ def check_arithmetic(
 
 
 def check_catastrophic(report: dict[str, Any]) -> str | None:
-    empty = float(report.get("empty_output_rate", 0.0) or 0.0)
+    if "empty_output_rate" not in report:
+        return "empty_output_rate 누락 — score_report 스키마 위반"
+    try:
+        empty = float(report["empty_output_rate"])
+    except (TypeError, ValueError):
+        return f"empty_output_rate 가 숫자가 아님: {report.get('empty_output_rate')!r}"
+    if not math.isfinite(empty):
+        return f"empty_output_rate non-finite: {empty!r}"
     if empty > EMPTY_OUTPUT_RATE_MAX:
         return f"empty_output_rate {empty:.3f} > {EMPTY_OUTPUT_RATE_MAX}"
-    length_ratio = report.get("length_ratio") or {}
-    p05 = float(length_ratio.get("p05", 1.0) or 1.0)
-    p95 = float(length_ratio.get("p95", 1.0) or 1.0)
+    length_ratio = report.get("length_ratio")
+    if not isinstance(length_ratio, dict):
+        return "length_ratio 누락 — score_report 스키마 위반"
+    for key in ("mean", "p05", "p95"):
+        if key not in length_ratio:
+            return f"length_ratio.{key} 누락 — score_report 스키마 위반"
+    try:
+        mean = float(length_ratio["mean"])
+        p05 = float(length_ratio["p05"])
+        p95 = float(length_ratio["p95"])
+    except (TypeError, ValueError):
+        return "length_ratio mean/p05/p95 가 숫자가 아님"
+    if not math.isfinite(mean) or not math.isfinite(p05) or not math.isfinite(p95):
+        return (
+            "length_ratio mean/p05/p95 non-finite: "
+            f"mean={mean!r}, p05={p05!r}, p95={p95!r}"
+        )
     if p05 < LENGTH_RATIO_P05_MIN:
         return f"length_ratio.p05 {p05:.3f} < {LENGTH_RATIO_P05_MIN}"
     if p95 > LENGTH_RATIO_P95_MAX:
@@ -94,11 +123,27 @@ def check_catastrophic(report: dict[str, Any]) -> str | None:
 def check_runtime(
     report: dict[str, Any], baseline: dict[str, Any], multiplier: float
 ) -> str | None:
-    baseline_t = float(baseline.get("total_inference_time_s", 0.0) or 0.0)
+    try:
+        baseline_t = float(baseline.get("total_inference_time_s", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return (
+            "baseline total_inference_time_s 가 숫자가 아님: "
+            f"{baseline.get('total_inference_time_s')!r}"
+        )
+    if not math.isfinite(baseline_t):
+        return f"baseline total_inference_time_s non-finite: {baseline_t!r}"
     if baseline_t <= 0:
         return None
     cap = baseline_t * multiplier
-    run_t = float(report.get("total_inference_time_s", 0.0) or 0.0)
+    try:
+        run_t = float(report.get("total_inference_time_s", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return (
+            "total_inference_time_s 가 숫자가 아님: "
+            f"{report.get('total_inference_time_s')!r}"
+        )
+    if not math.isfinite(run_t):
+        return f"total_inference_time_s non-finite: {run_t!r}"
     if run_t > cap:
         return (
             f"runtime hard cap 초과: {run_t:.1f}s > baseline {baseline_t:.1f}s × "
@@ -222,4 +267,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

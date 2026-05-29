@@ -38,7 +38,8 @@ baseline time budget 안에 들어야 한다. faster-whisper `baseline_cer` 은 
 | `tests/` | **편집 금지** |
 | `data/raw/.../AIG_녹취반출_20250715/` | **읽기만** — eval 데이터셋 |
 | `data/raw/.../AIG_녹취반출_20250813/` | **접근 절대 금지** — holdout (chmod 000) |
-| `runs/` | iteration 산출물. 읽기만 (verify 가 `score_report.json`, `per_file.jsonl`, `diagnosis_report.json`, `_telemetry/` 작성) |
+| `runs/<hyp_id>/` | iteration 산출물. 읽기만 (verify 가 `score_report.json`, `per_file.jsonl`, `diagnosis_report.json`, `_telemetry/` 작성) |
+| `runs/_summary/` | **편집 금지** — harness 전용 HISTORY/state/REPORT 영역. 후보가 만들거나 덮어쓰면 scope 위반 |
 
 holdout 이름·경로 참조 금지 범위는 `workspace/`, `judge/`, prompt, 운영 wrapper 를
 제외한 `scripts/`. 운영 wrapper 예외: `scripts/seal_holdout.sh`,

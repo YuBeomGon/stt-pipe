@@ -5,6 +5,7 @@ Run candidate evaluation and Phase 3 guard checks.
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
@@ -18,7 +19,9 @@ from harness import guards
 _BACKEND_RE = re.compile(
     r"(^|[\s])import\s+ctranslate2([\s]|$)|"
     r"(^|[\s])import\s+transformers([\s]|$)|"
-    r"from_pretrained|Whisper\(",
+    r"from\s+ctranslate2\s+import|"
+    r"from\s+transformers\s+import|"
+    r"importlib|__import__|from_pretrained|Whisper\(",
     re.MULTILINE,
 )
 _PROFILE_RE = re.compile(r"(assets|audio_profile|silero)", re.IGNORECASE)
@@ -54,6 +57,21 @@ def check_workspace_static(workspace_path: Path) -> str | None:
     if not workspace_path.is_file():
         return f"workspace 파일 누락 — {workspace_path}"
     text = workspace_path.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(text, filename=str(workspace_path))
+    except SyntaxError as exc:
+        return f"workspace syntax error: {exc}"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".", 1)[0]
+                if root in {"ctranslate2", "transformers"}:
+                    return f"static backend: {workspace_path} 에 {alias.name} import 검출"
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            root = module.split(".", 1)[0]
+            if root in {"ctranslate2", "transformers"}:
+                return f"static backend: {workspace_path} 에 from {module} import 검출"
     if _BACKEND_RE.search(text):
         return (
             f"static backend: {workspace_path} 에 "
@@ -193,4 +211,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

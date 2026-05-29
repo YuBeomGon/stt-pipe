@@ -5,6 +5,7 @@ Keep/reject/success policy for Phase 3 candidate runs.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -47,6 +48,15 @@ def decide_candidate(
 ) -> Decision:
     cfg = config or PolicyConfig()
     candidate_cer = float(report["corpus_cer"])
+    if not math.isfinite(candidate_cer):
+        return Decision(
+            status="reject",
+            candidate_cer=candidate_cer,
+            best_cer=best_cer,
+            delta_from_best=None,
+            threshold=None,
+            reason=f"non-finite corpus_cer: {candidate_cer!r}",
+        )
     run_time = float(report.get("total_inference_time_s", 0.0) or 0.0)
 
     target_cer = float(baseline.get("target_cer", 0.0) or 0.0)
@@ -96,4 +106,3 @@ def decide_candidate(
         threshold=threshold,
         reason=f"not enough improvement: Δcer {delta:.6f} < {threshold:.6f}",
     )
-

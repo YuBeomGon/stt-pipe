@@ -44,7 +44,8 @@
 | `frozen/` | 고정 ASR backend |
 | `workspace/` | 후보 파이프라인 표면 (`transcribe(audio, sr) -> str`) |
 | `baseline/` | 봉인된 target/baseline/noise floor |
-| `runs/` | iteration 산출물과 실험 로그 |
+| `runs/<hyp_id>/` | iteration별 평가 산출물 |
+| `runs/_summary/` | harness 전용 HISTORY/state/REPORT/HOLDOUT |
 
 ---
 
@@ -58,4 +59,3 @@
 
 문서와 코드가 충돌하면, 정책 충돌은 정본 문서에서 먼저 고치고 구현을 맞춘다.
 실험 결과 충돌은 `score_report.json`과 `runs/_summary/HISTORY.md`를 우선한다.
-

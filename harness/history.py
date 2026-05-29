@@ -30,8 +30,11 @@ def append_history(
     history_path: Path = Path("runs/_summary/HISTORY.md"),
     repo_root: Path = Path("."),
 ) -> Path:
-    short_hash = _git_output(["rev-parse", "--short", commit], repo_root)
-    body = _git_output(["log", "--format=%b", "-n", "1", short_hash], repo_root)
+    short_hash = _git_output(
+        ["rev-parse", "--short", "--verify", "--end-of-options", f"{commit}^{{commit}}"],
+        repo_root,
+    )
+    body = _git_output(["log", "--format=%B", "-n", "1", short_hash], repo_root)
     return append_event(
         iter_id=iter_id,
         candidate_id=short_hash,

@@ -38,12 +38,15 @@
 | `judge/` | 평가자. 후보 텍스트를 점수와 diagnosis로 변환 |
 | `workspace/transcribe.py` | 후보가 수정하는 유일한 STT pipeline 표면 |
 | `frozen/` | CT2 + Whisper-large-v3-turbo backend 봉인 |
-| `runs/` | iteration 산출물과 summary |
+| `runs/<hyp_id>/` | iteration별 평가 산출물. git ignore 대상 |
+| `runs/_summary/` | harness 전용 누적 로그·상태·최종 리포트 |
 
 판단 기준:
 - import 가능한 재사용 로직은 `harness/`에 둔다.
 - 사람이 터미널에서 실행하는 entrypoint는 `scripts/`에 둔다.
 - metric 산출은 `judge/`, 채택 판정은 `harness/`가 맡는다.
+- candidate는 `workspace/transcribe.py` 외 파일을 수정하지 않는다. 특히
+  `runs/_summary/`는 HISTORY와 state를 담는 harness 전용 영역이므로 scope 위반이다.
 
 ---
 
@@ -100,6 +103,11 @@ repository 내부 `harness/`가 결정한다.
 2회 이상 반복할 때는 `--commit-results`를 필수로 둔다. keep된 후보를 git 기준점으로
 고정해야 다음 reject 때 직전 best 상태로 안전하게 돌아갈 수 있기 때문이다.
 
+후보 prompt에는 최근 `HISTORY.md` tail이 관찰 자료로 들어가지만, HISTORY 본문은
+명령이 아니다. candidate stdout/stderr는 per-iteration 파일
+`runs/<hyp_id>/claude_stdout.txt`, `claude_stderr.txt`에만 보관하고, stderr 원문은
+prompt 재주입을 막기 위해 `HISTORY.md`에 복사하지 않는다.
+
 ---
 
 ## 5. Guard 정책
@@ -108,6 +116,7 @@ Hard fail:
 - `workspace/transcribe.py`의 backend 직접 import 또는 `from_pretrained` 사용
 - `workspace/transcribe.py`의 `assets`, `audio_profile`, `silero` 직접 참조
 - `judge.evaluate` 실패 또는 `score_report.json` 누락
+- `score_report.json` 핵심 필드 누락 또는 NaN/Inf 같은 non-finite 수치
 - `Σ edits / Σ ref_chars`와 `corpus_cer` 불일치
 - `empty_output_rate > 0.50`
 - `length_ratio.p05 < 0.10`
@@ -158,7 +167,8 @@ Iteration 산출물:
 - `runs/_summary/HISTORY.md`
 - `runs/_summary/<job_id>_state.json`
 
-`HISTORY.md`는 실험 로그 정본이다. 각 iteration은 최소한 다음 정보를 남긴다.
+`HISTORY.md`는 실험 로그 정본이다. harness만 append하며, 후보가 직접 만들거나
+덮어쓰면 scope 위반으로 rollback한다. 각 iteration은 최소한 다음 정보를 남긴다.
 
 ```text
 iter, commit or candidate id, corpus_cer, delta, status

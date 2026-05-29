@@ -14,6 +14,7 @@ from harness.runner import (
     GitPathStatus,
     RunnerConfig,
     build_candidate_prompt,
+    candidate_owned_statuses,
     disallowed_candidate_paths,
     run_candidate_command,
     run_iteration,
@@ -70,15 +71,43 @@ def test_static_check_blocks_forbidden_backend(tmp_path: Path) -> None:
     assert "static backend" in (check_workspace_static(path) or "")
 
 
-def test_candidate_scope_only_allows_workspace_and_summary() -> None:
+def test_static_check_blocks_from_import_and_dynamic_import(tmp_path: Path) -> None:
+    path = tmp_path / "transcribe.py"
+    path.write_text("from ctranslate2 import Translator\n", encoding="utf-8")
+    assert "static backend" in (check_workspace_static(path) or "")
+
+    path.write_text("__import__('transformers')\n", encoding="utf-8")
+    assert "static backend" in (check_workspace_static(path) or "")
+
+
+def test_candidate_scope_only_allows_workspace() -> None:
     config = RunnerConfig(job_id="job")
     statuses = [
         GitPathStatus(" M", Path("workspace/transcribe.py")),
         GitPathStatus(" M", Path("runs/_summary/HISTORY.md")),
         GitPathStatus(" M", Path("docs/PHASE3-PLAN.md")),
     ]
-    bad = disallowed_candidate_paths(statuses, config, allow_summary=True)
-    assert [item.path for item in bad] == [Path("docs/PHASE3-PLAN.md")]
+    bad = disallowed_candidate_paths(statuses, config)
+    assert [item.path for item in bad] == [
+        Path("runs/_summary/HISTORY.md"),
+        Path("docs/PHASE3-PLAN.md"),
+    ]
+
+
+def test_candidate_owned_statuses_rolls_back_summary_but_not_run_artifacts() -> None:
+    config = RunnerConfig(job_id="job")
+    statuses = [
+        GitPathStatus(" M", Path("workspace/transcribe.py")),
+        GitPathStatus(" M", Path("runs/_summary/HISTORY.md")),
+        GitPathStatus("??", Path("runs/_summary/poison.txt")),
+        GitPathStatus("??", Path("runs/job_iter_001/prompt.md")),
+    ]
+    owned = candidate_owned_statuses(statuses, config)
+    assert [item.path for item in owned] == [
+        Path("workspace/transcribe.py"),
+        Path("runs/_summary/HISTORY.md"),
+        Path("runs/_summary/poison.txt"),
+    ]
 
 
 def test_build_candidate_prompt_mentions_claude_constraints(tmp_path: Path) -> None:
@@ -148,3 +177,66 @@ def test_run_iteration_keeps_first_valid_candidate(tmp_path: Path) -> None:
         encoding="utf-8"
     )
 
+
+def test_run_iteration_rejects_and_rolls_back_summary_scope_violation(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    original_history = (tmp_path / "runs/_summary/HISTORY.md").read_text(
+        encoding="utf-8"
+    )
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    state = HarnessState(job_id="job")
+    state_path = tmp_path / "runs/_summary/job_state.json"
+
+    def candidate(_prompt: str, _out_dir: Path):
+        (tmp_path / "runs/_summary/HISTORY.md").write_text(
+            "candidate injected text\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "runs/_summary/poison.txt").write_text(
+            "candidate injected text\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    result = run_iteration(config, state, state_path, candidate, lambda _hyp: None)
+
+    assert result.status == "reject"
+    history = (tmp_path / "runs/_summary/HISTORY.md").read_text(encoding="utf-8")
+    assert "candidate injected text" not in history
+    assert original_history in history
+    assert "candidate scope" in history
+    assert not (tmp_path / "runs/_summary/poison.txt").exists()
+
+
+def test_run_iteration_rolls_back_workspace_on_verify_failure(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    original_workspace = (tmp_path / "workspace/transcribe.py").read_text(
+        encoding="utf-8"
+    )
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    state = HarnessState(job_id="job")
+    state_path = tmp_path / "runs/_summary/job_state.json"
+
+    def candidate(_prompt: str, _out_dir: Path):
+        (tmp_path / "workspace/transcribe.py").write_text(
+            "def transcribe(audio, sr):\n    return 'bad'\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    def verifier(hyp_id: str) -> VerifyResult:
+        return VerifyResult(
+            ok=False,
+            hyp_id=hyp_id,
+            out_dir=tmp_path / "runs" / hyp_id,
+            error="forced verify failure",
+        )
+
+    result = run_iteration(config, state, state_path, candidate, verifier)
+
+    assert result.status == "reject"
+    assert (tmp_path / "workspace/transcribe.py").read_text(
+        encoding="utf-8"
+    ) == original_workspace
