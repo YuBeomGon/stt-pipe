@@ -27,6 +27,7 @@
 | Phase 3 DoD / 현재 상태 | [`PHASE3-STATUS.md`](PHASE3-STATUS.md) | PLAN 섹션 참조만 |
 | Phase 3 구조 그림 | [`PHASE3-LOOP.md`](PHASE3-LOOP.md) | 보조 문서, 정본 아님 |
 | candidate runtime profile (역할·접근법·응답 포맷) | [`../harness/prompts/candidate.md`](../harness/prompts/candidate.md) | runner 가 prompt 에 inline. 변경 = candidate 행동 변경 |
+| candidate 컨텍스트 (PUSH/AUTO-PUSH/PULL) + 감사 | [`CANDIDATE-CONTEXT.md`](CANDIDATE-CONTEXT.md) | `claude -p` 가 자동 로드하는 것 + 검증 스크립트 + 누수 baseline |
 | harness 변경 제안 (RFC) | [`proposals/`](proposals/) | 채택 후 정본 갱신 + historical 유지 |
 | 세션 종료 인계 메모 | [`status/`](status/) | 날짜별 스냅샷 |
 | 실제 iteration 로그 | [`../runs/_summary/HISTORY.md`](../runs/_summary/HISTORY.md) | 실험 기록 정본 |
