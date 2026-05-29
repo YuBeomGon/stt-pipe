@@ -29,7 +29,7 @@ def _vad_chunks(audio: np.ndarray, sr: int, max_seconds: int = 30) -> list[tuple
     양쪽 0.2s margin 확장 (단어 경계 절단 보호)."""
     max_samples = max_seconds * sr
     margin_samples = int(0.2 * sr)
-    intervals = librosa.effects.split(audio, top_db=25)
+    intervals = librosa.effects.split(audio, top_db=28)
     if len(intervals) == 0:
         return [(0, len(audio))]
 
