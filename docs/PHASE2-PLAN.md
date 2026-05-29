@@ -63,13 +63,22 @@ tests/
 └── test_evaluate_holdout_smoke.py  # dry-run 모드 smoke
 
 docs/
-└── templates/
-    └── REPORT.md             # 8 개 축 양식 (자동 칸 + 사람 칸)
+├── templates/
+│   └── REPORT.md             # 8 개 축 양식 (자동 칸 + 사람 칸)
+└── reports/                  # Phase 3 종료 시 산출물 위치 — 모든 잡 누적
+    ├── <job_id>_REPORT_<YYYY-MM-DD>.md     # analyze_run.py 가 작성
+    ├── <job_id>_HOLDOUT_<YYYY-MM-DD>.md    # evaluate_holdout.py 가 작성
+    └── <job_id>_HOLDOUT_<YYYY-MM-DD>.json  # ↑ 의 사이드카
 
-runs/_summary/                # Phase 3 종료 시 산출물 위치
-├── REPORT.md                 # analyze_run.py 가 작성
-└── HOLDOUT.md                # evaluate_holdout.py 가 작성
+runs/_summary/                # 입력 전용 (잡 상태 파일)
+├── <job_id>_state.json       # HarnessState SSOT (best_cer, best_hyp_id 등)
+├── HISTORY.md                # 누적 iter 로그 (LLM 컨텍스트용)
+└── JOB_DONE.lock             # 잡 종료 마커 — touch 로 holdout 게이트 해제
 ```
+
+> 명명 규칙: `<job_id>_<KIND>_<YYYY-MM-DD>.<ext>`. 잡 여러 개 (`phase3_001`,
+> `phase3_002`…) 와 종류 여러 개 (REPORT / HOLDOUT) 가 같은 디렉토리에 누적돼도
+> 충돌 없이 분리 보존된다. 같은 잡 재분석 시에도 날짜로 버전 구분.
 
 ---
 
@@ -92,11 +101,13 @@ runs/_summary/                # Phase 3 종료 시 산출물 위치
 ### 3.2 CLI
 
 ```
-python scripts/analyze_run.py \
-  --runs-dir runs/ \
-  --baseline baseline/ \
-  --template docs/templates/REPORT.md \
-  --out runs/_summary/REPORT.md
+python scripts/analyze_run.py
+# 기본 동작:
+#   --runs-dir   = runs/
+#   --baseline   = baseline/
+#   --template   = docs/templates/REPORT.md
+#   --job-id     = runs/_summary/*_state.json 에서 자동 검출
+#   --out        = docs/reports/<job_id>_REPORT_<YYYY-MM-DD>.md
 ```
 
 ### 3.3 산출 항목 (축별 자동 부분)
@@ -153,8 +164,8 @@ python scripts/analyze_run.py \
 
 ### 3.4 출력
 
-`runs/_summary/REPORT.md` — 템플릿 (§5) 의 자동 칸을 채운 markdown. 사람 판단 칸은
-`<!-- TODO -->` 로 남김.
+`docs/reports/<job_id>_REPORT_<YYYY-MM-DD>.md` — 템플릿 (§5) 의 자동 칸을 채운
+markdown. 사람 판단 칸은 `<!-- TODO -->` 로 남김. 명명 규칙은 §2 참고.
 
 ### 3.5 안 하는 것
 
@@ -176,7 +187,7 @@ python scripts/analyze_run.py \
 4. 0715 (잡 마지막 채택) 결과와 비교
    - `Δcorpus_cer = holdout_cer - eval_cer`
    - per-batch 가드 비교
-5. `runs/_summary/HOLDOUT.md` 작성:
+5. `docs/reports/<job_id>_HOLDOUT_<YYYY-MM-DD>.md` (+ `.json` 사이드카) 작성:
    - `eval_cer`, `holdout_cer`, `Δcer`, overfit 판정 (`|Δcer| > 2σ` 시 의심)
    - per-file CER 비교
    - 가드 차이

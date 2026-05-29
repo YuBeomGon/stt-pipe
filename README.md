@@ -90,7 +90,11 @@ reject 시 안전한 rollback 가능 — PLAN §4).
 touch runs/_summary/JOB_DONE.lock
 python3 scripts/analyze_run.py
 python3 scripts/evaluate_holdout.py --unseal
-# REPORT.md, HOLDOUT.md, HOLDOUT.json 확인 후 holdout 자동 재봉인.
+# 산출물 (job_id·날짜·종류가 파일명에 포함 — 여러 잡 누적 시 충돌 방지):
+#   docs/reports/<job_id>_REPORT_<YYYY-MM-DD>.md
+#   docs/reports/<job_id>_HOLDOUT_<YYYY-MM-DD>.md
+#   docs/reports/<job_id>_HOLDOUT_<YYYY-MM-DD>.json
+# holdout 평가 후 자동으로 chmod 000 재봉인.
 ```
 
 ---

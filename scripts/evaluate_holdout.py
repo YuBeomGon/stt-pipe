@@ -207,7 +207,8 @@ def _guard_diff(
 
 
 def _write_holdout_report(
-    out_dir: Path,
+    out_md: Path,
+    out_json: Path,
     eval_run_dir: Path,
     holdout_run_dir: Path,
     eval_score: dict[str, Any],
@@ -269,8 +270,8 @@ def _write_holdout_report(
         "0715 에서 도입된 특정 후처리/패턴 매칭이 0813 에 일반화 안 되는지 검토. -->",
         "",
     ]
-    md_path = out_dir / "HOLDOUT.md"
-    md_path.write_text("\n".join(md), encoding="utf-8")
+    out_md.parent.mkdir(parents=True, exist_ok=True)
+    out_md.write_text("\n".join(md), encoding="utf-8")
 
     sidecar: dict[str, Any] = {
         "eval_run": eval_run_dir.name,
@@ -284,7 +285,8 @@ def _write_holdout_report(
         "overfit_suspected": overfit_suspected,
         "produced_at": datetime.now(UTC).isoformat(),
     }
-    (out_dir / "HOLDOUT.json").write_text(
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(
         json.dumps(sidecar, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -301,7 +303,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline", default="baseline/")
     parser.add_argument(
         "--summary-dir", default="runs/_summary/",
-        help="JOB_DONE.lock 위치이자 HOLDOUT.md 출력 디렉토리",
+        help="JOB_DONE.lock + <job_id>_state.json 위치 (입력 전용)",
+    )
+    parser.add_argument(
+        "--reports-dir", default="docs/reports/",
+        help="HOLDOUT.md / HOLDOUT.json 출력 디렉토리 — analyze_run.py 의 REPORT 와 같은 자리",
+    )
+    parser.add_argument(
+        "--job-id", default=None,
+        help="리포트 파일명 prefix (기본: runs/_summary/*_state.json 자동 검출)",
     )
     parser.add_argument("--out-run-id", default=None,
                         help="holdout 결과 디렉토리 이름 (기본: holdout_<unix_ts>)")
@@ -317,8 +327,22 @@ def main(argv: list[str] | None = None) -> int:
 
     runs_dir = Path(args.runs_dir)
     summary_dir = Path(args.summary_dir)
+    reports_dir = Path(args.reports_dir)
     baseline_dir = Path(args.baseline)
     lock = summary_dir / "JOB_DONE.lock"
+
+    # 리포트 파일명: docs/reports/<job_id>_HOLDOUT_<YYYY-MM-DD>.{md,json}
+    # job_id 는 명시 인자 → state 자동 검출 → "unknown" 순.
+    job_id = args.job_id
+    if job_id is None and summary_dir.is_dir():
+        state_files = sorted(summary_dir.glob("*_state.json"))
+        if len(state_files) == 1:
+            job_id = state_files[0].name[: -len("_state.json")]
+    if job_id is None:
+        job_id = "unknown"
+    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+    holdout_md = reports_dir / f"{job_id}_HOLDOUT_{date_str}.md"
+    holdout_json = reports_dir / f"{job_id}_HOLDOUT_{date_str}.json"
 
     # 1. lock check — Phase 3 잡 종료 마커가 있어야 진행
     if not lock.is_file():
@@ -380,9 +404,9 @@ def main(argv: list[str] | None = None) -> int:
         log.info("holdout corpus_cer = %s", holdout_score.get("corpus_cer"))
 
         # 4. report
-        summary_dir.mkdir(parents=True, exist_ok=True)
         sidecar = _write_holdout_report(
-            out_dir=summary_dir,
+            out_md=holdout_md,
+            out_json=holdout_json,
             eval_run_dir=eval_run if eval_run is not None else holdout_run_dir,
             holdout_run_dir=holdout_run_dir,
             eval_score=eval_score,
@@ -390,7 +414,7 @@ def main(argv: list[str] | None = None) -> int:
             sigma=sigma,
             sigma_provisional=sigma_provisional,
         )
-        log.info("wrote %s and %s", summary_dir / "HOLDOUT.md", summary_dir / "HOLDOUT.json")
+        log.info("wrote %s and %s", holdout_md, holdout_json)
 
     finally:
         # 5. 재봉인 — 평가 후 chmod 000 으로 다시 잠가 재호출 차단.
@@ -404,7 +428,7 @@ def main(argv: list[str] | None = None) -> int:
                 log.error("re-seal failed on %s: %s", target, exc)
         log.info("holdout dirs re-sealed (chmod 000)")
 
-    print(f"holdout evaluation complete — see {summary_dir / 'HOLDOUT.md'}")
+    print(f"holdout evaluation complete — see {holdout_md}")
     return 0
 
 

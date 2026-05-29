@@ -940,7 +940,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs-dir", default="runs/")
     parser.add_argument("--baseline", default="baseline/")
     parser.add_argument("--template", default="docs/templates/REPORT.md")
-    parser.add_argument("--out", default="runs/_summary/REPORT.md")
+    parser.add_argument(
+        "--out", default=None,
+        help="기본: docs/reports/<job_id>_REPORT_<YYYY-MM-DD>.md "
+             "(여러 잡·여러 종류 리포트가 한 디렉토리에 누적되므로 job_id 와 "
+             "날짜를 파일명에 포함)",
+    )
     parser.add_argument(
         "--job-id", default=None,
         help="harness job-id (prefix filter for runs/<job_id>_iter_*/ "
@@ -963,7 +968,6 @@ def main(argv: list[str] | None = None) -> int:
     runs_dir = Path(args.runs_dir)
     baseline_dir = Path(args.baseline)
     template_path = Path(args.template)
-    out_path = Path(args.out)
     summary_dir = runs_dir / "_summary"
 
     target = _read_json(baseline_dir / "target_cer.json") or {}
@@ -990,6 +994,17 @@ def main(argv: list[str] | None = None) -> int:
 
     holdout = _read_json(Path(args.holdout_report)) if args.holdout_report else None
     job_id_display = job_id or (_git("rev-parse", "--short", "HEAD").strip() or runs_dir.name)
+
+    if args.out is not None:
+        out_path = Path(args.out)
+    else:
+        # docs/reports/<job_id>_REPORT_<YYYY-MM-DD>.md — job·날짜·종류가 모두
+        # 파일명에 들어가야 여러 잡 (phase3_001, phase3_002…) 의 REPORT 가
+        # 같은 디렉토리에 누적돼도 충돌하지 않고, 같은 잡 재분석 시에도 새
+        # 날짜로 분리 보존된다. HOLDOUT 은 evaluate_holdout.py 가 동일 스킴
+        # 으로 옆자리에 떨군다.
+        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+        out_path = Path("docs/reports") / f"{job_id_display}_REPORT_{date_str}.md"
 
     report = render_report(
         iters=iters,

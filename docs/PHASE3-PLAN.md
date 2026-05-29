@@ -259,7 +259,7 @@ iter, commit or candidate id, corpus_cer, delta, status
 다음 후보: 다음에 시도할 lever
 ```
 
-사후 종합 리포트는 `scripts/analyze_run.py`가 `runs/_summary/REPORT.md`로 생성한다.
+사후 종합 리포트는 `scripts/analyze_run.py`가 `docs/reports/<job_id>_REPORT_<YYYY-MM-DD>.md`로 생성한다 (명명 규칙·디렉토리 정본은 [`PHASE2-PLAN.md §2`](PHASE2-PLAN.md)).
 
 ---
 
@@ -270,7 +270,7 @@ Holdout은 Phase 3 잡이 끝난 뒤 사람이 1회만 평가한다.
 1. `runs/_summary/JOB_DONE.lock` 생성
 2. `scripts/analyze_run.py`로 eval 분석
 3. `scripts/evaluate_holdout.py --unseal`로 holdout 평가
-4. `runs/_summary/HOLDOUT.md`와 `HOLDOUT.json` 확인
+4. `docs/reports/<job_id>_HOLDOUT_<YYYY-MM-DD>.{md,json}` 확인
 5. holdout 재봉인
 
 잡 도중 holdout 접근 또는 chmod 우회는 무효다.
