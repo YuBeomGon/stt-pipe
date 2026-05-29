@@ -232,3 +232,14 @@ not enough improvement: Δcer -0.002623 < 0.002000
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 22 · phase3_004_iter_022 · cer=NA (ΔNA) · reject
+
+### 관찰
+corpus_cer=0.158078, total_inference_time_s=522.4
+
+### 분석
+harness guard 실패
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
