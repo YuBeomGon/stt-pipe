@@ -27,7 +27,7 @@ _INITIAL_PROMPT_TEXT = (
 def _vad_chunks(audio: np.ndarray, sr: int, max_seconds: int = 30) -> list[tuple[int, int]]:
     """librosa.effects.split (top_db=30) → max_seconds 까지 합친 (start, end) 리스트."""
     max_samples = max_seconds * sr
-    intervals = librosa.effects.split(audio, top_db=25)
+    intervals = librosa.effects.split(audio, top_db=40)
     if len(intervals) == 0:
         return [(0, len(audio))]
 
