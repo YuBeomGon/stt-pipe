@@ -262,15 +262,15 @@ repo 동기화되므로 다른 운영자가 clone 해도 candidate session 에 s
 
 **누수 정리 경과**:
 
-| 누수 | 1 차 (7.2) | 2 차 (7.3) |
-|---|---|---|
-| CLAUDE.md auto-load | ⚠️ mitigated (gate, auto-load 잔존) | ⚠️ mitigated (동일) |
-| superpowers SessionStart 훅 | ⚠️ 잔여 | ✅ **해소** (project-scope disable) |
-| 플러그인 inject | ⚠️ 잔여 | ✅ **해소** (위와 동일) |
-| 운영자 email PII | ⚠️ 잔여 | ⚠️ 잔여 (account 레벨) |
-| Git 최근 commit 5 개 | ⚠️ 잔여 | ⚠️ 잔여 (claude 기본 system prompt) |
-| Skills catalog (29) | — | ⚠️ 잔여 (default `claude -p`, `--disable-slash-commands` 미적용) |
-| MCP servers (Google Drive 등) | — | ⚠️ 잔여 (위와 동일 — production runner 미정리) |
+| 누수 | 1 차 (7.2) | 2 차 (7.3) | 3 차 (7.6) |
+|---|---|---|---|
+| CLAUDE.md auto-load | ⚠️ mitigated (gate, auto-load 잔존) | ⚠️ mitigated | ⚠️ mitigated |
+| superpowers SessionStart 훅 | ⚠️ 잔여 | ✅ **해소** (project-scope disable) | ✅ |
+| 플러그인 inject | ⚠️ 잔여 | ✅ **해소** | ✅ |
+| 운영자 email PII | ⚠️ 잔여 | ⚠️ 잔여 (account 레벨) | ⚠️ 잔여 |
+| Git 최근 commit 5 개 | ⚠️ 잔여 | ⚠️ 잔여 (claude 기본 system prompt) | ⚠️ 잔여 |
+| Skills catalog (29) | — | ⚠️ 잔여 | ✅ **해소** — runner 가 `--disable-slash-commands` 자동 주입 (§7.6) |
+| MCP servers (Google Drive 등) | — | ⚠️ 잔여 | ✅ **해소** — runner 가 `--strict-mcp-config` 자동 주입 |
 
 CLAUDE.md 행이 "✅" 아닌 이유: gate 는 *제거* 가 아니라 *완화* (mitigation).
 파일은 여전히 system prompt 에 auto-load 되고, LLM 이 본문 안의 "이 prompt 는
@@ -279,7 +279,7 @@ gate 가 의미 흐려질 수 있고, 모델이 gate 를 무시할 수도 있음
 gate marker 있으면 leak 에서 제외하는 것도 *진짜 차단 아닌 known-safe 표시*
 (자세한 코드: `scripts/audit_candidate_context.py::detect_leaks`).
 
-Skills/MCP 행은 proposal-2 (skills-and-prompt-eval) §2.1 에서 처리 예정.
+Skills/MCP 행은 §7.6 (runner subprocess hardening) 으로 해소됨.
 
 **부수 효과**:
 - `SKILLS_AVAILABLE_COUNT`: 43 → 29 (superpowers skills 14 개 제거)
@@ -299,16 +299,16 @@ Skills/MCP 행은 proposal-2 (skills-and-prompt-eval) §2.1 에서 처리 예정
 |---|---|---|
 | CLAUDE.md 본문 노출 | 운영자용 §1·§3·§4 전부 (41 줄) | gate + 운영자 chat-style 한정 (22 줄, LLM 이 gate 준수 시 무해) |
 | superpowers SessionStart 훅 | YES — "skills BEFORE response" 강제 | **NO** (project-scope disable) |
-| 사용 가능 skills | 43 | 29 |
-| MCP servers | claude.ai Google Drive 등 | 동일 |
+| 사용 가능 skills | 43 | **0** (runner subprocess hardening, §7.6) |
+| MCP servers | claude.ai Google Drive 등 | **NONE** (runner subprocess hardening, §7.6) |
 | 운영자 email PII | YES | YES (잔여) |
 | Git 최근 commit 5 개 | YES | YES (잔여) |
 
-**ablation 영향**: A’ + CLAUDE.md gate + superpowers disable 3 변수 묶음으로
-변경. phase3_001 (모두 무방비) ↔ phase3_002 (3 변수 동시 변경). 효과 분리
-원하면 phase3_003 (A’ 끄고 정리만, 또는 그 반대) 추가 잡 필요. 또는 phase3_001
-의 `prompt.md` / `claude_stdout.txt` 사후 분석으로 CLAUDE.md "짧게" 규칙 /
-superpowers 훅 영향 추정 가능.
+**ablation 영향**: A’ + CLAUDE.md gate + superpowers disable + runner
+hardening 4 변수 묶음으로 변경. phase3_001 (모두 무방비) ↔ phase3_002 (4
+변수 동시 변경). 효과 분리 원하면 phase3_003 (A’ 끄고 정리만, 또는 그 반대)
+추가 잡 필요. 또는 phase3_001 의 `prompt.md` / `claude_stdout.txt` 사후 분석으로
+CLAUDE.md "짧게" 규칙 / superpowers 훅 영향 추정 가능.
 
 **Probe 응답 한계** (공통):
 - 첫 시도 Anthropic API 529 Overloaded 가능 (재시도 로직 X — 운영자 수동).
@@ -316,6 +316,123 @@ superpowers 훅 영향 추정 가능.
   결정적 검증 아님.
 
 <!-- AUDIT-RESULT-END -->
+
+### 7.6 3차 정리 — runner subprocess hardening (2026-05-29)
+
+**핵심 패턴**: candidate `claude -p` subprocess 만 정리, 운영자 interactive
+`claude` 세션은 영향 X. iteration 한정 어두운 모드, chat 영구 보존.
+
+#### 7.6.1 동기
+
+§7.3 이후 잔여:
+
+| 누수 | 출처 | 정리 layer |
+|---|---|---|
+| Skills catalog (29) | `claude -p` default | CLI flag |
+| MCP servers (Google Drive 등) | claude.ai 통합 | CLI flag |
+
+두 누수 다 **claude CLI flag 로 process-local 정리 가능**:
+- `--disable-slash-commands` → skills 29 → 0
+- `--strict-mcp-config` → MCP NONE (config 없이 strict = 0 server)
+
+문제는 *어떻게* 부착하느냐. 운영자가 매번 `--candidate-cmd
+"claude -p --disable-slash-commands --strict-mcp-config"` 타이핑하면
+잊기 쉽고 잡 간 일관성 깨짐. → **가드레일 패턴**: runner 가 자동 부착.
+
+#### 7.6.2 구현 — `harness/runner.py::_harden_candidate_cmd`
+
+```python
+_CLAUDE_HARDENING_FLAGS = (
+    "--disable-slash-commands",
+    "--strict-mcp-config",
+)
+_HARDEN_BYPASS_ENV = "EVOLVE_NO_HARDEN_CLAUDE"
+
+def _harden_candidate_cmd(cmd: str) -> tuple[str, list[str]]:
+    # bypass — debugging only
+    if os.environ.get(_HARDEN_BYPASS_ENV) == "1":
+        return cmd, []
+    parts = shlex.split(cmd)
+    # claude basename 매칭 — `claude`, `/usr/local/bin/claude`, `~/bin/claude`
+    # 다 인식. 비-claude 커맨드 (test stub, wrapper) 는 통과
+    if not parts or Path(parts[0]).name != "claude":
+        return cmd, []
+    # idempotent — 이미 있는 flag 는 재추가 X
+    added = [f for f in _CLAUDE_HARDENING_FLAGS if f not in parts]
+    return shlex.join(parts + added), added
+```
+
+`run_candidate_command()` 가 subprocess 호출 직전 invoke. 부착된 flag 는
+`runs/<hyp_id>/candidate_cmd_hardening.txt` 사이드카로 기록 (사후 디버깅
+가능, 잡 간 비교 가능).
+
+**bypass**: `EVOLVE_NO_HARDEN_CLAUDE=1 python3 scripts/evolve.py ...` — *디버깅
+한정*. 정상 잡은 절대 bypass 금지.
+
+#### 7.6.3 *왜* subprocess-only 인가 — 채팅과 잡 분리
+
+| 채널 | claude CLI 호출 | hardening |
+|---|---|---|
+| 운영자 interactive (사람이 `claude` 직접 띄움) | shell → `claude` | ❌ — skills / MCP 다 살아있음 |
+| candidate iteration (runner 가 띄움) | runner subprocess → `claude -p ...` | ✅ — flag 자동 부착 |
+
+운영자는 interactive 세션에서 superpowers (user-scope 활성) skill, MCP
+Google Drive 등 그대로 사용. runner 가 띄우는 *subprocess 만* flag 부착
+→ candidate context 깔끔.
+
+이 분리가 핵심이다: 운영 생산성 (interactive skill 사용 가능) ↔
+candidate 청결 (iteration 시 외부 noise 0) 동시에 충족.
+
+#### 7.6.4 검증 — audit 결과
+
+`python3 scripts/audit_candidate_context.py --candidate-cmd "claude -p
+--disable-slash-commands --strict-mcp-config"` (runner 가 부착하는 것과
+동일한 flag 조합으로 audit) → 다음 산출:
+
+| key | 정리 전 | 정리 후 |
+|---|---|---|
+| `SKILLS_AVAILABLE_COUNT` | 29 | **0** |
+| `MCP_SERVERS_VISIBLE` | claude.ai Google Drive (+ 다수) | **NONE** |
+| `HOOKS_FIRED_AT_START` | NO | NO (변화 X) |
+| `PLUGIN_AUTO_INJECTED` | NONE | NONE (변화 X) |
+| `CLAUDE_MD_LOADED` | YES (gated) | YES (gated) — flag 영향 X |
+| `ENV_USER_EMAIL_VISIBLE` | YES | YES — flag 영향 X (account 레벨) |
+| `GIT_RECENT_COMMITS_COUNT` | 5 | 5 — flag 영향 X (claude 기본 prompt) |
+
+**LEAKS DETECTED: 2** (정리 전 4 → 정리 후 2). 잔여 2 (email, git) 는
+account / CLI 레벨 변경 필요, project layer 에서 차단 불가 (§7.4).
+
+#### 7.6.5 단위 테스트 — `tests/test_harness_runner.py`
+
+| 테스트 | 검증 |
+|---|---|
+| `test_harden_candidate_cmd_injects_flags_for_claude` | `claude -p` → 두 flag 다 주입 |
+| `test_harden_candidate_cmd_is_idempotent` | 이미 부착된 cmd 재호출 시 중복 X |
+| `test_harden_candidate_cmd_passes_through_non_claude` | `python3 ...` (test stub) 같은 비-claude cmd 는 unchanged |
+| `test_harden_candidate_cmd_respects_bypass_env` | `EVOLVE_NO_HARDEN_CLAUDE=1` 시 주입 안 함 |
+| `test_harden_candidate_cmd_recognizes_absolute_claude_path` | `/usr/local/bin/claude` 등 절대 경로도 basename 매칭 |
+
+30 pass (5 신규 + 25 기존).
+
+#### 7.6.6 일반 원리 — 재사용 가능한 패턴
+
+LLM CLI (claude, gpt, gemini, …) 를 subprocess 로 띄우는 모든
+self-evolve / harness 시스템에 적용 가능:
+
+1. **명시 분리**: 운영자 interactive 세션과 worker subprocess 는 *다른
+   환경* 이어야 한다. 둘을 같은 CLI default 로 묶으면 *운영 편의 vs candidate
+   청결* 이 trade-off 가 됨.
+2. **process-local hardening**: subprocess 호출 시점에 flag 부착 →
+   global config / settings 손대지 않음 → 운영자 인터랙티브에 영향 0.
+3. **idempotent + 비-CLI passthrough**: 가드레일은 false-positive 가
+   없어야 한다. 테스트 stub / 다른 wrapper 통과시키되 *진짜 CLI* 만 정리.
+4. **bypass env + 사이드카 기록**: 디버깅 가능 + 사후 검증 가능. 잡 결과를
+   환경 변수 변화로 재현 가능.
+5. **검증 도구 분리**: `audit_candidate_context.py` 같은 *외부 probe* 가
+   hardening 효과를 측정 → 코드 변경 시 회귀 잡힘.
+
+API 직접 호출 (Messages SDK) 로 옮길 땐 본 layer 자체가 불필요
+(§9 참고) — 우리가 system / tools 를 명시 구성하므로 noise 0 from start.
 
 ---
 

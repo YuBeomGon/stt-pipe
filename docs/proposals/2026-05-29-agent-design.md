@@ -331,3 +331,17 @@ project 레벨 정리 불가). 자세한 baseline 비교는 CANDIDATE-CONTEXT.md
 - 내부 skill / agent 설계 (외부 superpowers 의존 제거 + 운영자 워크플로우
   표준화) → [`docs/proposals/2026-05-29-skills-and-prompt-eval.md`](2026-05-29-skills-and-prompt-eval.md)
 - candidate profile A/B 측정 메커니즘 (prompt-eval) → 동일 proposal §3
+
+### 11.6 추가 hot-fix — runner subprocess hardening
+
+§11 작업 후 audit 재검토에서 잔여 누수가 *5 → 4* 임이 드러남
+(skills 29, MCP 추가). `--disable-slash-commands` + `--strict-mcp-config`
+조합으로 process-local 해소 가능 확인. `harness/runner.py::_harden_candidate_cmd`
+가 candidate-cmd argv[0] basename = `claude` 일 때 두 flag 자동 부착.
+
+핵심: **subprocess-only**. 운영자 interactive `claude` 세션은 영향 0 (skill /
+MCP 다 살아있음) — iteration 호출 시점에만 정리. 결과: 4 → **2** (email,
+git commits — claude account/CLI 레벨, project 차단 불가).
+
+정본 + 검증 결과 + 5 단위 테스트:
+[`docs/CANDIDATE-CONTEXT.md`](../CANDIDATE-CONTEXT.md) §7.6.

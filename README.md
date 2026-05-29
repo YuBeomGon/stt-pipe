@@ -63,8 +63,11 @@ bash scripts/verify.sh
 git checkout -- workspace/transcribe.py
 
 # 1-4. candidate 컨텍스트 감사 (PLAN §3.7)
-python3 scripts/audit_candidate_context.py
-# 누수 0 (또는 잔여 허용 2 — email/git commits) → 진행. 그 외 → 정리 후 재실행.
+python3 scripts/audit_candidate_context.py \
+  --candidate-cmd "claude -p --disable-slash-commands --strict-mcp-config"
+# production runner 가 자동 부착하는 hardening flag 와 동일 조합으로 확인.
+# 잔여 허용 2 (email/git commits) 만 보고되면 정상. 그 외 누수 → 정리 후 재실행.
+# 운영자 interactive `claude` 세션은 영향 받지 않음 — subprocess hardening 만.
 
 # 1-5. 자체 harness dry-run 1 iter
 python3 scripts/evolve.py --job-id dry --iters 1 --manual

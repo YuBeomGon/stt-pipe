@@ -83,6 +83,7 @@
 - [x] superpowers 플러그인 project-scope disable — `.claude/settings.json`
 - [x] PHASE3-PLAN §3.7 에 audit 절차 등록 + README workflow 에 추가
 - [x] 누수 5 → 2 (잔여: email PII, git recent commits — claude CLI 기본 동작, 운영 합의로 허용)
+- [x] runner subprocess hardening — `_harden_candidate_cmd` 가 `--disable-slash-commands` + `--strict-mcp-config` 자동 부착, skills 29→0 + MCP→NONE 검증 (CANDIDATE-CONTEXT §7.6)
 
 ## 8. 후속 RFC
 

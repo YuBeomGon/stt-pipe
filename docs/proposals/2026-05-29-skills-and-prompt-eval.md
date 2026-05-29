@@ -29,19 +29,21 @@
 
 ### 2.1 내부 skill — `.claude/skills/aig/*`
 
-운영자 interactive 세션에서 invoke. candidate 세션 노출 분리는 **별도 결정 필요**:
+운영자 interactive 세션에서 invoke. candidate 세션 노출은 **이미 분리됨**
+(이 RFC 작성 후 별도 hot-fix 로 진행 — [`CANDIDATE-CONTEXT.md`](../CANDIDATE-CONTEXT.md)
+§7.6, proposal-1 §11.6):
 
-현재 candidate = `claude -p` (README §2, runner default `--candidate-cmd "claude -p"`).
-즉 *모든 user-invocable skill catalog* (audit 측정: 29) + MCP servers
-(Google Drive 등) 가 candidate context 에 잔존. `--disable-slash-commands`
-플래그는 audit 실험에서만 사용 (catalog 1 까지 축소 확인) — production runner
-에는 미적용. 본 RFC 채택 시:
+- ✅ step A 완료: runner 가 candidate-cmd 에 `--disable-slash-commands` +
+  `--strict-mcp-config` 자동 부착 (`harness/runner.py::_harden_candidate_cmd`).
+  audit 검증: skills 29 → 0, MCP NONE
+- step B (남음): `.claude/skills/aig/*` 만들면 위 flag 영향 받음 (skill
+  카탈로그가 전부 죽음). 내부 skill 을 *살리려면* hardening 제외 로직 또는
+  `--allowed-skill` 같은 화이트리스트 필요 → 본 RFC 가 다룰 사항
+- 검증: audit 의 `SKILLS_AVAILABLE_COUNT` / `MCP_SERVERS_VISIBLE` 두 키가
+  *우리가 만든 것만* 남는지
 
-- step A: runner 가 candidate-cmd 에 `--disable-slash-commands` 자동 부착
-  (또는 default cmd 변경) → 외부 skill catalog suppress
-- step B: `.claude/skills/aig/*` 를 *only* invokable 로 (만들면 catalog 1+)
-- 검증: audit 의 `SKILLS_AVAILABLE_COUNT` / `MCP_SERVERS_VISIBLE` 두 키 모두
-  0 또는 우리가 만든 것만 남는지
+→ 본 RFC 는 step B (내부 skill 빌드 + hardening 화이트리스트) 에 집중.
+step A 는 이미 갈피 잡힘.
 
 | 스킬 | 무엇 | 대체 대상 |
 |---|---|---|

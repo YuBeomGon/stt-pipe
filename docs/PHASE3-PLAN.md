@@ -124,6 +124,13 @@ audit JSON 과 diff 해 *신규* 누수만 감시 (예: 새 플러그인 자동 
 fire). 임계 누수 (CLAUDE.md gate 깨짐, 새 SessionStart 훅 등) 는 사람이 잡 전
 정리해야 한다.
 
+> 참고: runner 가 `candidate_cmd` 에 `--disable-slash-commands` +
+> `--strict-mcp-config` 를 자동 부착해 skills/MCP 를 process-local 로 정리한다
+> (`harness/runner.py::_harden_candidate_cmd`, 정본 [`CANDIDATE-CONTEXT.md`](CANDIDATE-CONTEXT.md) §7.6).
+> 본 audit 를 *production runner 와 동일한 cmd* 로 돌리려면
+> `--candidate-cmd "claude -p --disable-slash-commands --strict-mcp-config"`
+> 명시. 운영자 interactive `claude` 세션은 영향 받지 않음 (subprocess only).
+
 ### 3.8 자체 harness dry-run 1 iter
 
 `python3 scripts/evolve.py --job-id dry --iters 1 --manual` — candidate 생성 없이
