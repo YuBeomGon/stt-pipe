@@ -92,7 +92,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         results = generate(
             features,
             [prompt],
-            beam_size=8,
+            beam_size=10,
             length_penalty=2.0,
             patience=2.5,
             no_repeat_ngram_size=7,
