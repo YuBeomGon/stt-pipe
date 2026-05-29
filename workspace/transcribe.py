@@ -18,7 +18,7 @@ from frozen.asr_backend import generate, load, to_storage_view
 
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
-_PREV_MAX_TOKENS = 250
+_PREV_MAX_TOKENS = 300
 _INITIAL_PROMPT_TEXT = (
     "보험 약관 청구 가입 보장 동의 고객 어머니 선생님 계약 갱신 면책 담보 특약 "
     "피보험자 본인 부담금 실손 의료비 통원 입원 수술 상해 질병 사망 후유 장애 "
