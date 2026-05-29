@@ -79,7 +79,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             [prompt_tokens],
             beam_size=4,
             patience=1.5,
-            length_penalty=1.2,
+            length_penalty=1.6,
             sampling_temperature=0.0,
         )
 
