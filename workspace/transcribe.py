@@ -54,7 +54,7 @@ def _vad_chunks(audio: np.ndarray, sr: int, max_seconds: int = 30) -> list[tuple
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
-    chunks = _vad_chunks(audio, sr, max_seconds=25)
+    chunks = _vad_chunks(audio, sr, max_seconds=22)
 
     sot_tokens = processor.tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
