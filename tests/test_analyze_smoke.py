@@ -243,7 +243,6 @@ def test_analyze_run_renders_template(synthetic_run, monkeypatch):
 def test_category_distribution_sum_matches_accepted(synthetic_run, monkeypatch):
     monkeypatch.chdir(ROOT)
     from scripts.analyze_run import (
-        IterRecord,
         classify_iterations,
         discover_iterations,
         _category_distribution,

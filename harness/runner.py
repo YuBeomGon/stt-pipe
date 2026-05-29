@@ -235,12 +235,26 @@ def _recent_iters(
     """Read the last N committed iters' metadata + cer for prompt injection.
 
     Only iters whose directory name matches ``{job_id}_iter_NNN`` are
-    considered, so cross-job contamination is impossible. Missing metadata
-    (legacy iters from before A') is surfaced as ``lane="?"``,
-    ``fingerprint=[]``, ``cer=None`` so the candidate sees the gap.
+    considered (no cross-job contamination), and only iters that actually
+    *ran* — a directory with neither ``candidate_meta.json``,
+    ``candidate_meta.err``, nor ``score_report.json`` is empty (current
+    iter's out_dir before the candidate runs, or leftover from an aborted
+    job) and would otherwise pollute the recent table by displacing a real
+    prior iter from the last-N window. Missing A' metadata on iters that
+    *did* run (legacy / pre-A') surfaces as ``lane="?"``, ``fingerprint=[]``,
+    ``cer=None`` so the candidate sees the gap honestly.
     """
     pattern = f"{job_id}_iter_*"
     dirs = sorted((repo_root / runs_dir).glob(pattern))
+
+    def _ran(d: Path) -> bool:
+        return (
+            (d / "candidate_meta.json").is_file()
+            or (d / "candidate_meta.err").is_file()
+            or (d / "score_report.json").is_file()
+        )
+
+    dirs = [d for d in dirs if _ran(d)]
     if not dirs:
         return []
     out: list[dict[str, Any]] = []
@@ -348,6 +362,15 @@ def parse_candidate_metadata(
         if out_dir is not None:
             (out_dir / "candidate_meta.err").write_text(reason, encoding="utf-8")
         return None, reason
+    normalized_fp = [t.strip().lower() for t in fp]
+    if any(not t for t in normalized_fp):
+        # Whitespace-only / empty tokens would inflate fingerprint-Jaccard
+        # equality (set{""} == set{""}) and corrupt the D-axis diversity
+        # metric. Reject normalize-then-validate. (F5 fix.)
+        reason = "diff_fingerprint contains empty/whitespace-only tokens"
+        if out_dir is not None:
+            (out_dir / "candidate_meta.err").write_text(reason, encoding="utf-8")
+        return None, reason
 
     why = parsed["why_different_from_last_5"]
     if not isinstance(why, str) or not why.strip():
@@ -358,7 +381,7 @@ def parse_candidate_metadata(
 
     normalized = {
         "lane": lane.strip().lower(),
-        "diff_fingerprint": [t.strip().lower() for t in fp],
+        "diff_fingerprint": normalized_fp,
         "why_different_from_last_5": why.strip(),
     }
     if out_dir is not None:
@@ -534,16 +557,23 @@ def run_iteration(
     state.advance()
     hyp_id = f"{config.job_id}_iter_{state.iteration:03d}"
     out_dir = repo_root / config.runs_dir / hyp_id
-    out_dir.mkdir(parents=True, exist_ok=True)
     ensure_worktree_ready(config)
+
+    # Build the prompt BEFORE creating out_dir — otherwise the just-created
+    # empty current-iter directory would be matched by _recent_iters's glob
+    # and (in iter ≥ 2) displace the oldest real prior iter from the last-N
+    # window. _recent_iters also filters by "ran" markers as defense in depth,
+    # but ordering matters here too. (F1 fix, review 2026-05-29.)
+    prompt = build_candidate_prompt(config, state)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     candidate_result: subprocess.CompletedProcess[str] | None = None
     if candidate_func is not None:
-        candidate_result = candidate_func(build_candidate_prompt(config, state), out_dir)
+        candidate_result = candidate_func(prompt, out_dir)
     elif config.candidate_cmd:
         candidate_result = run_candidate_command(
             config.candidate_cmd,
-            build_candidate_prompt(config, state),
+            prompt,
             out_dir,
             repo_root,
             config.allowed_path,
@@ -582,12 +612,16 @@ def run_iteration(
     # rate post-hoc. fingerprint duplication is NOT enforced here — that's
     # C-lite (proposal §2.2).
     if config.candidate_cmd is not None or candidate_func is not None:
-        # Skip metadata check for manual=True (no candidate ran). Tests that
-        # inject a candidate_func writing a real stdout file are exercised.
+        # Skip metadata check for manual=True (no candidate ran). For
+        # production (`run_candidate_command`) the stdout is in the per-iter
+        # file; for tests / external injection that bypass file writes, fall
+        # back to the in-memory CompletedProcess.stdout. (F4 fix.)
         stdout_path = out_dir / "claude_stdout.txt"
-        stdout_text = (
-            stdout_path.read_text(encoding="utf-8") if stdout_path.is_file() else ""
-        )
+        stdout_text = ""
+        if stdout_path.is_file():
+            stdout_text = stdout_path.read_text(encoding="utf-8")
+        elif candidate_result is not None and candidate_result.stdout:
+            stdout_text = candidate_result.stdout
         meta, format_err = parse_candidate_metadata(stdout_text, out_dir)
         if meta is None:
             rollback_paths(
@@ -775,6 +809,16 @@ def run_job(config: RunnerConfig) -> HarnessState:
         ):
             state.status = "aborted_format_reject"
             state.save(state_path)
+            # Commit the aborted state so the next job's ensure_worktree_ready
+            # doesn't see runs/_summary/<job_id>_state.json as a modified
+            # tracked file and refuse to start. Uses commit_iteration with a
+            # synthetic ("abort", "format_reject") (status, hyp_id) pair —
+            # commit subject becomes `iterN: abort format_reject`, unique and
+            # parseable by analyze_run.py. (F2 fix.)
+            if config.commit_results:
+                commit_iteration(
+                    config, state_path, "abort", "format_reject", state.iteration
+                )
             break
     return state
 

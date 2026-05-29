@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from harness.runner import main
+from harness.runner import main  # noqa: E402  — sys.path setup must precede import
 
 
 if __name__ == "__main__":

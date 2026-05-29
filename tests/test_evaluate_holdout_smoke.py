@@ -100,3 +100,52 @@ def test_default_refuses_without_unseal(tmp_path):
     )
     assert result.returncode == 4, (result.stdout, result.stderr)
     assert "--unseal" in result.stderr
+
+
+def test_best_eval_run_prefers_explicit_job_id(tmp_path):
+    """F3 regression: when ≥ 2 state files exist (e.g. phase3_001 +
+    phase3_002), passing job_id explicitly must select that job's state
+    rather than falling back to last-produced. The pre-fix behavior
+    silently mixed jobs."""
+    import json
+    from scripts.evaluate_holdout import _best_eval_run
+
+    runs = tmp_path / "runs"
+    summary = runs / "_summary"
+    summary.mkdir(parents=True)
+
+    # Two state files side by side.
+    (summary / "job_a_state.json").write_text(
+        json.dumps({"job_id": "job_a", "best_hyp_id": "job_a_iter_005"}),
+        encoding="utf-8",
+    )
+    (summary / "job_b_state.json").write_text(
+        json.dumps({"job_id": "job_b", "best_hyp_id": "job_b_iter_010"}),
+        encoding="utf-8",
+    )
+
+    # Backing run dirs with score_report.
+    for hyp in ("job_a_iter_005", "job_b_iter_010"):
+        d = runs / hyp
+        d.mkdir()
+        (d / "score_report.json").write_text(
+            json.dumps({"batch": "AIG_녹취반출_20250715", "corpus_cer": 0.3}),
+            encoding="utf-8",
+        )
+
+    # Without job_id: ambiguous (2 state files) → falls back to last-produced
+    # (mtime-based), unstable so just assert it's NOT None.
+    fallback = _best_eval_run(runs, summary, job_id=None)
+    assert fallback is not None
+
+    # With explicit job_id: must pick that job's best.
+    a = _best_eval_run(runs, summary, job_id="job_a")
+    assert a is not None and a.name == "job_a_iter_005"
+
+    b = _best_eval_run(runs, summary, job_id="job_b")
+    assert b is not None and b.name == "job_b_iter_010"
+
+    # Unknown job_id: state lookup misses, falls through to last-produced
+    # (still returns one of the two real dirs).
+    unknown = _best_eval_run(runs, summary, job_id="job_missing")
+    assert unknown is not None

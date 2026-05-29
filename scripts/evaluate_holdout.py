@@ -18,7 +18,6 @@ import argparse
 import json
 import logging
 import os
-import statistics
 import subprocess
 import sys
 import time
@@ -91,22 +90,36 @@ def _is_sealed(target: Path) -> bool:
         return False
 
 
-def _best_eval_run(runs_dir: Path, summary_dir: Path) -> Path | None:
+def _best_eval_run(
+    runs_dir: Path, summary_dir: Path, job_id: str | None = None
+) -> Path | None:
     """Resolve the anchor eval (0715) run for holdout comparison.
 
     Priority:
-      1. ``runs/_summary/<job_id>_state.json::best_hyp_id`` — the harness's
-         authoritative pointer to the iter whose ``transcribe.py`` is currently
-         on disk. This is what holdout *actually* evaluates against, so it's
-         the only correct anchor. Auto-detected when exactly one
-         ``*_state.json`` exists; on ties / none, falls back below.
-      2. Last *produced* eval-batch ``score_report`` (the pre-fix behavior) —
-         kept as a defensive fallback so smoke tests that drop synthetic runs
-         without a state file still work.
+      1. Explicit ``job_id`` → ``runs/_summary/<job_id>_state.json::
+         best_hyp_id``. Use when the caller knows which job's best to
+         anchor against (multiple jobs may have state files side-by-side —
+         e.g. phase3_001 + phase3_002).
+      2. Auto-detect when exactly one ``*_state.json`` exists.
+      3. Last *produced* eval-batch ``score_report`` — defensive fallback
+         so smoke tests that drop synthetic runs without a state file still
+         work.
+
+    (F3 fix, review 2026-05-29 — previous behavior silently fell back to
+    last-produced when ≥ 2 state files existed, so ``--job-id phase3_002``
+    correctly named the output but anchored against whichever eval iter was
+    produced last across all jobs, which could be phase3_001.)
     """
-    state_candidates = sorted(summary_dir.glob("*_state.json")) if summary_dir.is_dir() else []
-    if len(state_candidates) == 1:
-        state_path = state_candidates[0]
+    state_path: Path | None = None
+    if job_id:
+        candidate = summary_dir / f"{job_id}_state.json"
+        if candidate.is_file():
+            state_path = candidate
+    if state_path is None:
+        state_candidates = sorted(summary_dir.glob("*_state.json")) if summary_dir.is_dir() else []
+        if len(state_candidates) == 1:
+            state_path = state_candidates[0]
+    if state_path is not None:
         try:
             state = json.loads(state_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
@@ -367,7 +380,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         log.info("dry-run: skipping chmod and evaluate; verifying glue only")
-        eval_run = _best_eval_run(runs_dir, summary_dir)
+        eval_run = _best_eval_run(runs_dir, summary_dir, job_id)
         print("dry-run ok — would evaluate %s and compare against %s" %
               (wav_dir, eval_run.name if eval_run else "<no eval run>"))
         return 0
@@ -389,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
 
         # 3. evaluate (judge.evaluate 동일 경로)
         from judge.evaluate import evaluate_batch  # local import — avoids loading GPU stack on smoke
-        eval_run = _best_eval_run(runs_dir, summary_dir)
+        eval_run = _best_eval_run(runs_dir, summary_dir, job_id)
         if eval_run is None:
             log.warning("no eval (0715) run found to compare against — holdout report will be partial")
             eval_score: dict[str, Any] = {}
@@ -403,8 +416,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         log.info("holdout corpus_cer = %s", holdout_score.get("corpus_cer"))
 
-        # 4. report
-        sidecar = _write_holdout_report(
+        # 4. report (sidecar return value unused — written to disk inside)
+        _write_holdout_report(
             out_md=holdout_md,
             out_json=holdout_json,
             eval_run_dir=eval_run if eval_run is not None else holdout_run_dir,

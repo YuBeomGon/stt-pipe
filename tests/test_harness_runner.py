@@ -14,6 +14,7 @@ from harness.runner import (
     LANES,
     GitPathStatus,
     RunnerConfig,
+    _recent_iters,
     build_candidate_prompt,
     candidate_owned_statuses,
     disallowed_candidate_paths,
@@ -554,3 +555,156 @@ def test_run_job_aborts_after_4_of_5_format_rejects(
     # Aborts at end of the 5th iter (4th format reject), not earlier.
     assert state.iteration == 5
     assert len(call_log) == 5
+
+
+# ----------------------------------------------------------------------- #
+# Review followup fixes (F1–F5) regression guards                          #
+# ----------------------------------------------------------------------- #
+
+
+def test_recent_iters_skips_empty_dirs(tmp_path: Path) -> None:
+    """F1: a directory that exists but has no candidate_meta / score_report
+    (e.g. the current iter's freshly-created out_dir, or an aborted-job
+    leftover) must NOT be returned by _recent_iters — otherwise it would
+    displace a real prior iter from the last-N window."""
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+
+    # iter 001 ran (has meta).
+    d1 = runs_dir / "job_iter_001"
+    d1.mkdir()
+    (d1 / "candidate_meta.json").write_text(
+        json.dumps({"lane": "decoding", "diff_fingerprint": ["beam"]}),
+        encoding="utf-8",
+    )
+
+    # iter 002 is in progress (mkdir done, no metadata yet) — must be skipped.
+    (runs_dir / "job_iter_002").mkdir()
+
+    # iter 003 was format-rejected (has .err only).
+    d3 = runs_dir / "job_iter_003"
+    d3.mkdir()
+    (d3 / "candidate_meta.err").write_text("missing yaml", encoding="utf-8")
+
+    rows = _recent_iters(tmp_path, Path("runs"), "job", n=5)
+    names = [r["iter"] for r in rows]
+    assert names == ["job_iter_001", "job_iter_003"], names
+
+
+def test_build_prompt_does_not_include_current_iter_in_recent_table(
+    tmp_path: Path,
+) -> None:
+    """F1 end-to-end: build_candidate_prompt called from run_iteration must
+    not include the current iter's own (empty) out_dir in the recent table.
+    Verified by inspecting the prompt text directly."""
+    _init_repo(tmp_path)
+    runs_dir = tmp_path / "runs"
+    # Pre-populate iter 001 as a "real" prior run.
+    d1 = runs_dir / "job_iter_001"
+    d1.mkdir(parents=True)
+    (d1 / "candidate_meta.json").write_text(
+        json.dumps(
+            {"lane": "decoding", "diff_fingerprint": ["beam", "patience"]}
+        ),
+        encoding="utf-8",
+    )
+
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    # State now at iteration 2 (just advanced) — current out_dir is iter_002.
+    state = HarnessState(job_id="job", iteration=2)
+    prompt = build_candidate_prompt(config, state)
+
+    # iter_001 must appear (real prior). iter_002 (current, empty) must NOT.
+    assert "job_iter_001" in prompt
+    assert "job_iter_002" not in prompt
+
+
+def test_parse_meta_rejects_whitespace_only_fingerprint_tokens(
+    tmp_path: Path,
+) -> None:
+    """F5: ` ` strips to `` which would inflate Jaccard equality to 100%
+    between unrelated iters. normalize-then-validate must reject."""
+    stdout = """\
+```yaml
+lane: decoding
+diff_fingerprint: ["beam", "   "]
+why_different_from_last_5: x
+```
+"""
+    meta, err = parse_candidate_metadata(stdout, tmp_path)
+    assert meta is None
+    assert "empty/whitespace-only" in err
+
+
+def test_parse_meta_falls_back_to_completed_process_stdout(tmp_path: Path) -> None:
+    """F4 unit-level: parse_candidate_metadata takes stdout text directly.
+    The fallback (file → CompletedProcess.stdout) lives in run_iteration; this
+    test just locks the parser's text-in contract so the fallback caller can
+    rely on it."""
+    yaml_inline = """\
+```yaml
+lane: prompt
+diff_fingerprint: [language]
+why_different_from_last_5: switching language tag
+```
+"""
+    meta, err = parse_candidate_metadata(yaml_inline, tmp_path)
+    assert err is None
+    assert meta["lane"] == "prompt"
+
+
+def test_run_job_commits_aborted_state_when_commit_results(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """F2: when --commit-results is on and the abort guard fires, the final
+    state file with status='aborted_format_reject' must be committed.
+    Otherwise the next job's ensure_worktree_ready sees runs/_summary/
+    <job>_state.json as a modified tracked file and refuses to start."""
+    _init_repo(tmp_path)
+    config = RunnerConfig(
+        job_id="job", repo_root=tmp_path, iterations=25, commit_results=True
+    )
+
+    from harness.runner import IterationResult
+
+    def fake_iter(cfg, state, state_path):
+        state.advance()
+        # Always emit format reject so abort fires at iter 5 (need 4 of 5).
+        # Each call must also commit something tracked or commit_iteration
+        # finds nothing staged. Touch state via save.
+        state.save(state_path)
+        # Stage + commit the per-iter reject so the abort commit at the end
+        # only has the state-status change left to commit.
+        subprocess.run(
+            ["git", "add", "runs/_summary/job_state.json"],
+            cwd=tmp_path, check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", f"iter{state.iteration}: reject job_iter_{state.iteration:03d}"],
+            cwd=tmp_path, check=True, capture_output=True,
+        )
+        return IterationResult(
+            hyp_id=f"job_iter_{state.iteration:03d}",
+            status="reject",
+            decision=None,
+            verify_result=None,
+            reason="format reject: test",
+            format_reject=True,
+        )
+
+    monkeypatch.setattr("harness.runner.run_iteration", fake_iter)
+    state = run_job(config)
+
+    assert state.status == "aborted_format_reject"
+    # The abort commit must exist at HEAD.
+    head_subject = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"],
+        cwd=tmp_path, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert "abort format_reject" in head_subject, head_subject
+    # And the working tree must be clean (no leftover modified state file).
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=tmp_path, check=True, capture_output=True, text=True,
+    ).stdout
+    assert status == "", f"worktree dirty after abort commit: {status!r}"
