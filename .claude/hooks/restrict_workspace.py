@@ -22,11 +22,15 @@ ALLOWED_FILES = {
     "workspace/transcribe.py",
 }
 
-# 허용되는 *디렉토리 prefix* — 그 안의 임의 파일 작성 가능.
-ALLOWED_PREFIXES = (
-    "runs/",        # autoresearch / judge 산출. agent 도 자유 작성 가능 (telemetry 등)
-    "autoresearch/" # autoresearch 자체 결과 TSV / handoff.json
-)
+# Phase 3 자체 harness 기준: candidate 가 직접 Edit/Write 해야 하는 산출
+# 디렉토리는 *없음*. judge 평가 산출 (runs/<hyp_id>/...) 은 harness 가 띄우는
+# judge.evaluate 가 만드는 것이며 candidate 의 Tool 호출이 아니다. autoresearch
+# 는 deprecated. ALLOWED_PREFIXES 가 비면 candidate 의 모든 Edit/Write 대상이
+# ALLOWED_FILES 1 개 (workspace/transcribe.py) 로 좁혀진다.
+#
+# codex 2차 hardening (2026-05-29): 과거에 허용했던 `runs/`, `autoresearch/`
+# 는 cheating 경로로 활용 가능 (예: 과거 score_report.json 덮어쓰기). 제거.
+ALLOWED_PREFIXES: tuple[str, ...] = ()
 
 
 def _read_input() -> dict:
@@ -74,9 +78,13 @@ def main() -> int:
     if any(rel.startswith(prefix) for prefix in ALLOWED_PREFIXES):
         return 0
 
+    allowed_summary = (
+        "workspace/transcribe.py 만 편집 가능"
+        if not ALLOWED_PREFIXES
+        else f"workspace/transcribe.py 또는 ({', '.join(ALLOWED_PREFIXES)})"
+    )
     print(
-        f"Phase 3 가드: '{rel}' 편집 거부. workspace/transcribe.py 만 편집 가능 "
-        f"(허용 산출 디렉토리: {', '.join(ALLOWED_PREFIXES)}). "
+        f"Phase 3 가드: '{rel}' 편집 거부. {allowed_summary}. "
         f"AGENTS.md §1 표 / PHASE3-PLAN §1.2 참조.",
         file=sys.stderr,
     )

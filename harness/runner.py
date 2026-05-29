@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -49,39 +50,113 @@ _PROFILE_PATH = Path("harness/prompts/candidate.md")
 _FORMAT_REJECT_PROBE_ITERS = 5
 _FORMAT_REJECT_ABORT_COUNT = 4
 
-# Candidate-context hardening flags — appended automatically when candidate_cmd
-# starts with `claude`. These suppress user-invocable skill catalog (29 → 0)
-# and external MCP servers (Google Drive etc. → none) so the candidate sees
-# only the explicit prompt body. Operator's interactive `claude` sessions are
-# untouched — only the per-iteration subprocess is hardened. Verified via
+# Candidate-context skills/MCP hardening — appended automatically when
+# candidate_cmd starts with `claude`. These suppress user-invocable skill
+# catalog (29 → 0) and external MCP servers (Google Drive etc. → none).
+# Operator's interactive `claude` sessions are untouched — only the
+# per-iteration subprocess is hardened. Verified via
 # scripts/audit_candidate_context.py.
 #
-# Set EVOLVE_NO_HARDEN_CLAUDE=1 to bypass (debugging only — production jobs
-# should never bypass).
-_CLAUDE_HARDENING_FLAGS: tuple[str, ...] = (
+# This is *skills/MCP-only* hardening. CLAUDE.md (gated auto-load), operator
+# email, git recent commits, and built-in Tool catalog (Read / Bash / Edit
+# / Write / etc.) are NOT touched by these flags — they require separate
+# mechanisms (CLAUDE.md gate marker, settings.json deny rules, --disallowedTools).
+#
+# Set EVOLVE_NO_HARDEN_CLAUDE=1 to bypass — REJECTED for production jobs
+# (--iters > 1 or --commit-results). See _check_bypass_in_production().
+# Each entry is a single argv token to inject. For variadic-value flags like
+# `--disallowedTools <tools...>`, use the `--flag=value` form to keep it as
+# one token — otherwise claude CLI consumes the following candidate prompt as
+# another tool name (verified bug: 2026-05-29 audit ran with separate flag +
+# value, claude swallowed the PROBE as a "tool", returning "Input must be
+# provided…" error).
+_CLAUDE_HARDENING_ARGS: tuple[str, ...] = (
     "--disable-slash-commands",
     "--strict-mcp-config",
+    # codex 2차 hardening: cut Bash entirely so `cat judge/normalize.py` /
+    # `python -m judge.evaluate` style cheating cannot happen via shell.
+    # Read deny rules in settings.json still cover the Read tool. WebFetch /
+    # WebSearch / Task are also unnecessary for candidate (single-file edit
+    # task) and would be additional context-leak vectors.
+    "--disallowedTools=Bash,WebFetch,WebSearch,Task",
+)
+
+# Backward-compat flat tuple used by tests + audit script. Each entry is the
+# flag *name* (strip "=value" suffix for the disallowedTools case).
+_CLAUDE_HARDENING_FLAGS: tuple[str, ...] = tuple(
+    arg.split("=", 1)[0] for arg in _CLAUDE_HARDENING_ARGS
 )
 _HARDEN_BYPASS_ENV = "EVOLVE_NO_HARDEN_CLAUDE"
 
 
+def _bypass_active() -> bool:
+    return os.environ.get(_HARDEN_BYPASS_ENV) == "1"
+
+
+def _check_bypass_in_production(config: RunnerConfig) -> None:
+    """Reject the bypass env var for production-mode jobs.
+
+    A "production" job is anything with --iters > 1 or --commit-results — those
+    are the indicators that the operator means business. Single-iter, no-commit
+    jobs (smoke / debug) may still bypass.
+
+    Codex 3차 review F1: silent bypass risk — if the operator forgets to unset
+    EVOLVE_NO_HARDEN_CLAUDE after debugging, a 50-iter production job would run
+    with skills/MCP exposed (regression to 4-leak state). Fail fast at job
+    start instead.
+    """
+    if not _bypass_active():
+        return
+    production = config.iterations > 1 or config.commit_results
+    if not production:
+        print(
+            f"WARNING: {_HARDEN_BYPASS_ENV}=1 — candidate hardening bypassed "
+            "(skills/MCP will be exposed). Allowed because this is a "
+            "single-iter, no-commit job (debug mode).",
+            file=sys.stderr,
+        )
+        return
+    raise RuntimeError(
+        f"{_HARDEN_BYPASS_ENV}=1 is set but this is a production job "
+        f"(iterations={config.iterations}, commit_results={config.commit_results}). "
+        f"Bypass is debug-only. Unset {_HARDEN_BYPASS_ENV} and retry."
+    )
+
+
 def _harden_candidate_cmd(candidate_cmd: str) -> tuple[str, list[str]]:
-    """Inject hardening flags when the cmd's argv[0] basename is `claude`.
+    """Inject skills/MCP hardening flags when the cmd's argv[0] basename is `claude`.
 
     Returns (hardened_cmd, added_flags). Idempotent — already-present flags
     are not re-added. Non-claude commands (custom wrappers, test stubs) pass
-    through unchanged so users can opt out by wrapping their own binary.
+    through unchanged so users can opt out by wrapping their own binary —
+    but this also means production wrappers (e.g. `env claude -p`,
+    `bash -c "claude ..."`, shell aliases resolved by the parent process)
+    silently skip hardening. If you need a wrapper in production, make sure
+    it forwards the hardening flags explicitly or normalize argv[0] to
+    `claude`. The audit script verifies post-hoc.
     """
-    if os.environ.get(_HARDEN_BYPASS_ENV) == "1":
+    if _bypass_active():
+        print(
+            f"WARNING: {_HARDEN_BYPASS_ENV}=1 — skills/MCP/Tool hardening "
+            f"skipped for this candidate invocation",
+            file=sys.stderr,
+        )
         return candidate_cmd, []
     parts = shlex.split(candidate_cmd)
     if not parts or Path(parts[0]).name != "claude":
         return candidate_cmd, []
     added: list[str] = []
-    for flag in _CLAUDE_HARDENING_FLAGS:
-        if flag not in parts:
-            parts.append(flag)
-            added.append(flag)
+    for arg in _CLAUDE_HARDENING_ARGS:
+        # Idempotency: check by flag *name* (handles both `--flag` and
+        # `--flag=value`). An existing `--disallowedTools foo` or
+        # `--disallowedTools=foo` both prevent re-addition.
+        flag_name = arg.split("=", 1)[0]
+        already_present = any(
+            p == flag_name or p.startswith(flag_name + "=") for p in parts
+        )
+        if not already_present:
+            parts.append(arg)
+            added.append(arg)
     return shlex.join(parts), added
 
 
@@ -255,6 +330,20 @@ def _load_profile(repo_root: Path) -> str:
     path = repo_root / _PROFILE_PATH
     if not path.is_file():
         return f"(candidate profile not found at {_PROFILE_PATH.as_posix()})"
+    return path.read_text(encoding="utf-8")
+
+
+def _load_workspace_body(config: RunnerConfig) -> str:
+    """Inline current workspace/transcribe.py body so candidate sees the
+    starting code even when Read is denied or Bash hardening prevents
+    `cat`. Defense in depth + reduced reliance on Tool calls.
+
+    Returns a brief placeholder if the file is missing (shouldn't happen in
+    a Phase 3 job).
+    """
+    path = config.repo_root / config.allowed_path
+    if not path.is_file():
+        return f"(workspace file not found at {config.allowed_path.as_posix()})"
     return path.read_text(encoding="utf-8")
 
 
@@ -434,6 +523,7 @@ def build_candidate_prompt(config: RunnerConfig, state: HarnessState) -> str:
     history = _history_tail(config.repo_root / config.summary_dir / "HISTORY.md")
     diagnosis = _best_diagnosis(config, state)
     profile = _load_profile(config.repo_root)
+    workspace_body = _load_workspace_body(config)
     recent = _recent_iters(
         config.repo_root, config.runs_dir, config.job_id, n=5
     )
@@ -446,6 +536,14 @@ def build_candidate_prompt(config: RunnerConfig, state: HarnessState) -> str:
     return f"""--- BEGIN CANDIDATE PROFILE (harness/prompts/candidate.md) ---
 {profile}
 --- END CANDIDATE PROFILE ---
+
+Current workspace/transcribe.py (inlined for context — you may still Read it
+through the Edit tool, but Bash is disabled so this is your primary view of
+the file's current state):
+
+```python
+{workspace_body}
+```
 
 Goal:
 - Improve corpus_cer on the 0715 eval batch.
@@ -831,6 +929,7 @@ def run_iteration(
 
 
 def run_job(config: RunnerConfig) -> HarnessState:
+    _check_bypass_in_production(config)
     state, state_path = load_or_init_state(config)
     format_reject_count = 0
     starting_iteration = state.iteration

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import shlex
 from pathlib import Path
 
 from harness.runner import (
@@ -16,6 +17,7 @@ from harness.runner import (
     RunnerConfig,
     _CLAUDE_HARDENING_FLAGS,
     _HARDEN_BYPASS_ENV,
+    _check_bypass_in_production,
     _harden_candidate_cmd,
     _recent_iters,
     build_candidate_prompt,
@@ -714,18 +716,28 @@ def test_run_job_commits_aborted_state_when_commit_results(
 
 def test_harden_candidate_cmd_injects_flags_for_claude() -> None:
     hardened, added = _harden_candidate_cmd('claude -p')
-    parts = hardened.split()
+    parts = shlex.split(hardened)
+    # Each hardening flag name should appear either bare (`--foo`) or with
+    # `=value` suffix (`--foo=bar`). `_CLAUDE_HARDENING_FLAGS` holds the
+    # name-only form for compat.
     for flag in _CLAUDE_HARDENING_FLAGS:
-        assert flag in parts, f'{flag} not injected: {hardened}'
-    assert set(added) == set(_CLAUDE_HARDENING_FLAGS)
+        present = any(p == flag or p.startswith(flag + "=") for p in parts)
+        assert present, f'{flag} not injected: {hardened}'
+    for flag in _CLAUDE_HARDENING_FLAGS:
+        present_in_added = any(a == flag or a.startswith(flag + "=") for a in added)
+        assert present_in_added, f'{flag} not reported in added: {added}'
 
 
 def test_harden_candidate_cmd_is_idempotent() -> None:
-    cmd = 'claude -p --disable-slash-commands --strict-mcp-config'
+    cmd = (
+        'claude -p --disable-slash-commands --strict-mcp-config '
+        '--disallowedTools=Bash,WebFetch,WebSearch,Task'
+    )
     hardened, added = _harden_candidate_cmd(cmd)
     assert added == []
     assert hardened.count('--disable-slash-commands') == 1
     assert hardened.count('--strict-mcp-config') == 1
+    assert hardened.count('--disallowedTools') == 1
 
 
 def test_harden_candidate_cmd_passes_through_non_claude() -> None:
@@ -747,3 +759,95 @@ def test_harden_candidate_cmd_recognizes_absolute_claude_path() -> None:
     assert '--disable-slash-commands' in hardened
     assert added  # at least one flag injected
 
+
+
+def test_check_bypass_rejects_production_iters(monkeypatch) -> None:
+    """F1 (codex 3차): production 잡 (iters>1) 에서 bypass 거부."""
+    import pytest
+    monkeypatch.setenv(_HARDEN_BYPASS_ENV, "1")
+    cfg = RunnerConfig(job_id="job", iterations=50)
+    with pytest.raises(RuntimeError, match=r"production job"):
+        _check_bypass_in_production(cfg)
+
+
+def test_check_bypass_rejects_production_commit_results(monkeypatch) -> None:
+    """F1 (codex 3차): production 잡 (commit_results=True) 에서 bypass 거부."""
+    import pytest
+    monkeypatch.setenv(_HARDEN_BYPASS_ENV, "1")
+    cfg = RunnerConfig(job_id="job", iterations=1, commit_results=True)
+    with pytest.raises(RuntimeError, match=r"production job"):
+        _check_bypass_in_production(cfg)
+
+
+def test_check_bypass_allows_debug_single_iter(monkeypatch, capsys) -> None:
+    """F1 (codex 3차): debug 모드 (single iter, no commit) 는 bypass 허용 + 경고."""
+    monkeypatch.setenv(_HARDEN_BYPASS_ENV, "1")
+    cfg = RunnerConfig(job_id="job", iterations=1, commit_results=False)
+    _check_bypass_in_production(cfg)  # no raise
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert _HARDEN_BYPASS_ENV in captured.err
+
+
+def test_check_bypass_silent_when_not_set(monkeypatch) -> None:
+    """F1 (codex 3차): bypass 미설정 시 production 잡도 통과."""
+    monkeypatch.delenv(_HARDEN_BYPASS_ENV, raising=False)
+    cfg = RunnerConfig(job_id="job", iterations=50, commit_results=True)
+    _check_bypass_in_production(cfg)  # no raise, no warning
+
+
+def test_harden_candidate_cmd_warns_on_bypass(monkeypatch, capsys) -> None:
+    """F1 (codex 3차): 매 invocation 마다 bypass 활성 시 경고 stderr."""
+    monkeypatch.setenv(_HARDEN_BYPASS_ENV, "1")
+    _harden_candidate_cmd("claude -p")
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert "hardening skipped" in captured.err
+
+
+def test_harden_candidate_cmd_includes_disallowed_tools() -> None:
+    """codex 2차: --disallowedTools=... 가 자동 부착되어 Bash/WebFetch 등 차단.
+    `=` 형식 필수 — variadic flag 가 candidate prompt 를 tool 이름으로 먹는
+    버그 방지."""
+    hardened, added = _harden_candidate_cmd("claude -p")
+    parts = shlex.split(hardened)
+    disallowed_entries = [p for p in parts if p.startswith("--disallowedTools")]
+    assert len(disallowed_entries) == 1, parts
+    entry = disallowed_entries[0]
+    assert "=" in entry, f"must use --flag=value form, got: {entry}"
+    value = entry.split("=", 1)[1]
+    for tool in ("Bash", "WebFetch", "WebSearch", "Task"):
+        assert tool in value, f"{tool} not in disallowedTools: {value}"
+    assert any(a.startswith("--disallowedTools") for a in added)
+
+
+def test_harden_candidate_cmd_disallowed_tools_idempotent() -> None:
+    """codex 2차: 이미 --disallowedTools 가 있으면 (= 형식이든 공백 형식이든)
+    중복 추가 X."""
+    # `=` form
+    cmd1 = "claude -p --disallowedTools=Bash,WebFetch,WebSearch,Task"
+    hardened1, added1 = _harden_candidate_cmd(cmd1)
+    parts1 = shlex.split(hardened1)
+    assert sum(1 for p in parts1 if p.startswith("--disallowedTools")) == 1
+    assert not any(a.startswith("--disallowedTools") for a in added1)
+    # space form (user manually provided two-arg style)
+    cmd2 = 'claude -p --disallowedTools "Bash,WebFetch,WebSearch,Task"'
+    hardened2, added2 = _harden_candidate_cmd(cmd2)
+    parts2 = shlex.split(hardened2)
+    assert sum(1 for p in parts2 if p == "--disallowedTools") == 1
+    assert not any(a.startswith("--disallowedTools") for a in added2)
+
+
+def test_build_candidate_prompt_inlines_workspace_body(tmp_path: Path) -> None:
+    """codex 2차: workspace/transcribe.py 본문이 prompt 에 inline 되어
+    Bash/Read 의존 없이 candidate 가 현재 코드를 본다."""
+    _init_repo(tmp_path)
+    # Replace with distinctive content
+    (tmp_path / "workspace/transcribe.py").write_text(
+        "def transcribe(audio, sr):\n    return 'SENTINEL_CONTENT_X1Y2'\n",
+        encoding="utf-8",
+    )
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    prompt = build_candidate_prompt(config, HarnessState(job_id="job", iteration=1))
+    assert "SENTINEL_CONTENT_X1Y2" in prompt
+    assert "Current workspace/transcribe.py" in prompt

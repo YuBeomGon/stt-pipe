@@ -106,12 +106,17 @@ def test_restrict_workspace_allows_transcribe() -> None:
     assert r.returncode == 0, r.stderr
 
 
-def test_restrict_workspace_allows_runs_dir() -> None:
+def test_restrict_workspace_denies_runs_dir() -> None:
+    """codex 2차 hardening (2026-05-29): ALLOWED_PREFIXES 가 () 로 좁혀짐.
+    candidate 가 runs/ 에 Edit/Write 하던 과거 허용 (telemetry / autoresearch
+    산출) 은 cheating 경로 (과거 score_report 덮어쓰기 등) 라 제거.
+    judge 평가 산출은 harness 가 띄우는 judge.evaluate 가 만든다."""
     r = _run_hook(
         ALT / "hooks" / "restrict_workspace.py",
         {"tool_name": "Write", "tool_input": {"file_path": "runs/iter_01/note.md"}},
     )
-    assert r.returncode == 0, r.stderr
+    assert r.returncode == 2
+    assert "workspace/transcribe.py" in r.stderr
 
 
 def test_restrict_workspace_denies_judge() -> None:
