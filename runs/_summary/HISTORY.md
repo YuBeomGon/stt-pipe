@@ -151,3 +151,14 @@ repetition_penalty 가 condition_on_prev 의 해결책이 아니었음.
 → (1) 카테고리 전환 (chunking 구조), 가장 큰 잠재.
 
 ---
+
+## iter 1 · phase3_001_iter_001 · cer=0.411350 (ΔNA) · keep
+
+### 관찰
+corpus_cer=0.411350, total_inference_time_s=110.1
+
+### 분석
+first valid candidate
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
