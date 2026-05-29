@@ -345,3 +345,17 @@ git commits — claude account/CLI 레벨, project 차단 불가).
 
 정본 + 검증 결과 + 5 단위 테스트:
 [`docs/CANDIDATE-CONTEXT.md`](../CANDIDATE-CONTEXT.md) §7.6.
+
+### 11.7 후속 슬롯 — prompt diversification (cold-restart wildcard 외)
+
+본 RFC §2.2 의 "cold-restart wildcard (M3) — C-lite 이후" 슬롯 + RFC §4
+판정 표의 *entropy 부족 시 도입* 분기를 다루는 후속 proposal:
+
+[`docs/proposals/2026-05-29-prompt-diversification.md`](2026-05-29-prompt-diversification.md)
+(Draft skeleton, 본문은 phase3_002 결과 후)
+
+요지: 현재 A' 는 *iter 단위 다양성* (lane round-robin 권고, fingerprint
+duplication check) 만 다룸 → "메타 단위 다양성" (best 정체 시 cold-restart,
+lane-cluster 강제 jump, HISTORY 망각 모드, diagnosis metric reframe) 누락.
+phase3_002 의 lane entropy / streak 가 RFC §4 판정 표의 어디에 떨어지는지가
+도입 트리거.

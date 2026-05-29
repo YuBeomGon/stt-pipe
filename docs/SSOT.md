@@ -74,6 +74,7 @@
 |---|---|---|
 | Accepted | [`proposals/2026-05-29-agent-design.md`](proposals/2026-05-29-agent-design.md) — A' candidate runtime | PHASE3-PLAN §2/§4/§5/§7, harness/prompts/candidate.md, scripts/analyze_run.py D 축. §11 Addendum 에 RFC 외 audit 인프라 회고 |
 | Draft | [`proposals/2026-05-29-skills-and-prompt-eval.md`](proposals/2026-05-29-skills-and-prompt-eval.md) — 내부 skill/agent + prompt-eval | 채택 시 .claude/skills/aig/, runner.py default cmd, README workflow. 본문은 phase3_002 결과 후 |
+| Draft | [`proposals/2026-05-29-prompt-diversification.md`](proposals/2026-05-29-prompt-diversification.md) — Cold-restart wildcard / lane-cluster jump / HISTORY 망각 / metric reframe | 채택 시 harness/prompts/candidate.md + runner.build_candidate_prompt + state.py. 본문은 phase3_002 의 lane entropy/streak 결과 후 |
 
 proposal 은 *결정 이력* 이지 운영 정본이 아니다. 운영 정본은 §2 표 (특히
 PHASE3-PLAN, CANDIDATE-CONTEXT, `harness/prompts/candidate.md`) 에만 둔다.
