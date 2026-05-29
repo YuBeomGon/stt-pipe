@@ -26,7 +26,7 @@ _INITIAL_PROMPT_TEXT = (
 )
 
 
-def _dedup_chunk_boundary(prev_text: str, curr_text: str, max_overlap: int = 20) -> str:
+def _dedup_chunk_boundary(prev_text: str, curr_text: str, max_overlap: int = 40) -> str:
     """이전 chunk 의 끝과 다음 chunk 의 시작이 같으면 다음 시작 부분 제거."""
     if not prev_text or not curr_text:
         return curr_text
