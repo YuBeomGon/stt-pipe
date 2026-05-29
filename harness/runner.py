@@ -533,9 +533,16 @@ def build_candidate_prompt(config: RunnerConfig, state: HarnessState) -> str:
     # Profile first — establishes role / lanes / required output format as
     # the anchoring context. Goal / state / recent / history / diagnosis
     # follow as runtime data the candidate uses to choose its diff.
-    return f"""--- BEGIN CANDIDATE PROFILE (harness/prompts/candidate.md) ---
+    # Section delimiters use `===` not `---`. claude CLI (and most argv
+    # parsers) treat a leading `--` as an unknown option, so a prompt that
+    # starts with `--- BEGIN ...` triggers
+    #   error: unknown option '--- BEGIN ...'
+    # and every iter format-rejects with exit 1. Discovered when phase3_002
+    # reject-looped 50 times before any candidate ran (2026-05-29).
+    # Keep the first character of the prompt body anything other than `-`.
+    return f"""=== BEGIN CANDIDATE PROFILE (harness/prompts/candidate.md) ===
 {profile}
---- END CANDIDATE PROFILE ---
+=== END CANDIDATE PROFILE ===
 
 Current workspace/transcribe.py (inlined for context — you may still Read it
 through the Edit tool, but Bash is disabled so this is your primary view of

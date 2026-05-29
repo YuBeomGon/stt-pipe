@@ -851,3 +851,17 @@ def test_build_candidate_prompt_inlines_workspace_body(tmp_path: Path) -> None:
     prompt = build_candidate_prompt(config, HarnessState(job_id="job", iteration=1))
     assert "SENTINEL_CONTENT_X1Y2" in prompt
     assert "Current workspace/transcribe.py" in prompt
+
+
+def test_build_candidate_prompt_does_not_start_with_double_dash(tmp_path: Path) -> None:
+    """Regression: prompt must NOT start with `--` or claude CLI's argv parser
+    treats it as an unknown option (`error: unknown option '--- BEGIN ...'`).
+    Discovered in phase3_002 first launch: 50 reject loop before any iter ran."""
+    _init_repo(tmp_path)
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    prompt = build_candidate_prompt(config, HarnessState(job_id="job", iteration=1))
+    assert not prompt.startswith("--"), (
+        f"prompt starts with {prompt[:30]!r} — claude CLI will reject."
+    )
+    assert "=== BEGIN CANDIDATE PROFILE" in prompt
+    assert "--- BEGIN CANDIDATE PROFILE" not in prompt

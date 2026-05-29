@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 > **Candidate session gate**: 본 prompt 본문이
-> `--- BEGIN CANDIDATE PROFILE ---` 로 시작하면 (= `claude -p` 가
+> `=== BEGIN CANDIDATE PROFILE ===` 로 시작하면 (= `claude -p` 가
 > `harness.runner.build_candidate_prompt` 결과를 받은 경우), **본 CLAUDE.md
 > 전체를 무시한다**. Candidate 의 행동은 prompt 안의 profile
 > ([`harness/prompts/candidate.md`](harness/prompts/candidate.md)) 와 그 뒤에

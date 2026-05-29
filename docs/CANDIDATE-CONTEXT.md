@@ -219,7 +219,9 @@ phase3_001 도 동일 환경에서 돌았으므로 본 baseline 은 phase3_001 �
 
 **정리 내용**:
 1. CLAUDE.md 최상단에 *candidate session gate* 추가 — "prompt 가
-   `--- BEGIN CANDIDATE PROFILE ---` 로 시작하면 본 파일 무시"
+   `=== BEGIN CANDIDATE PROFILE ===` 로 시작하면 본 파일 무시"
+   (델리미터가 `---` → `===` 로 변경된 이유는 `harness/runner.py` 의 주석
+   참조 — argv 파서가 `--` 로 시작하는 prompt 를 unknown option 으로 처리)
 2. 운영자용 §1 / §3 / §4 제거 (AGENTS.md 가 이미 권한 표·정보 출처·Phase
    행동 다 다룸)
 3. 본문에 §2 채팅 응답 스타일만 남기고 "interactive 운영자 한정" 명시
