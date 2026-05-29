@@ -45,10 +45,16 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
+        # Every 0715 file is deletion-dominated (length_ratio 0.32–0.81, all
+        # < 1.0) while hallucination/insertion stays ~0 — the model under-emits
+        # on this long-form conversational audio. length_penalty > 1 biases the
+        # beam toward longer hypotheses, directly shrinking deletions; it is
+        # inert under greedy decode, so widen the beam to let it take effect.
         results = generate(
             features,
             [prompt_tokens],
-            beam_size=1,
+            beam_size=5,
+            length_penalty=1.5,
             sampling_temperature=0.0,
         )
 
