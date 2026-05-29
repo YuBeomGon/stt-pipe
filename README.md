@@ -23,7 +23,7 @@ pip install -r requirements.txt
 # 첫 실행 시 .cache/ct2_models/ 에 CT2 변환 캐시 자동 생성
 ```
 
-사전 조건: Linux + CUDA float16 GPU (~14GB+), Python 3.10+, 14 페어:
+사전 조건: Linux + CUDA float16 GPU (~14GB+), Python 3.10+, 11 페어:
 - `data/raw/wav/AIG_녹취반출_20250715/*_l.wav`
 - `data/raw/label/AIG_녹취반출_20250715/*_l.txt`
 
@@ -44,6 +44,9 @@ Phase 3 기본 실행 형태:
 ```bash
 python3 scripts/evolve.py --job-id phase3_001 --iters 25 --candidate-cmd "claude -p" --commit-results
 ```
+
+`--iters > 1` 이면 `--commit-results` 가 **필수** (직전 best 를 git 기준점으로 고정해야
+reject 시 안전한 rollback 가능 — PHASE3-PLAN §4 참조).
 
 ---
 

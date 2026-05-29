@@ -323,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not args.unseal:
-        print("refused: chmod 복구는 --unseal 명시 필요 — Phase 3 §6.3", file=sys.stderr)
+        print("refused: chmod 복구는 --unseal 명시 필요 — PHASE3-PLAN §8", file=sys.stderr)
         return 4
 
     # 2-5. unseal → evaluate → report → 재봉인.

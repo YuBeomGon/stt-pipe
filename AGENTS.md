@@ -20,7 +20,7 @@ baseline time budget 안에 들어야 한다. faster-whisper `baseline_cer` 은 
 >
 > Phase 1·2 (셋업 / 평가 인프라 구축) 에서는 사람 또는 사람이 명시 지시한
 > 에이전트가 `judge/`, `frozen/`, `scripts/`, `docs/`, `tests/`, `workspace/`,
-> `assets/` 를 자유롭게 작성·수정한다. Phase 3 진입 시점 ([`docs/PHASE3-PLAN.md §1`](docs/PHASE3-PLAN.md))
+> `assets/` 를 자유롭게 작성·수정한다. Phase 3 진입 시점 ([`docs/PHASE3-PLAN.md §3`](docs/PHASE3-PLAN.md))
 > 에 본 표의 제한이 *일괄 활성화* 된다.
 
 | 영역 | Phase 3 권한 |
@@ -41,11 +41,17 @@ baseline time budget 안에 들어야 한다. faster-whisper `baseline_cer` 은 
 | `runs/<hyp_id>/` | iteration 산출물. 읽기만 (verify 가 `score_report.json`, `per_file.jsonl`, `diagnosis_report.json`, `_telemetry/` 작성) |
 | `runs/_summary/` | **편집 금지** — harness 전용 HISTORY/state/REPORT 영역. 후보가 만들거나 덮어쓰면 scope 위반 |
 
-holdout 이름·경로 참조 금지 범위는 `workspace/`, `judge/`, prompt, 운영 wrapper 를
-제외한 `scripts/`. 운영 wrapper 예외: `scripts/seal_holdout.sh`,
-`scripts/evaluate_holdout.py` (Phase 2 산출 — 잡 종료 후 1 회 평가에 holdout
-batch 참조 필수). 정본·운영 문서 (`docs/`, `README.md`, `AGENTS.md`, `CLAUDE.md`)
-도 명시적 안내를 위해 예외.
+holdout 이름·경로 참조 금지의 핵심은 **read access** 다. 다음 카테고리는 예외:
+- 운영 wrapper (잡 종료 후 1 회 평가 시 holdout batch 식별 필수):
+  `scripts/seal_holdout.sh`, `scripts/evaluate_holdout.py`
+- defensive deny 가드 (오타로 holdout 측정 방지 목적의 hard-coded `_FORBIDDEN_BATCHES`):
+  `scripts/measure_baseline.py`, `scripts/build_audio_profile.py`
+- 회귀 테스트 fixture / hook deny 패턴 검증: `tests/`, `.claude/hooks/`,
+  `.claude/settings.json`
+- 정본·운영 문서: `docs/`, `README.md`, `AGENTS.md`, `CLAUDE.md`
+
+위 외 (`workspace/`, `judge/`, prompt, `harness/` 본문, 그 외 `scripts/`) 에서는
+이름 참조도 금지.
 
 ---
 

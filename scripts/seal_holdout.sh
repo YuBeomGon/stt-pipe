@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 3 진입 직전에 holdout 을 물리적으로 차단한다 (PHASE3-PLAN.md §1.3).
+# Phase 3 진입 직전에 holdout 을 물리적으로 차단한다 (PHASE3-PLAN.md §3).
 # 종료 후 evaluate_holdout.py --unseal 가 1 회만 권한을 복구하고 다시 봉인한다.
 #
 # 동작:

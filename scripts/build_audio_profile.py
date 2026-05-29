@@ -101,7 +101,7 @@ def build(batch: str, out_dir: Path) -> Path:
     if batch in _FORBIDDEN_BATCHES:
         raise SystemExit(
             f"refusing to profile holdout batch {batch!r}: see AGENTS.md / "
-            "PHASE3-PLAN.md §6.3"
+            "PHASE3-PLAN.md §3 (진입 가드) + §8 (Holdout 평가)"
         )
 
     pairs = pair_batch(batch)

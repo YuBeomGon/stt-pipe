@@ -23,7 +23,8 @@ flowchart TD
     G --> K[_telemetry optional]
 
     H --> L[harness.guards]
-    L --> M{Hard fail?}
+    L --> SV[post-verify scope re-check<br/>workspace + runs/&lt;hyp_id&gt; 외 변경 차단]
+    SV --> M{Hard fail?}
     M -->|yes| R[REJECT / rollback]
     M -->|no| N[harness.policy]
     N --> O{Success?}
@@ -64,6 +65,7 @@ sequenceDiagram
     J->>R: score_report.json / per_file.jsonl / diagnosis_report.json
     H->>G: guard checks
     G-->>H: pass / fail + warnings
+    H->>H: post-verify scope re-check<br/>(verify 중 candidate 파일 I/O 차단)
     H->>P: best, score, sigma 입력
     P-->>H: keep / reject / success
     H->>R: HISTORY append

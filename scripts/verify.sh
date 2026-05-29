@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# Phase 3 verify (PHASE3-PLAN.md §1.2).
+# Phase 3 verify entrypoint — 사람이 직접 실행 가능. 가드 정본은 PHASE3-PLAN §5.
 #
-# 활성화: 사람이 `bash scripts/swap_verify.sh` 한 번 실행 →
-#         scripts/verify.sh <-> scripts/verify.sh.alt 교환.
-# 비활성화 (원복): swap_verify.sh 를 한 번 더 실행.
+# 자체 harness 전환 후 본 파일이 정본 verify 경로다. 과거 `verify.sh.alt` /
+# `swap_verify.sh` 는 PHASE3-STATUS §3 에서 폐기 검토 중이며 현재 호출되지 않는다.
 #
 # 가드:
-#   1. 정적 backend 직접 import 차단
-#   2. 정적 profile/asset 직접 참조 차단
+#   1. 정적 backend 직접 import 차단 (ctranslate2 / transformers / from_pretrained / Whisper()
+#   2. 정적 profile/asset 직접 참조 차단 (assets / audio_profile / silero)
 #   3. judge.evaluate 실행 (실행 무효 = exit 1)
-#   4. scripts/verify_check.py: 산술 무결성 / catastrophic / runtime cap / quality budget
-#   5. 마지막 줄에 corpus_cer 한 숫자 (autoresearch 가 읽음)
+#   4. harness.guards: 산술 무결성 / catastrophic / runtime cap / quality budget
+#   5. 마지막 줄에 corpus_cer 한 숫자 (harness reader 또는 사람이 읽음)
 
 set -euo pipefail
 
@@ -65,5 +64,5 @@ python -m harness.guards \
     --baseline "${BASELINE_FILE}" \
     --runtime-hard-multiplier "${RUNTIME_HARD_MULTIPLIER}"
 
-# --- 5. autoresearch 가 읽는 마지막 줄 ---------------------------------------
+# --- 5. corpus_cer 한 숫자 (harness reader 또는 사람) ------------------------
 python -c "import json,sys; print(json.load(open('${OUT_DIR}/score_report.json'))['corpus_cer'])"

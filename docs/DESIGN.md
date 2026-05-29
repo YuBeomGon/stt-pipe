@@ -60,12 +60,14 @@ aig/
 ├── workspace/
 │   └── transcribe.py            # ← 후보가 수정하는 유일한 파일
 ├── frozen/
+│   ├── __init__.py
 │   └── asr_backend.py           # CT2 + whisper-large-v3-turbo 봉인 (Phase 3 편집 금지)
 ├── judge/
 │   ├── __init__.py
 │   ├── normalize.py             # §5.1 정규화
 │   ├── metrics.py               # corpus_cer + edit ops + guards
 │   ├── pairing.py               # label-driven _l 페어링
+│   ├── diagnosis.py             # 11파일 summary + focus 결합 → diagnosis_report.json
 │   └── evaluate.py              # entry point: run → score_report.json + diagnosis_report.json
 ├── harness/
 │   ├── guards.py                # Phase 3 수치 가드 (산술/catastrophic/runtime/quality)
@@ -221,7 +223,7 @@ def to_storage_view(np_array): ...                      # numpy → ctranslate2.
 
 - 봉인: 모델 이름, 변환 캐시 경로, device, compute_type
 - workspace 자유: decoding_kwargs (beam, temperature, fallback, sampling 등 전부)
-- 추가 보호: Phase 3 verify 가 workspace 에 `import ctranslate2` / `import transformers` / `from_pretrained` / `Whisper(` 중 어느 패턴이라도 출현 시 fail (PHASE3 §1.2)
+- 추가 보호: Phase 3 verify 가 workspace 에 `import ctranslate2` / `import transformers` / `from_pretrained` / `Whisper(` 중 어느 패턴이라도 출현 시 fail (PHASE3-PLAN §5)
 
 ### 2.7 초기 transcribe 스텁 (`workspace/transcribe.py`)
 

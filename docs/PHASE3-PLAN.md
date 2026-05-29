@@ -58,7 +58,11 @@
 2. `workspace/transcribe.py` 외 후보 편집 금지
 3. `frozen/`, `judge/`, `baseline/`, `assets/audio_profile/` 보호
 4. `baseline/target_cer.json`, `baseline/noise_floor.json` 재측정 금지
-5. 정상 verify 1회와 의도적 위반 smoke 1회
+5. 정상 verify 1회: `bash scripts/verify.sh` → 마지막 줄에 `corpus_cer` 한 숫자가
+   나오고 exit 0
+6. 의도적 위반 smoke 1회: `workspace/transcribe.py` 상단에 `import ctranslate2`
+   한 줄 추가 → `bash scripts/verify.sh` → `verify FAIL [static backend]` 메시지와
+   exit 1 확인 → 그 줄 원복
 
 자체 harness 전환 뒤에는 `/autoresearch` 호출, autoresearch skill 설치, TSV 분석을
 운영 전제로 삼지 않는다. 이전 조사 기록은 [`AUTORESEARCH.md`](AUTORESEARCH.md)에
@@ -125,16 +129,29 @@ Hard fail:
 - verify 직후 `workspace/transcribe.py` 와 `runs/<hyp_id>/` 밖에 변경 (`runs/_summary/`, `baseline/`, `docs/`, `judge/`, `frozen/` 등) 가 발견되면 reject + rollback. candidate 의 `transcribe()` 가 verify 중 임의 파일 I/O 로 정본을 오염시키는 것을 막는다.
 
 Static guard 한계:
-- `harness.verify.check_workspace_static` 의 AST/regex 검사는 **best-effort** 다. literal `import ctranslate2`, `from transformers import X`, `import frozen.asr_backend as f`, `__import__("frozen.asr_backend")`, `importlib.import_module("frozen.asr_backend")` 같은 명시적 패턴은 잡지만, 다음과 같은 *동적* 우회는 정적으로 차단 불가능하다:
-  - 문자열 조합 후 `importlib.import_module(...)` 호출 (예: `"froz" + "en.asr_backend"`)
+- `harness.verify.check_workspace_static` 의 AST/regex 검사는 **best-effort** 다.
+  현재 deny 대상은 `ctranslate2` / `transformers` 의 literal import (`import …`,
+  `from … import …`, `import … as …`) 와 `from_pretrained` / `Whisper(` 패턴이다.
+  추가로 `__import__` / `importlib` 식별자 자체를 substring 으로 일괄 거부 — 인자가
+  무엇이든 (`"ctranslate2"`, `"transformers"`, 또는 무관한 모듈) 동적 import 호출은
+  통과 못 한다. **frozen 은 합법 경로** (workspace stub 가 `from frozen.asr_backend
+  import …` 로 정상 사용) 라 deny-list 에서 의도적으로 제외.
+- 다음과 같은 *obfuscated 동적* 우회는 정적으로 차단 불가능하다:
+  - 문자열 조합 후 동적 호출 (예: `"ctrans" + "late2"` 를 `importlib` 으로 — 단,
+    `importlib` literal 이 거부되므로 alias 우회까지 가야 함)
   - `getattr(__builtins__, "__import__")(...)`, `eval(...)`, `exec(...)`, `compile(...)`
   - `sys.modules` 직조작
-- 따라서 동적 import / `eval` / `exec` / `__builtins__` 우회는 **운영 규약상 금지**이며, 후보 코드 review (사람 또는 candidate 생성자) 의 책임이다. static guard 만으로 안전하다고 가정하지 않는다.
+- 따라서 동적 import / `eval` / `exec` / `__builtins__` 우회는 **운영 규약상 금지**이며,
+  후보 코드 review (사람 또는 candidate 생성자) 의 책임이다. static guard 만으로
+  안전하다고 가정하지 않는다.
 
 Quality budget:
 - hallucination, repetition, length, coverage가 baseline guard 분포보다 크게 악화되면
   기본은 warning이다.
 - `QUALITY_BUDGET_HARD=1`이면 quality budget 위반도 hard fail로 처리한다.
+- **세부 임계값** (`QB_HALLUC_DELTA`, `QB_REPEAT_DELTA`, `QB_EMPTY_DELTA`,
+  `QB_LENGTH_MEAN_DELTA`, `QB_COVERAGE_DROP`) 은 `harness/guards.py` 상수에 박혀 있다.
+  중복 정의를 피하기 위해 PLAN 은 정성 표현만 두고 수치 정본은 코드에 위임한다.
 
 초기 runtime 값:
 - hard cap: `RUNTIME_HARD_MULTIPLIER=3.0`
