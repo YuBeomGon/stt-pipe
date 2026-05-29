@@ -51,11 +51,14 @@ _YAML_FENCE_RE = re.compile(r"```yaml\s*\n(.*?)\n```", re.DOTALL)
 _FINGERPRINT_MAX_TOKENS = 6
 _PROFILE_PATH = Path("harness/prompts/candidate.md")
 
-# Cold-restart / discovery-mode trigger (proposal §4.1): when best_cer has not
-# improved for this many consecutive iterations, the prompt switches into a
-# discovery directive (parameter tweaks declared dead, structural change
-# allowed) and minimizes HISTORY anchoring (§4.3).
-_COLD_RESTART_THRESHOLD = 5
+# Cold-restart / discovery-mode trigger (proposal §4.1; review F3 → set to 3):
+# when best_cer has not improved for this many consecutive iterations, the
+# prompt switches into a discovery directive (parameter tweaks declared dead,
+# structural change allowed) and minimizes HISTORY anchoring (§4.3). Lowered
+# from 5 to 3 because round-robin forcing was removed — discovery pressure must
+# kick in earlier so the stall-before-trigger window doesn't waste iterations on
+# parameter sweeps.
+_COLD_RESTART_THRESHOLD = 3
 # Recent-iterations dedup window: how many of the latest iters to show as the
 # "do not repeat this fingerprint" table.
 _RECENT_DEDUP_WINDOW = 5

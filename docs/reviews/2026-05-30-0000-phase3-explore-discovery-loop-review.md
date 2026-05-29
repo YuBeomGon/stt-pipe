@@ -124,3 +124,18 @@
 - 본 리뷰는 설계-의도 정렬 관점. 스키마 3각 정합/예외경로/off-by-one 등 기계적
   정확성은 `/code-review` 로 별도 확인 권장 (층이 다름).
 - F2 는 이번 커밋 범위 밖(policy)이지만, 의도 달성에 가장 큰 레버라 명시.
+
+---
+
+## 5. 처리 로그 (resolution)
+
+- **F1 — 해결** (`7b8694f`): findings ledger 를 `runs/_summary/<job>_candidate_meta.jsonl`
+  전체에서 빌드 (dedup + `_LEDGER_MAX_FACTS` 캡). dedup 테이블은 `_RECENT_DEDUP_WINDOW`(5)
+  로 분리. 회귀 테스트 추가.
+- **F3 — 해결**: `_COLD_RESTART_THRESHOLD` 5 → **3** (discovery 모드 조기 발동).
+  hard-reject(옵션 a)는 채택 안 함 — refine 차단 우려.
+- **F2 — 진행 중**: 누적 banking 방향 (운영자 선택). σ 가 deterministic eval 상
+  degenerate(provisional)라 run-to-run 잡음은 없음 → 0.01 게이트는 사실상
+  *overfit/triviality* 가드. banking = eval 상 strict 개선이면 채택. 트레이드오프:
+  11파일 eval 과적합 위험(holdout 이 이미 overfit YES) — 잡 종료 holdout 으로 감시.
+- **F4 / F5 — follow-up**: candidate Bash/probing 정책, 다양성 관측 지표.
