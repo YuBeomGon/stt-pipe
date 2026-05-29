@@ -51,8 +51,21 @@
 
 ## 5. Phase 3 실행
 
-- [ ] holdout 봉인 확인 — PLAN §3, §8
-- [ ] 25 iter 또는 target 도달까지 실행 — PLAN §4, §6
-- [ ] `runs/_summary/HISTORY.md` 누적 확인 — PLAN §7
-- [ ] `scripts/analyze_run.py`로 REPORT 생성 — PLAN §7
-- [ ] `scripts/evaluate_holdout.py --unseal` 1회 평가 — PLAN §8
+### 5.1 phase3_001 (baseline, harness v1 — 자체 harness 첫 잡)
+- [x] holdout 봉인 확인 — PLAN §3, §8
+- [x] 25 iter 실행 (target 미도달, best 0.2545 @ iter 9) — PLAN §4, §6
+- [x] `runs/_summary/HISTORY.md` 누적 확인 — PLAN §7
+- [x] `scripts/analyze_run.py`로 REPORT 생성 → `docs/reports/phase3_001_REPORT_2026-05-29.md`
+- [ ] `scripts/evaluate_holdout.py --unseal` 1회 평가 (보류 — A' 후 phase3_002 끝나면 한 번에)
+
+## 6. A' — candidate runtime infra (proposal 2026-05-29-agent-design)
+
+- [x] RFC 작성 — `docs/proposals/2026-05-29-agent-design.md`
+- [x] candidate profile 신설 — `harness/prompts/candidate.md`
+- [x] runner profile inline + YAML parse + format reject + 권고 lane round-robin + abort 가드 — PLAN §4
+- [x] `analyze_run.py` D 축 확장 — lane entropy / fingerprint Jaccard / max streak / format reject 비율
+- [x] 테스트 — `parse_candidate_metadata`, format reject path, abort 가드, `LANES ↔ profile` 일관성
+- [x] 문서 정본 갱신 — PHASE3-PLAN §2 / §4 / §5 / §7, SSOT
+- [ ] phase3_002 50 iter 실행 (proposal §10)
+- [ ] phase3_002 REPORT 의 D 축으로 A' 효과 판정 — proposal §4 판정 표
+- [ ] 후속 결정 — C-lite 진행 / SPEC 보강 / profile 재작성

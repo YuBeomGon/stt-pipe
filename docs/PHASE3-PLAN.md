@@ -34,12 +34,14 @@
 | 영역 | 책임 |
 |------|------|
 | `harness/` | Phase 3 controller 본체. guard, policy, state, history, runner |
+| `harness/prompts/candidate.md` | candidate runtime profile (역할 / 5 lane / 자기검증 / YAML response format). runner 가 매 iter prompt 에 inline. 변경 = candidate 행동 변경 (proposal 2026-05-29-agent-design) |
 | `scripts/` | 사람이 실행하는 얇은 CLI와 일회성 운영 명령 |
 | `judge/` | 평가자. 후보 텍스트를 점수와 diagnosis로 변환 |
 | `workspace/transcribe.py` | 후보가 수정하는 유일한 STT pipeline 표면 |
 | `frozen/` | CT2 + Whisper-large-v3-turbo backend 봉인 |
-| `runs/<hyp_id>/` | iteration별 평가 산출물. git ignore 대상 |
-| `runs/_summary/` | harness 전용 누적 로그·상태·최종 리포트 |
+| `runs/<hyp_id>/` | iteration별 평가 산출물 + candidate metadata (`candidate_meta.json` / `.err`). git ignore 대상 |
+| `runs/_summary/` | harness 전용 누적 로그·상태 (`<job_id>_state.json`, `HISTORY.md`, `JOB_DONE.lock`) |
+| `docs/reports/` | analyze_run / evaluate_holdout 의 잡별 산출물 |
 
 판단 기준:
 - import 가능한 재사용 로직은 `harness/`에 둔다.
@@ -47,6 +49,10 @@
 - metric 산출은 `judge/`, 채택 판정은 `harness/`가 맡는다.
 - candidate는 `workspace/transcribe.py` 외 파일을 수정하지 않는다. 특히
   `runs/_summary/`는 HISTORY와 state를 담는 harness 전용 영역이므로 scope 위반이다.
+- candidate runtime 가이드 (역할·접근법·응답 포맷) 는 `harness/prompts/candidate.md`
+  에 둔다. runner.py 의 build_candidate_prompt 가 이 파일을 읽어 매 iter prompt
+  본문에 inline — candidate session 은 file 을 직접 read 하지 않는다 (prompt.md
+  사이드카로 재현·디버깅 가능).
 
 ---
 
@@ -137,17 +143,31 @@ historical 문서로 보존한다.
 
 한 iteration은 다음 순서를 따른다.
 
-1. 후보 변경 생성 (`claude -p`를 candidate worker로 사용)
-2. `workspace/transcribe.py` 정적 금지 패턴 검사 (§5)
-3. `judge.evaluate` 실행 → `runs/<hyp_id>/score_report.json` 외 산출
-4. `harness.guards`로 산술·catastrophic·runtime·quality budget 검사
-5. verify 직후 scope 재검사 — `workspace/transcribe.py` + `runs/<hyp_id>/` 밖 변경
+1. **prompt 빌드** — `build_candidate_prompt` 가 `harness/prompts/candidate.md`
+   본문 + goal + state + 최근 5 iter 의 `(lane, fingerprint, cer)` 표 + 권고
+   lane (round-robin) + HISTORY tail + best diagnosis 를 inline 으로 합쳐
+   `runs/<hyp_id>/prompt.md` 로도 저장 (재현용)
+2. 후보 변경 생성 (`claude -p` 를 candidate worker 로 사용)
+3. **A' format 게이트** — candidate stdout 의 마지막 ```yaml fenced block 을
+   `yaml.safe_load` 로 파싱해 `lane` / `diff_fingerprint` (1–6 token) /
+   `why_different_from_last_5` 키 + lane 값 유효성 검사. 누락·malformed 면
+   `candidate_meta.err` 만 남기고 workspace rollback + reject (verify 호출 X).
+   성공 시 `candidate_meta.json` 저장 → 이후 단계 진행
+4. `workspace/transcribe.py` 정적 금지 패턴 검사 (§5)
+5. `judge.evaluate` 실행 → `runs/<hyp_id>/score_report.json` 외 산출
+6. `harness.guards`로 산술·catastrophic·runtime·quality budget 검사
+7. verify 직후 scope 재검사 — `workspace/transcribe.py` + `runs/<hyp_id>/` 밖 변경
    발견 시 즉시 reject (candidate 의 `transcribe()` 가 verify 중 임의 파일 I/O 로
    정본 오염 방지)
-6. `score_report.json`에서 `corpus_cer` 읽기
-7. `harness.policy`가 keep/reject/success 판정 (§6)
-8. keep이면 best 갱신과 기록, reject면 후보 변경 rollback
-9. `runs/_summary/HISTORY.md` append
+8. `score_report.json`에서 `corpus_cer` 읽기
+9. `harness.policy`가 keep/reject/success 판정 (§6)
+10. keep이면 best 갱신과 기록, reject면 후보 변경 rollback
+11. `runs/_summary/HISTORY.md` append
+
+**잡 레벨 abort 가드 (proposal 2026-05-29-agent-design §2.1)**: 첫 5 iter 중
+4 회 이상 format reject 가 발생하면 잡 중단 → `HarnessState.status =
+"aborted_format_reject"`. profile (`harness/prompts/candidate.md`) 가 LLM 의
+실제 응답 형식과 어긋난 신호이며, 운영자가 profile 재작성 후 새 job_id 로 재실행.
 
 ### Flag semantics
 
@@ -184,6 +204,19 @@ Hard fail:
 - `length_ratio.p95 > 5.0`
 - `total_inference_time_s > baseline_time * RUNTIME_HARD_MULTIPLIER`
 - verify 직후 `workspace/transcribe.py` 와 `runs/<hyp_id>/` 밖에 변경 (`runs/_summary/`, `baseline/`, `docs/`, `judge/`, `frozen/` 등) 가 발견되면 reject + rollback. candidate 의 `transcribe()` 가 verify 중 임의 파일 I/O 로 정본을 오염시키는 것을 막는다.
+
+Pre-verify format gate (A', proposal 2026-05-29-agent-design §2.1):
+- candidate stdout 의 마지막 ```yaml fenced block 이 없거나 (`lane`,
+  `diff_fingerprint`, `why_different_from_last_5`) 키 누락 → reject **before
+  verify** (verify 호출 X, GPU 비용 0). 실패 사유는 `candidate_meta.err` 에
+  기록되어 `scripts/analyze_run.py` 의 D 축 format_reject_pct 로 집계.
+- `lane` 이 5 lane (`segmentation` / `decoding` / `prompt` / `postprocess` /
+  `telemetry`) 외 값 → reject.
+- `diff_fingerprint` 가 list of strings 아님 또는 길이 1–6 범위 밖 → reject
+  (7+ token = "one focused change" 위반).
+- `why_different_from_last_5` 가 빈 문자열 → reject.
+- fingerprint *중복* (직전 N iter 과 동일) 은 **reject 대상이 아님** — 기록만.
+  중복 reject 는 C-lite 단계로 분리 (proposal §2.2 ablation 보호).
 
 Static guard 한계:
 - `harness.verify.check_workspace_static` 의 AST/regex 검사는 **best-effort** 다.
@@ -236,18 +269,20 @@ Quality budget:
 ## 7. 기록 정책
 
 Iteration 산출물:
-- `runs/<hyp_id>/score_report.json`
-- `runs/<hyp_id>/per_file.jsonl`
-- `runs/<hyp_id>/diagnosis_report.json`
+- `runs/<hyp_id>/score_report.json` — format reject 시 부재
+- `runs/<hyp_id>/per_file.jsonl` — 같음
+- `runs/<hyp_id>/diagnosis_report.json` — 같음
 - `runs/<hyp_id>/_telemetry/` (있을 때)
-- `runs/<hyp_id>/prompt.md`
+- `runs/<hyp_id>/prompt.md` — runner 가 build_candidate_prompt 결과 그대로 저장 (재현·디버깅)
 - `runs/<hyp_id>/claude_stdout.txt`
 - `runs/<hyp_id>/claude_stderr.txt`
 - `runs/<hyp_id>/candidate.diff`
+- `runs/<hyp_id>/candidate_meta.json` — A' YAML 메타데이터 (lane / fingerprint / why). 파싱 성공 시
+- `runs/<hyp_id>/candidate_meta.err` — A' format reject 사유. 파싱 실패 시 (둘 중 정확히 하나만 존재)
 
 누적 기록:
 - `runs/_summary/HISTORY.md`
-- `runs/_summary/<job_id>_state.json`
+- `runs/_summary/<job_id>_state.json` — `HarnessState.status` 가 `"aborted_format_reject"` 이면 §4 의 잡 abort 가드가 작동한 것
 
 `HISTORY.md`는 실험 로그 정본이다. harness만 append하며, 후보가 직접 만들거나
 덮어쓰면 scope 위반으로 rollback한다. 각 iteration은 최소한 다음 정보를 남긴다.

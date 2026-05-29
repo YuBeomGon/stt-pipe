@@ -26,9 +26,11 @@
 | Phase 3 자체 harness 운영 절차 | [`PHASE3-PLAN.md`](PHASE3-PLAN.md) | 체크박스 금지 |
 | Phase 3 DoD / 현재 상태 | [`PHASE3-STATUS.md`](PHASE3-STATUS.md) | PLAN 섹션 참조만 |
 | Phase 3 구조 그림 | [`PHASE3-LOOP.md`](PHASE3-LOOP.md) | 보조 문서, 정본 아님 |
+| candidate runtime profile (역할·접근법·응답 포맷) | [`../harness/prompts/candidate.md`](../harness/prompts/candidate.md) | runner 가 prompt 에 inline. 변경 = candidate 행동 변경 |
+| harness 변경 제안 (RFC) | [`proposals/`](proposals/) | 채택 후 정본 갱신 + historical 유지 |
 | 세션 종료 인계 메모 | [`status/`](status/) | 날짜별 스냅샷 |
 | 실제 iteration 로그 | [`../runs/_summary/HISTORY.md`](../runs/_summary/HISTORY.md) | 실험 기록 정본 |
-| 종료 후 종합 리포트 | `../runs/_summary/REPORT.md`, `../runs/_summary/HOLDOUT.md` | 생성 산출물 |
+| 종료 후 종합 리포트 | [`reports/`](reports/) | `<job_id>_<KIND>_<YYYY-MM-DD>.{md,json}` |
 | autoresearch 조사 기록 | [`AUTORESEARCH.md`](AUTORESEARCH.md) | historical/deprecated |
 | 일반 self-evolve 참고 | [`SELF-EVOLVE-HARNESS-SPEC.md`](SELF-EVOLVE-HARNESS-SPEC.md) | 참고용, 정본 아님 |
 
@@ -39,13 +41,16 @@
 | 영역 | 책임 |
 |------|------|
 | `harness/` | Phase 3 controller 로직: guard, policy, state, history, runner |
+| `harness/prompts/candidate.md` | candidate runtime profile — runner 가 매 iter inline |
 | `scripts/` | 사람이 실행하는 thin CLI 또는 일회성 운영 명령 |
 | `judge/` | 평가 산출: score, per-file, diagnosis |
 | `frozen/` | 고정 ASR backend |
 | `workspace/` | 후보 파이프라인 표면 (`transcribe(audio, sr) -> str`) |
 | `baseline/` | 봉인된 target/baseline/noise floor |
-| `runs/<hyp_id>/` | iteration별 평가 산출물 |
-| `runs/_summary/` | harness 전용 HISTORY/state/REPORT/HOLDOUT |
+| `runs/<hyp_id>/` | iteration별 평가 산출물 + `candidate_meta.json` / `.err` |
+| `runs/_summary/` | harness 전용 누적 — `<job_id>_state.json`, `HISTORY.md`, `JOB_DONE.lock` |
+| `docs/reports/` | analyze_run / evaluate_holdout 의 잡별 산출물 |
+| `docs/proposals/` | harness 변경 RFC (채택 후 정본 갱신 + historical) |
 
 ---
 
