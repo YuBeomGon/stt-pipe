@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
-# scripts/swap_verify.sh — 사람 전용. 에이전트(Claude / autoresearch / 기타) 호출 금지.
+# scripts/swap_verify.sh — legacy/autoresearch 운영 잔재. 사람 전용.
 # AGENTS.md §1 표 참조 — judge/ 와 동급 보호 대상.
 #
 # 동작: scripts/verify.sh <-> scripts/verify.sh.alt 1:1 교환.
 # 한 번 호출하면 swap, 한 번 더 호출하면 원복. 결과는 head -3 으로 확인.
 #
-# Phase 3 진입 시퀀스 (PHASE3-PLAN.md §1):
-#   1. bash scripts/swap_verify.sh        # Phase 1 본문 <-> Phase 3 본문 swap
-#   2. head -3 scripts/verify.sh          # 현재 활성 본문 사람 확인
-#   3. (smoke: 의도적 위반 1회 → exit 1 확인 → 원복)
-#   4. bash scripts/seal_holdout.sh       # holdout chmod 000
-#   5. /autoresearch 호출
+# 자체 harness 전환 뒤 이 스크립트는 새 운영 경로가 아니다.
+# 폐기 또는 archive 여부는 docs/PHASE3-STATUS.md 에서 추적한다.
 
 set -euo pipefail
 

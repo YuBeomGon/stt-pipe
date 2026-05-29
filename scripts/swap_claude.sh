@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/swap_claude.sh — 사람 전용. 에이전트(Claude / autoresearch / 보조) 호출 금지.
+# scripts/swap_claude.sh — legacy/autoresearch 운영 잔재. 사람 전용.
 # AGENTS.md §1 표 / PHASE3-PLAN §1.2·§9 참조. `.claude/hooks/block_swap_and_seal.py`
 # 가 Phase 3 활성 상태에서 본 스크립트의 bash 호출 자체를 거부한다.
 #
@@ -7,13 +7,8 @@
 # 한 번 호출하면 swap (Phase 3 본문 활성), 한 번 더 호출하면 원복.
 # 결과는 `ls .claude/hooks/` 와 `ls .claude/settings.json` 으로 확인.
 #
-# Phase 3 진입 시퀀스 (PHASE3-PLAN §1):
-#   1. bash scripts/swap_verify.sh        # Phase 1·2 verify <-> Phase 3 verify
-#   2. bash scripts/swap_claude.sh        # 빈 .claude <-> Phase 3 .claude
-#   3. (autoresearch 본체 설치 확인)
-#   4. bash scripts/seal_holdout.sh       # holdout chmod 000
-#   5. (사전 smoke — PHASE3-PLAN §1.5)
-#   6. /autoresearch 호출
+# 자체 harness 전환 뒤 이 스크립트는 새 운영 경로가 아니다.
+# 폐기 또는 archive 여부는 docs/PHASE3-STATUS.md 에서 추적한다.
 
 set -euo pipefail
 

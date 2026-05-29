@@ -1,8 +1,7 @@
-# Phase 3 Loop — Agent Architecture
+# Phase 3 Loop — Harness Architecture
 
-> **목적**: Phase 3 에서 autoresearch 루프가 어떤 입력을 보고, 무엇을 수정하고,
-> 어떤 기준으로 keep/rollback 되는지 한눈에 보기 위한 보조 문서.
-> 운영 정본은 `PHASE3-PLAN.md` 이며, 이 문서는 구조 이해용이다.
+> 목적: 자체 `harness/` loop의 입력, 산출물, keep/reject 흐름을 한눈에 보기 위한
+> 보조 문서. 운영 정본은 [`PHASE3-PLAN.md`](PHASE3-PLAN.md)이다.
 
 ---
 
@@ -10,34 +9,36 @@
 
 ```mermaid
 flowchart TD
-    A[Phase 3 진입] --> B[seal_holdout.sh<br/>0813 chmod 000]
-    B --> C[verify 가드 활성화<br/>backend/profile 직접참조 차단]
-    C --> D[/autoresearch 시작]
+    A[Phase 3 진입] --> B[holdout 봉인 확인]
+    B --> C[protected 영역 확인]
+    C --> D[harness runner 시작]
 
-    D --> E[Agent가 workspace/transcribe.py 수정]
-    E --> F[Verify: bash scripts/verify.sh]
+    D --> E[후보가 workspace/transcribe.py 수정]
+    E --> F[정적 금지 패턴 검사]
     F --> G[judge.evaluate<br/>0715 11 files]
 
     G --> H[score_report.json<br/>CER/time/guards]
-    G --> I[per_file.jsonl<br/>per-file metrics]
-    G --> J[diagnosis_report.json<br/>11파일 summary + focus 최대 2개]
-    G --> K[_telemetry/*.jsonl/.srt<br/>optional]
+    G --> I[per_file.jsonl]
+    G --> J[diagnosis_report.json]
+    G --> K[_telemetry optional]
 
-    H --> L{Hard fail?}
-    L -->|yes| M[ROLLBACK<br/>commit discard]
-    L -->|no| N{Meaningful improvement?<br/>CER <= best - 2σ}
-    N -->|yes| O[KEEP<br/>best 갱신]
-    N -->|no| M
+    H --> L[harness.guards]
+    L --> M{Hard fail?}
+    M -->|yes| R[REJECT / rollback]
+    M -->|no| N[harness.policy]
+    N --> O{Success?}
+    O -->|yes| S[SUCCESS / JOB_DONE]
+    O -->|no| P{Meaningful improvement?}
+    P -->|yes| Q[KEEP / best 갱신]
+    P -->|no| R
 
-    O --> P{Final target reached?<br/>CER <= baseline target<br/>time within budget}
-    P -->|no| E
-    M --> Q{iter 남음?}
-    Q -->|yes| E
-    Q -->|no| R[Phase 2 분석]
-    P -->|yes| R
-
-    R --> S[analyze_run.py<br/>전체 evolution 평가]
-    S --> T[evaluate_holdout.py --unseal<br/>0813 1회 평가]
+    Q --> T[HISTORY append]
+    R --> T
+    T --> U{iter 남음?}
+    U -->|yes| E
+    U -->|no| V[analyze_run.py]
+    S --> V
+    V --> W[evaluate_holdout.py --unseal]
 ```
 
 ---
@@ -46,28 +47,26 @@ flowchart TD
 
 ```mermaid
 sequenceDiagram
-    participant AR as autoresearch
+    participant H as harness.runner
     participant W as workspace/transcribe.py
-    participant V as scripts/verify.sh
-    participant J as judge/evaluate.py
-    participant AP as assets/audio_profile
+    participant J as judge.evaluate
+    participant G as harness.guards
+    participant P as harness.policy
     participant R as runs/<hyp_id>
 
-    AR->>W: transcribe.py 수정
-    AR->>V: bash scripts/verify.sh
-    V->>J: evaluate 0715 11 pairs
+    H->>W: 후보 변경 적용
+    H->>H: 정적 금지 패턴 검사
+    H->>J: evaluate 0715 11 pairs
     loop each wav
         J->>W: transcribe(audio, sr)
         W-->>J: text
     end
-    J->>AP: read raw profile (judge only)
-    J->>R: write score_report.json
-    J->>R: write per_file.jsonl
-    J->>R: write diagnosis_report.json
-    J-->>V: print corpus_cer last line
-    V-->>AR: exit 0 or exit 1
-    AR->>R: read score/per_file/diagnosis
-    AR->>AR: keep/rollback + next hypothesis
+    J->>R: score_report.json / per_file.jsonl / diagnosis_report.json
+    H->>G: guard checks
+    G-->>H: pass / fail + warnings
+    H->>P: best, score, sigma 입력
+    P-->>H: keep / reject / success
+    H->>R: HISTORY append
 ```
 
 ---
@@ -76,20 +75,19 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    AP[assets/audio_profile raw<br/>speech_segments 포함] -->|read only| J[judge/evaluate.py]
+    AP[assets/audio_profile raw] -->|read only| J[judge.evaluate]
     AP -->|read only after job| AN[scripts/analyze_run.py]
     AP -. direct read forbidden .-> W[workspace/transcribe.py]
 
-    J --> D[diagnosis_report.json<br/>11파일 summary<br/>focus 최대 2개<br/>raw speech_segments 없음]
-    D --> AR[autoresearch agent]
-    PF[per_file.jsonl] --> AR
-    SR[score_report.json] --> AR
-    TEL[_telemetry optional] --> AR
+    J --> D[diagnosis_report.json<br/>summary + focus]
+    D --> H[harness / candidate context]
+    PF[per_file.jsonl] --> H
+    SR[score_report.json] --> H
+    TEL[_telemetry optional] --> H
 ```
 
-`speech_segments` 원본 start/end 리스트는 `diagnosis_report.json` 에 넣지 않는다.
-구체 경계는 그대로 chunking recipe 가 될 수 있으므로, 에이전트에는 segment 개수,
-발화 길이 분위수, 무음 gap 분위수 같은 summary 만 제공한다.
+`speech_segments` 원본 start/end 리스트는 `diagnosis_report.json`에 넣지 않는다.
+후보는 raw audio profile이 아니라 diagnosis summary와 자기 telemetry만 사용한다.
 
 ---
 
@@ -97,14 +95,7 @@ flowchart LR
 
 | 층위 | 기준 | 역할 |
 |------|------|------|
-| Hard fail | backend/profile 직접참조, holdout 접근, 산술 불일치, evaluate 실패 | 무효 후보 즉시 rollback |
-| Final CER target | `corpus_cer <= baseline/target_cer.json:target_cer` (= 0.10, 수동) | 최종 목표: 사람이 정한 ambition 도달 |
-| Final time target | `total_inference_time_s <= baseline.total_inference_time_s * budget` | 최종 목표: faster-whisper time budget 안에 들기 |
-| Comparator | `baseline/target_cer.json:baseline_cer` (faster-whisper) | 거리감/품질 참조 앵커. 그 자체가 합격선은 아님 |
-| Noise floor | `Δcer >= 2σ` | 노이즈가 아닌 개선만 keep |
-| Quality diagnostics | hallucination/repetition/length/coverage | 기본은 진단, baseline guard 분포 대비 큰 악화만 fail |
-
-Phase 3 의 중간 루프는 현재 best 를 조금씩 갱신하는 과정이고, `target_cer` (0.10) 가
-**최종 도달 목표**다. faster-whisper 결과 (`baseline_cer`) 는 거리감을 보기 위한 앵커일
-뿐이고, 그것을 단순히 넘기는 것이 곧 성공이 아니다. 최종적으로는 `target_cer` 이하의
-CER 을 baseline time budget 안에서 달성하면서 품질 가드를 악화시키지 않는 것이 목표.
+| Hard fail | backend/profile 직접참조, holdout 접근, 산술 불일치, evaluate 실패 | 무효 후보 reject |
+| Final target | `corpus_cer <= target_cer` + baseline time budget | 성공 |
+| Noise floor | `Δcer >= 2σ` 또는 provisional fallback | keep |
+| Quality diagnostics | hallucination/repetition/length/coverage | warning 또는 hard fail |

@@ -59,7 +59,7 @@ if [[ ! -s "${OUT_DIR}/score_report.json" ]]; then
 fi
 
 # --- 4. 수치 가드 ------------------------------------------------------------
-python -m scripts.verify_check \
+python -m harness.guards \
     --report "${OUT_DIR}/score_report.json" \
     --per-file "${OUT_DIR}/per_file.jsonl" \
     --baseline "${BASELINE_FILE}" \

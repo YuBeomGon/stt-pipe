@@ -1,8 +1,13 @@
-# AUTORESEARCH 정본
+# AUTORESEARCH 조사 기록
 
-> **목적**: 본 프로젝트가 Phase 3 에서 사용하는 `autoresearch` 의 정확한 정체·동작·
-> 가드 함의를 한 곳에 정리. PHASE3-PLAN / DESIGN 의 자율 루프 가정은 본 문서를
-> 기준으로 정합되어야 한다.
+> **상태**: historical/deprecated. Phase 3 운영 정본은 이제
+> [`PHASE3-PLAN.md`](PHASE3-PLAN.md)의 자체 `harness/` 절차다. 이 문서는
+> 왜 외부 `autoresearch` 중심 운영에서 repository 내부 harness로 전환했는지에 대한
+> 조사 근거로만 보존한다.
+
+> **목적**: 전환 전 검토했던 `autoresearch` 의 정체·동작·가드 함의를 보존한다.
+> 현재 PHASE3-PLAN / DESIGN 의 운영 가정은 이 문서가 아니라 자체 `harness/`
+> 절차를 기준으로 정합되어야 한다.
 >
 > **1차 자료**: <https://github.com/uditgoenka/autoresearch> (master).
 > 조사 시점: 2026-05-28. 본문 인용은 README / `.claude/skills/autoresearch/SKILL.md` /
@@ -68,10 +73,9 @@ npx skills add uditgoenka/autoresearch
       lib/                                # 보조 모듈
 ```
 
-> **함의**: 설치 위치가 **글로벌(`~/.claude/`) 또는 프로젝트(`./.claude/`)** 중
-> 어디가 될지는 설치 옵션 / 설치자에 따라 다르다. 우리 저장소에는 현재 `.claude/`
-> 가 아예 없으므로 (`CLAUDE.md` 만 존재) Phase 3 진입 시 autoresearch 가 어느
-> 경로에 설치되어 있는지 사람이 명시적으로 결정해야 한다.
+> **전환 근거**: 설치 위치가 글로벌 또는 프로젝트 `.claude/` 중 어디가 될지
+> 외부 상태에 의존한다. 이 불확실성도 repository 내부 harness로 전환한 이유 중
+> 하나다.
 
 ---
 
@@ -93,9 +97,9 @@ npx skills add uditgoenka/autoresearch
 | `/autoresearch:improve` | 개선 루프 | — |
 | `/autoresearch:evals` | 과거 결과 분석 (`*-results.tsv` 읽음) | — |
 
-본 프로젝트가 직접 사용하는 것은 `/autoresearch` (메인) + `/autoresearch:plan`
-(선택, 입력 검증) + `/autoresearch:evals` (잡 종료 후 분석) 이다. 나머지 10 종은
-일반 코딩/감사 시나리오용.
+조사 당시 직접 사용 후보는 `/autoresearch` (메인) + `/autoresearch:plan`
+(선택, 입력 검증) + `/autoresearch:evals` (잡 종료 후 분석) 이었다. 자체 harness
+전환 뒤에는 운영 전제가 아니다.
 
 ---
 

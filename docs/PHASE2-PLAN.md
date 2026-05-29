@@ -1,6 +1,6 @@
 # Phase 2 — 평가 인프라 구축 플랜
 
-> **범위**: Phase 3 (autoresearch 실행) *진입 전* 에 분석 도구·홀드아웃 평가·리포트
+> **범위**: Phase 3 (자체 harness 실행) *진입 전* 에 분석 도구·홀드아웃 평가·리포트
 > 템플릿을 모두 갖춰 둔다. 잡 끝나고 만들면 *관측한 결과에 맞춰 분석을 reverse-fit*
 > 할 위험이 있어서 사전 구축이 원칙.
 
@@ -296,5 +296,5 @@ python scripts/evaluate_holdout.py [--unseal] [--dry-run]
 
 ## 9. 다음 단계
 
-Phase 2 DoD 통과 → [`PHASE3-PLAN.md`](PHASE3-PLAN.md) 으로 진행 (autoresearch 실행 +
+Phase 2 DoD 통과 → [`PHASE3-PLAN.md`](PHASE3-PLAN.md) 으로 진행 (자체 harness 실행 +
 잡 종료 후 본 인프라 적용).

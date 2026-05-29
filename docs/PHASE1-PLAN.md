@@ -1,7 +1,7 @@
 # Phase 1 — Harness 구축 플랜
 
 > **범위**: `DESIGN.md` 의 Phase 1 만. 가드레일은 전부 OFF 상태로 골격·judge·baseline·σ
-> 까지 완성하는 것이 목표. Phase 2 (평가 인프라) / Phase 3 (autoresearch 실행 + 분석) 은 별도 플랜.
+> 까지 완성하는 것이 목표. Phase 2 (평가 인프라) / Phase 3 (자체 harness 실행 + 분석) 은 별도 플랜.
 
 작업 순서는 **의존 관계 기반**. judge 가 모든 측정의 기반이므로 가장 먼저, 그 다음
 스텁, baseline, σ 순.
@@ -577,4 +577,4 @@ SPEC §6.1 의 representative-file proxy 옵션. 정직하게 *근사* 임을 �
 ## 다음 단계
 
 Phase 1 DoD 전부 통과 → [`PHASE2-PLAN.md`](PHASE2-PLAN.md) (평가 인프라 구축) →
-[`PHASE3-PLAN.md`](PHASE3-PLAN.md) (autoresearch 실행 + 분석).
+[`PHASE3-PLAN.md`](PHASE3-PLAN.md) (자체 harness 실행 + 분석).

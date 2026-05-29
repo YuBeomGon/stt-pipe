@@ -1,4 +1,4 @@
-"""Smoke for ``scripts.verify_check`` — Phase 3 numeric guard.
+"""Smoke for ``harness.guards`` — Phase 3 numeric guard.
 
 가드별 fixture 를 만들어 exit code 와 stderr 메시지를 확인. judge 의 실제 출력은
 호출하지 않고 schema 만 합성한다.
@@ -24,7 +24,7 @@ def _run(report: Path, per_file: Path, baseline: Path,
         env["QUALITY_BUDGET_HARD"] = "1"
     return subprocess.run(
         [
-            sys.executable, "-m", "scripts.verify_check",
+            sys.executable, "-m", "harness.guards",
             "--report", str(report),
             "--per-file", str(per_file),
             "--baseline", str(baseline),

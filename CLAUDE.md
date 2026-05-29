@@ -7,8 +7,8 @@ Code 세션 특화 보충만.
 
 ## 1. Phase 3 호출
 
-`/autoresearch` 호출 형태·운영 절차는 [`docs/PHASE3-PLAN.md §2`](docs/PHASE3-PLAN.md).
-산출물 위치는 PHASE3-PLAN §5.
+Phase 3 운영 절차는 [`docs/PHASE3-PLAN.md`](docs/PHASE3-PLAN.md)를 따른다.
+진행 상태는 [`docs/PHASE3-STATUS.md`](docs/PHASE3-STATUS.md)에만 기록한다.
 
 ---
 
@@ -21,11 +21,14 @@ Code 세션 특화 보충만.
 
 ---
 
-## 3. 슬래시 커맨드
+## 3. 실행 진입점
 
-- `/autoresearch` — 메인 루프
-- `/autoresearch:plan` — 4 종 입력 검증·구체화 (본 루프 진입 전 권장)
-- `/autoresearch:evals` — 과거 runs 분석
+- `harness/` — Phase 3 controller 로직
+- `scripts/` — 사람이 실행하는 thin CLI 또는 운영 명령
+- `scripts/verify.sh` — 현재 후보 평가
+- `scripts/evolve.py --candidate-cmd "claude -p"` — terminal-driven Phase 3 loop
+- `scripts/analyze_run.py` — 종료 후 REPORT 생성
+- `scripts/evaluate_holdout.py --unseal` — 종료 후 holdout 1회 평가
 
 ---
 
