@@ -80,7 +80,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             features,
             [prompt],
             beam_size=5,
-            length_penalty=2.0,
+            length_penalty=1.5,
             patience=2.0,
             no_repeat_ngram_size=6,
             sampling_temperature=0.0,
