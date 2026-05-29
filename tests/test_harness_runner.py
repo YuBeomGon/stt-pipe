@@ -11,17 +11,38 @@ import sys
 from pathlib import Path
 
 from harness.runner import (
+    LANES,
     GitPathStatus,
     RunnerConfig,
     build_candidate_prompt,
     candidate_owned_statuses,
     disallowed_candidate_paths,
+    parse_candidate_metadata,
     run_candidate_command,
     run_iteration,
     run_job,
 )
 from harness.state import HarnessState
 from harness.verify import VerifyResult, check_workspace_static
+
+
+_VALID_META_STDOUT = """diff applied.
+
+```yaml
+lane: decoding
+diff_fingerprint: [beam, length_penalty]
+why_different_from_last_5: trying widened beam with length bias
+```
+"""
+
+
+def _write_valid_meta(out_dir: Path) -> None:
+    """Write a minimal valid candidate stdout so the runner's A' YAML
+    metadata check passes. Tests that inject a fake candidate_func must
+    call this to satisfy the format gate added in proposal
+    2026-05-29-agent-design (§2.1)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "claude_stdout.txt").write_text(_VALID_META_STDOUT, encoding="utf-8")
 
 
 def _init_repo(root: Path) -> None:
@@ -39,6 +60,13 @@ def _init_repo(root: Path) -> None:
     (root / "workspace").mkdir()
     (root / "baseline").mkdir()
     (root / "runs/_summary").mkdir(parents=True)
+    # Mirror production .gitignore so runs/<hyp_id>/ artifacts (candidate.diff,
+    # candidate_meta.json, claude_stdout.txt, score_report.json, …) don't
+    # surface as untracked and trip disallowed_candidate_paths.
+    (root / ".gitignore").write_text(
+        "runs/*\n!runs/_summary/\n",
+        encoding="utf-8",
+    )
     (root / "workspace/transcribe.py").write_text(
         "def transcribe(audio, sr):\n    return ''\n",
         encoding="utf-8",
@@ -59,7 +87,8 @@ def _init_repo(root: Path) -> None:
     )
     (root / "runs/_summary/HISTORY.md").write_text("# history\n", encoding="utf-8")
     subprocess.run(
-        ["git", "add", "workspace/transcribe.py", "baseline", "runs/_summary/HISTORY.md"],
+        ["git", "add", ".gitignore", "workspace/transcribe.py", "baseline",
+         "runs/_summary/HISTORY.md"],
         cwd=root,
         check=True,
     )
@@ -152,11 +181,12 @@ def test_run_iteration_keeps_first_valid_candidate(tmp_path: Path) -> None:
     state = HarnessState(job_id="job")
     state_path = tmp_path / "runs/_summary/job_state.json"
 
-    def candidate(_prompt: str, _out_dir: Path):
+    def candidate(_prompt: str, out_dir: Path):
         (tmp_path / "workspace/transcribe.py").write_text(
             "def transcribe(audio, sr):\n    return 'ok'\n",
             encoding="utf-8",
         )
+        _write_valid_meta(out_dir)
         return subprocess.CompletedProcess(["fake"], 0, "", "")
 
     def verifier(hyp_id: str) -> VerifyResult:
@@ -190,7 +220,7 @@ def test_run_iteration_rejects_and_rolls_back_summary_scope_violation(
     state = HarnessState(job_id="job")
     state_path = tmp_path / "runs/_summary/job_state.json"
 
-    def candidate(_prompt: str, _out_dir: Path):
+    def candidate(_prompt: str, out_dir: Path):
         (tmp_path / "runs/_summary/HISTORY.md").write_text(
             "candidate injected text\n",
             encoding="utf-8",
@@ -199,6 +229,7 @@ def test_run_iteration_rejects_and_rolls_back_summary_scope_violation(
             "candidate injected text\n",
             encoding="utf-8",
         )
+        _write_valid_meta(out_dir)
         return subprocess.CompletedProcess(["fake"], 0, "", "")
 
     result = run_iteration(config, state, state_path, candidate, lambda _hyp: None)
@@ -230,11 +261,12 @@ def test_run_iteration_rejects_when_candidate_writes_summary_during_verify(
     state = HarnessState(job_id="job")
     state_path = tmp_path / "runs/_summary/job_state.json"
 
-    def candidate(_prompt: str, _out_dir: Path):
+    def candidate(_prompt: str, out_dir: Path):
         (tmp_path / "workspace/transcribe.py").write_text(
             "def transcribe(audio, sr):\n    return 'ok'\n",
             encoding="utf-8",
         )
+        _write_valid_meta(out_dir)
         return subprocess.CompletedProcess(["fake"], 0, "", "")
 
     def verifier(hyp_id: str) -> VerifyResult:
@@ -325,3 +357,200 @@ def test_run_iteration_rolls_back_workspace_on_verify_failure(tmp_path: Path) ->
     assert (tmp_path / "workspace/transcribe.py").read_text(
         encoding="utf-8"
     ) == original_workspace
+
+
+# ----------------------------------------------------------------------- #
+# A' (proposal 2026-05-29-agent-design) — candidate metadata + format gate #
+# ----------------------------------------------------------------------- #
+
+
+_VALID_YAML_BLOCK = """\
+preamble prose
+
+```yaml
+lane: decoding
+diff_fingerprint: [beam, length_penalty, patience]
+why_different_from_last_5: iter 9 미시도 patience widening
+```
+"""
+
+
+def test_parse_meta_happy_path(tmp_path: Path) -> None:
+    meta, err = parse_candidate_metadata(_VALID_YAML_BLOCK, tmp_path)
+    assert err is None
+    assert meta == {
+        "lane": "decoding",
+        "diff_fingerprint": ["beam", "length_penalty", "patience"],
+        "why_different_from_last_5": "iter 9 미시도 patience widening",
+    }
+    assert (tmp_path / "candidate_meta.json").is_file()
+
+
+def test_parse_meta_missing_block(tmp_path: Path) -> None:
+    meta, err = parse_candidate_metadata("just prose, no yaml", tmp_path)
+    assert meta is None
+    assert err is not None and "no yaml" in err
+    assert (tmp_path / "candidate_meta.err").is_file()
+
+
+def test_parse_meta_picks_last_block_when_multiple(tmp_path: Path) -> None:
+    # Candidate may quote an example block earlier; only the last counts.
+    stdout = """\
+example before:
+
+```yaml
+lane: prompt
+diff_fingerprint: [x]
+why_different_from_last_5: ignored
+```
+
+actual at end:
+
+```yaml
+lane: telemetry
+diff_fingerprint: [logprob, debug]
+why_different_from_last_5: instrumenting decoder
+```
+"""
+    meta, err = parse_candidate_metadata(stdout, tmp_path)
+    assert err is None
+    assert meta["lane"] == "telemetry"
+
+
+def test_parse_meta_rejects_invalid_lane(tmp_path: Path) -> None:
+    stdout = """\
+```yaml
+lane: refactor
+diff_fingerprint: [misc]
+why_different_from_last_5: x
+```
+"""
+    meta, err = parse_candidate_metadata(stdout, tmp_path)
+    assert meta is None
+    assert "invalid lane" in err
+
+
+def test_parse_meta_rejects_fingerprint_too_long(tmp_path: Path) -> None:
+    stdout = """\
+```yaml
+lane: decoding
+diff_fingerprint: [a, b, c, d, e, f, g]
+why_different_from_last_5: x
+```
+"""
+    meta, err = parse_candidate_metadata(stdout, tmp_path)
+    assert meta is None
+    assert "length 7" in err
+
+
+def test_parse_meta_rejects_empty_why(tmp_path: Path) -> None:
+    stdout = """\
+```yaml
+lane: decoding
+diff_fingerprint: [beam]
+why_different_from_last_5: "   "
+```
+"""
+    meta, err = parse_candidate_metadata(stdout, tmp_path)
+    assert meta is None
+    assert "why_different_from_last_5" in err
+
+
+def test_lanes_constant_matches_profile() -> None:
+    """Sanity: the LANES tuple in code must match the lane set documented
+    in harness/prompts/candidate.md. Drift between code and profile would
+    cause silent reject of candidate responses."""
+    profile_path = Path(__file__).resolve().parents[1] / "harness/prompts/candidate.md"
+    body = profile_path.read_text(encoding="utf-8")
+    for lane in LANES:
+        assert f"| {lane}" in body or f"|{lane}" in body, f"lane {lane!r} not documented in profile"
+
+
+def test_run_iteration_format_reject_when_no_yaml(tmp_path: Path) -> None:
+    """Candidate that edits workspace but omits the YAML block must be
+    rejected BEFORE verify runs (proposal §2.1). Workspace is rolled back."""
+    _init_repo(tmp_path)
+    original_workspace = (tmp_path / "workspace/transcribe.py").read_text(
+        encoding="utf-8"
+    )
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    state = HarnessState(job_id="job")
+    state_path = tmp_path / "runs/_summary/job_state.json"
+
+    verify_called = {"yes": False}
+
+    def candidate(_prompt: str, out_dir: Path):
+        (tmp_path / "workspace/transcribe.py").write_text(
+            "def transcribe(audio, sr):\n    return 'mutated'\n",
+            encoding="utf-8",
+        )
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Note: NO YAML block.
+        (out_dir / "claude_stdout.txt").write_text(
+            "edited file, forgot the yaml.\n", encoding="utf-8"
+        )
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    def verifier(_hyp_id: str) -> VerifyResult:
+        verify_called["yes"] = True
+        raise AssertionError("verify must not run on format reject")
+
+    result = run_iteration(config, state, state_path, candidate, verifier)
+
+    assert result.status == "reject"
+    assert result.format_reject is True
+    assert "format reject" in result.reason
+    assert verify_called["yes"] is False
+    # Workspace rolled back.
+    assert (tmp_path / "workspace/transcribe.py").read_text(
+        encoding="utf-8"
+    ) == original_workspace
+    assert (
+        tmp_path / "runs/job_iter_001/candidate_meta.err"
+    ).is_file()
+
+
+def test_run_job_aborts_after_4_of_5_format_rejects(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """If the first 5 iters produce 4 format rejects, run_job stops and sets
+    state.status = 'aborted_format_reject' so the operator rewrites the
+    profile rather than burning the rest of the budget (proposal §2.1)."""
+    _init_repo(tmp_path)
+    config = RunnerConfig(job_id="job", repo_root=tmp_path, iterations=25)
+
+    rejects_to_emit = [True, True, False, True, True]
+    call_log: list[bool] = []
+
+    def fake_iter(cfg, state, state_path):
+        idx = state.iteration  # 0-indexed call before advance
+        will_reject = rejects_to_emit[idx] if idx < len(rejects_to_emit) else False
+        call_log.append(will_reject)
+        state.advance()
+        from harness.runner import IterationResult
+
+        if will_reject:
+            return IterationResult(
+                hyp_id=f"job_iter_{state.iteration:03d}",
+                status="reject",
+                decision=None,
+                verify_result=None,
+                reason="format reject: test",
+                format_reject=True,
+            )
+        return IterationResult(
+            hyp_id=f"job_iter_{state.iteration:03d}",
+            status="reject",
+            decision=None,
+            verify_result=None,
+            reason="plain reject",
+            format_reject=False,
+        )
+
+    monkeypatch.setattr("harness.runner.run_iteration", fake_iter)
+    state = run_job(config)
+
+    assert state.status == "aborted_format_reject"
+    # Aborts at end of the 5th iter (4th format reject), not earlier.
+    assert state.iteration == 5
+    assert len(call_log) == 5
