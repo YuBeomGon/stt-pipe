@@ -100,6 +100,15 @@ class IterRecord:
     commit_sha: str | None = None
     commit_subject: str | None = None
     commit_ts: datetime | None = None
+    # A' candidate metadata (proposal 2026-05-29-agent-design).
+    # `candidate_lane` is one of the LANES set or None when missing.
+    # `candidate_fingerprint` is a list of lowercase tokens or empty list.
+    # `format_rejected` is True when candidate_meta.err exists (YAML block
+    # malformed / missing / invalid). Such iters never reach verify so
+    # `corpus_cer` is also None.
+    candidate_lane: str | None = None
+    candidate_fingerprint: list[str] = field(default_factory=list)
+    format_rejected: bool = False
 
     # populated by classify
     accepted: bool = False
@@ -208,6 +217,10 @@ def discover_iterations(
         produced_at = _parse_iso(score.get("produced_at")) or datetime.fromtimestamp(
             (child / "score_report.json").stat().st_mtime
         )
+        # A' candidate metadata. Format-rejected iters never reach verify so
+        # they have candidate_meta.err and no score_report — they're handled
+        # separately by `count_format_rejects()`.
+        meta = _read_json(child / "candidate_meta.json") or {}
         out.append(
             IterRecord(
                 hyp_id=child.name,
@@ -216,6 +229,8 @@ def discover_iterations(
                 per_file=per_file,
                 diagnosis=diagnosis,
                 diff_text=diff_text,
+                candidate_lane=meta.get("lane") if isinstance(meta.get("lane"), str) else None,
+                candidate_fingerprint=meta.get("diff_fingerprint", []) if isinstance(meta.get("diff_fingerprint"), list) else [],
             )
         )
     out.sort(key=lambda r: r.produced_at)
@@ -526,6 +541,123 @@ def _category_distribution(iters: list[IterRecord]) -> dict[str, int]:
     return dict(counter)
 
 
+def _lane_distribution(iters: list[IterRecord]) -> dict[str, int]:
+    """Count accepted iters per A' lane (from candidate_meta.json).
+
+    Differs from `_category_distribution` (which is heuristic regex on
+    diff_text/commit_subject) — this uses the candidate's *self-declared*
+    lane from the YAML metadata block. Lanes that produced no accepted iter
+    appear with count 0 so the table is stable across jobs.
+    """
+    counter: Counter[str] = Counter()
+    for it in iters:
+        if it.accepted and it.candidate_lane:
+            counter[it.candidate_lane] += 1
+    for lane in ("segmentation", "decoding", "prompt", "postprocess", "telemetry"):
+        counter.setdefault(lane, 0)
+    return dict(counter)
+
+
+def _lane_entropy(iters: list[IterRecord]) -> float | None:
+    """Shannon entropy (natural log) of accepted-iter lane distribution.
+
+    Max is ln(5) ≈ 1.6094 for perfectly uniform across 5 lanes. Returned in
+    nats. None when no accepted iter has a declared lane (e.g. legacy job
+    without A'). The phase3_001 baseline (chunking 83% / prompt 17%) sits at
+    ~0.45 — A' single-lane forcing is considered effective when this exceeds
+    ~1.2 (proposal §4 판정 표).
+    """
+    distribution = {
+        lane: c
+        for lane, c in _lane_distribution(iters).items()
+        if c > 0
+    }
+    total = sum(distribution.values())
+    if total == 0:
+        return None
+    import math
+    entropy = 0.0
+    for c in distribution.values():
+        p = c / total
+        entropy -= p * math.log(p)
+    return entropy
+
+
+def _fingerprint_jaccard_mean(iters: list[IterRecord]) -> float | None:
+    """Mean pairwise Jaccard *distance* (1 - similarity) over accepted iters'
+    fingerprints. Higher = more diverse mechanisms across accepted iters.
+
+    Returns None when fewer than 2 accepted iters carry fingerprints. Used
+    alongside lane entropy: a job could keep lane entropy high but still
+    repeat the same hyperparameter sweep within each lane — fingerprint
+    distance catches that. Proposal §4 sets > 0.5 as the A' success
+    threshold.
+    """
+    fps = [
+        set(it.candidate_fingerprint)
+        for it in iters
+        if it.accepted and it.candidate_fingerprint
+    ]
+    if len(fps) < 2:
+        return None
+    distances: list[float] = []
+    for i in range(len(fps)):
+        for j in range(i + 1, len(fps)):
+            union = fps[i] | fps[j]
+            if not union:
+                continue
+            similarity = len(fps[i] & fps[j]) / len(union)
+            distances.append(1.0 - similarity)
+    if not distances:
+        return None
+    return statistics.fmean(distances)
+
+
+def _max_fingerprint_streak(iters: list[IterRecord]) -> int:
+    """Longest contiguous run of iters (any status, in produced-at order) that
+    share the *exact* same fingerprint set as their immediate neighbor.
+
+    phase3_001 had streak 5 (iter 10~14 all repeated beam/length_penalty/
+    patience). Lower streak = the candidate isn't redundantly sweeping the
+    same lever after rejects. Proposal §4 sets ≤ 2 as A' target.
+    """
+    if not iters:
+        return 0
+    max_run = 1
+    current = 1
+    prev_fp: set[str] | None = None
+    for it in iters:
+        fp = set(it.candidate_fingerprint)
+        if prev_fp is not None and fp and fp == prev_fp:
+            current += 1
+            if current > max_run:
+                max_run = current
+        else:
+            current = 1
+        prev_fp = fp if fp else None
+    return max_run if iters and any(it.candidate_fingerprint for it in iters) else 0
+
+
+def count_format_rejects(runs_dir: Path, job_id: str | None) -> int:
+    """Count iters that the harness rejected for missing/malformed YAML
+    metadata block (presence of `candidate_meta.err`). These iters never
+    reached verify, so they're not in the `iters` list — but their count
+    matters for D-axis diagnosis (proposal §4: > 40% means profile rewrite).
+    """
+    if not runs_dir.is_dir():
+        return 0
+    prefix = f"{job_id}_iter_" if job_id else None
+    n = 0
+    for child in runs_dir.iterdir():
+        if not child.is_dir():
+            continue
+        if prefix is not None and not child.name.startswith(prefix):
+            continue
+        if (child / "candidate_meta.err").is_file():
+            n += 1
+    return n
+
+
 def _concentration_warning(distribution: dict[str, int]) -> str:
     total = sum(distribution.values())
     if total == 0:
@@ -758,6 +890,7 @@ def render_report(
     job_id: str,
     holdout: dict[str, Any] | None = None,
     state: dict[str, Any] | None = None,
+    format_reject_count: int = 0,
 ) -> str:
     """Substitute `{{...}}` variables in ``template`` from analyzed iters.
 
@@ -798,6 +931,10 @@ def render_report(
     sigma_provisional = (noise_floor_json or {}).get("is_provisional", False)
 
     distribution = _category_distribution(iters)
+    lane_dist = _lane_distribution(iters)
+    lane_entropy = _lane_entropy(iters)
+    fp_jaccard = _fingerprint_jaccard_mean(iters)
+    fp_streak = _max_fingerprint_streak(iters)
     cost = _cost_lines(iters)
     top3_share_pct, top3_table = _top3_share(iters)
     recovery_pct, streak = _recovery_and_streak(iters)
@@ -807,6 +944,11 @@ def render_report(
     n_accepted = sum(1 for it in iters if it.accepted)
     n_total = len(iters)
     n_rollback = n_total - n_accepted
+    n_attempted = n_total + format_reject_count
+    format_reject_pct = (
+        f"{(format_reject_count / n_attempted * 100):.0f}"
+        if n_attempted else "n/a"
+    )
 
     # Holdout placeholders are filled by evaluate_holdout.py; analyze leaves them
     # symbolic when holdout has not been run yet.
@@ -866,6 +1008,23 @@ def render_report(
             it.category for it in iters[-5:] if it.accepted
         ) or "(no accepted iters)",
         "concentration_warning": _concentration_warning(distribution),
+        # A' D-axis additions (proposal 2026-05-29-agent-design §4) — self-
+        # declared lane / fingerprint metrics. lane_* metrics use the
+        # candidate's own YAML metadata; cat_* above are heuristic regex on
+        # commit subject + diff body and remain for legacy comparison.
+        "lane_segmentation": str(lane_dist.get("segmentation", 0)),
+        "lane_decoding": str(lane_dist.get("decoding", 0)),
+        "lane_prompt": str(lane_dist.get("prompt", 0)),
+        "lane_postprocess": str(lane_dist.get("postprocess", 0)),
+        "lane_telemetry": str(lane_dist.get("telemetry", 0)),
+        "lane_entropy": _fmt(lane_entropy, 3) if lane_entropy is not None else "n/a (no A' metadata)",
+        "fingerprint_jaccard_mean": (
+            _fmt(fp_jaccard, 3) if fp_jaccard is not None else "n/a"
+        ),
+        "max_fingerprint_streak": str(fp_streak),
+        "format_reject_count": str(format_reject_count),
+        "format_reject_pct": format_reject_pct,
+        "n_attempted": str(n_attempted),
         "cm_divergence": _cm_divergence(iters),
         "per_file_std": p_std,
         "per_file_iqr": p_iqr,
@@ -991,6 +1150,7 @@ def main(argv: list[str] | None = None) -> int:
             "no iterations discovered under %s (job_id=%s)", runs_dir, job_id
         )
     enrich_with_git(iters)
+    format_reject_count = count_format_rejects(runs_dir, job_id)
 
     holdout = _read_json(Path(args.holdout_report)) if args.holdout_report else None
     job_id_display = job_id or (_git("rev-parse", "--short", "HEAD").strip() or runs_dir.name)
@@ -1014,6 +1174,7 @@ def main(argv: list[str] | None = None) -> int:
         job_id=job_id_display,
         holdout=holdout,
         state=state,
+        format_reject_count=format_reject_count,
     )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

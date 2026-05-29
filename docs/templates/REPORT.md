@@ -96,7 +96,27 @@
 
 ## D. 탐색 다양성
 
-### 자동 부분 (commit 메시지 + diff 키워드 1차 분류)
+### A' candidate self-declared lane / fingerprint (정본)
+
+candidate 가 매 iter `candidate_meta.json` 에 직접 선언한 lane / fingerprint
+기반. A' (proposal 2026-05-29-agent-design) 도입 이후의 정본 다양성 신호.
+
+| 자동 채택 lane 분포 (자기 선언) | 채택 수 |
+|------|------|
+| segmentation | {{lane_segmentation}} |
+| decoding | {{lane_decoding}} |
+| prompt | {{lane_prompt}} |
+| postprocess | {{lane_postprocess}} |
+| telemetry | {{lane_telemetry}} |
+
+| 메트릭 | 값 | 판정 기준 (proposal §4) |
+|------|------|------|
+| Lane 분포 entropy (nats, max ln5 ≈ 1.609) | {{lane_entropy}} | > 1.2 = A' 단독 효과 충분 |
+| 채택 fingerprint Jaccard 평균 거리 | {{fingerprint_jaccard_mean}} | > 0.5 = 동일 lane 내 다양 |
+| 최장 동일-fingerprint streak (전체 iter) | {{max_fingerprint_streak}} | ≤ 2 = sweep 회피 |
+| Format reject 비율 (`{{format_reject_count}} / {{n_attempted}} attempted`) | {{format_reject_pct}}% | < 20% calibration, > 40% profile 재작성 |
+
+### Legacy heuristic (commit 메시지 + diff 키워드 — 비교용)
 
 | 카테고리 | 채택 수 |
 |------|------|
@@ -111,7 +131,8 @@
 
 ### 사람 판단
 
-<!-- TODO: diff 직접 검토 후 카테고리 수동 재분류. 키워드 자동 분류가 놓친 표면 (예: fallback 정책 조정이 chunk로 잘못 분류) -->
+<!-- TODO: lane / fingerprint 자기 선언과 실제 diff 내용의 일치 여부 검토.
+candidate 가 "decoding" 선언했는데 실제로는 segmentation 변경한 케이스 있는지 -->
 
 ---
 
