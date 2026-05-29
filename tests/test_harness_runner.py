@@ -14,6 +14,9 @@ from harness.runner import (
     LANES,
     GitPathStatus,
     RunnerConfig,
+    _CLAUDE_HARDENING_FLAGS,
+    _HARDEN_BYPASS_ENV,
+    _harden_candidate_cmd,
     _recent_iters,
     build_candidate_prompt,
     candidate_owned_statuses,
@@ -708,3 +711,39 @@ def test_run_job_commits_aborted_state_when_commit_results(
         cwd=tmp_path, check=True, capture_output=True, text=True,
     ).stdout
     assert status == "", f"worktree dirty after abort commit: {status!r}"
+
+def test_harden_candidate_cmd_injects_flags_for_claude() -> None:
+    hardened, added = _harden_candidate_cmd('claude -p')
+    parts = hardened.split()
+    for flag in _CLAUDE_HARDENING_FLAGS:
+        assert flag in parts, f'{flag} not injected: {hardened}'
+    assert set(added) == set(_CLAUDE_HARDENING_FLAGS)
+
+
+def test_harden_candidate_cmd_is_idempotent() -> None:
+    cmd = 'claude -p --disable-slash-commands --strict-mcp-config'
+    hardened, added = _harden_candidate_cmd(cmd)
+    assert added == []
+    assert hardened.count('--disable-slash-commands') == 1
+    assert hardened.count('--strict-mcp-config') == 1
+
+
+def test_harden_candidate_cmd_passes_through_non_claude() -> None:
+    cmd = 'python3 tests/fake_candidate.py'
+    hardened, added = _harden_candidate_cmd(cmd)
+    assert hardened == cmd
+    assert added == []
+
+
+def test_harden_candidate_cmd_respects_bypass_env(monkeypatch) -> None:
+    monkeypatch.setenv(_HARDEN_BYPASS_ENV, '1')
+    hardened, added = _harden_candidate_cmd('claude -p')
+    assert hardened == 'claude -p'
+    assert added == []
+
+
+def test_harden_candidate_cmd_recognizes_absolute_claude_path() -> None:
+    hardened, added = _harden_candidate_cmd('/usr/local/bin/claude -p')
+    assert '--disable-slash-commands' in hardened
+    assert added  # at least one flag injected
+

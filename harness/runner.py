@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -47,6 +48,41 @@ _PROFILE_PATH = Path("harness/prompts/candidate.md")
 # rewrite rather than burning the rest of the job budget.
 _FORMAT_REJECT_PROBE_ITERS = 5
 _FORMAT_REJECT_ABORT_COUNT = 4
+
+# Candidate-context hardening flags — appended automatically when candidate_cmd
+# starts with `claude`. These suppress user-invocable skill catalog (29 → 0)
+# and external MCP servers (Google Drive etc. → none) so the candidate sees
+# only the explicit prompt body. Operator's interactive `claude` sessions are
+# untouched — only the per-iteration subprocess is hardened. Verified via
+# scripts/audit_candidate_context.py.
+#
+# Set EVOLVE_NO_HARDEN_CLAUDE=1 to bypass (debugging only — production jobs
+# should never bypass).
+_CLAUDE_HARDENING_FLAGS: tuple[str, ...] = (
+    "--disable-slash-commands",
+    "--strict-mcp-config",
+)
+_HARDEN_BYPASS_ENV = "EVOLVE_NO_HARDEN_CLAUDE"
+
+
+def _harden_candidate_cmd(candidate_cmd: str) -> tuple[str, list[str]]:
+    """Inject hardening flags when the cmd's argv[0] basename is `claude`.
+
+    Returns (hardened_cmd, added_flags). Idempotent — already-present flags
+    are not re-added. Non-claude commands (custom wrappers, test stubs) pass
+    through unchanged so users can opt out by wrapping their own binary.
+    """
+    if os.environ.get(_HARDEN_BYPASS_ENV) == "1":
+        return candidate_cmd, []
+    parts = shlex.split(candidate_cmd)
+    if not parts or Path(parts[0]).name != "claude":
+        return candidate_cmd, []
+    added: list[str] = []
+    for flag in _CLAUDE_HARDENING_FLAGS:
+        if flag not in parts:
+            parts.append(flag)
+            added.append(flag)
+    return shlex.join(parts), added
 
 
 @dataclass(frozen=True)
@@ -463,7 +499,15 @@ def run_candidate_command(
 ) -> subprocess.CompletedProcess[str]:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "prompt.md").write_text(prompt, encoding="utf-8")
-    cmd = [*shlex.split(candidate_cmd), prompt]
+    hardened_cmd, added_flags = _harden_candidate_cmd(candidate_cmd)
+    if added_flags:
+        (out_dir / "candidate_cmd_hardening.txt").write_text(
+            f"original: {candidate_cmd}\n"
+            f"hardened: {hardened_cmd}\n"
+            f"added:    {' '.join(added_flags)}\n",
+            encoding="utf-8",
+        )
+    cmd = [*shlex.split(hardened_cmd), prompt]
     result = subprocess.run(
         cmd,
         cwd=repo_root,
