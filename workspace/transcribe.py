@@ -9,6 +9,8 @@ Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 
 from __future__ import annotations
 
+import re
+
 import librosa
 import numpy as np
 
@@ -89,4 +91,5 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         texts.append(processor.tokenizer.decode(out_tokens, skip_special_tokens=True))
         prev_tokens = out_tokens
 
-    return " ".join(texts)
+    merged = " ".join(t.strip() for t in texts if t.strip())
+    return re.sub(r"\s+", " ", merged).strip()
