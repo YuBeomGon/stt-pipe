@@ -26,6 +26,17 @@ _INITIAL_PROMPT_TEXT = (
 )
 
 
+def _dedup_chunk_boundary(prev_text: str, curr_text: str, max_overlap: int = 20) -> str:
+    """이전 chunk 의 끝과 다음 chunk 의 시작이 같으면 다음 시작 부분 제거."""
+    if not prev_text or not curr_text:
+        return curr_text
+    limit = min(max_overlap, len(prev_text), len(curr_text))
+    for n in range(limit, 0, -1):
+        if prev_text.endswith(curr_text[:n]):
+            return curr_text[n:]
+    return curr_text
+
+
 def _vad_chunks(audio: np.ndarray, sr: int, max_seconds: int = 30) -> list[tuple[int, int]]:
     """librosa.effects.split (top_db=25) → max_seconds 까지 합친 (start, end) 리스트.
     양쪽 0.2s margin 확장 (단어 경계 절단 보호)."""
@@ -91,5 +102,15 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         texts.append(processor.tokenizer.decode(out_tokens, skip_special_tokens=True))
         prev_tokens = out_tokens
 
-    merged = " ".join(t.strip() for t in texts if t.strip())
+    deduped: list[str] = []
+    prev = ""
+    for t in texts:
+        t_strip = t.strip()
+        if not t_strip:
+            continue
+        t_dd = _dedup_chunk_boundary(prev, t_strip)
+        if t_dd:
+            deduped.append(t_dd)
+            prev = t_strip
+    merged = " ".join(deduped)
     return re.sub(r"\s+", " ", merged).strip()
