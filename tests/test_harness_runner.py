@@ -652,6 +652,51 @@ def test_build_prompt_does_not_include_current_iter_in_recent_table(
     assert "job_iter_002" not in prompt
 
 
+def test_findings_ledger_compounds_beyond_dedup_window(tmp_path: Path) -> None:
+    """F1 fix: the findings ledger is built from the whole job's durable
+    candidate-meta jsonl (runs/_summary/<job>_candidate_meta.jsonl), so a fact
+    learned 8 iters ago still appears even though the recent-dedup table only
+    shows the last 5. Deduped by learned text."""
+    _init_repo(tmp_path)
+    sm = tmp_path / "runs" / "_summary"
+    sm.mkdir(parents=True, exist_ok=True)
+    recs = [
+        {
+            "iter": i,
+            "hyp_id": f"job_iter_{i:03d}",
+            "status": "reject",
+            "capability_investigated": f"cap{i}",
+            "what_i_learned": f"fact number {i}",
+            "hypothesis": "h",
+            "fingerprint": ["x"],
+        }
+        for i in range(1, 9)
+    ]
+    # add a duplicate of fact 1 to exercise dedup
+    recs.append(
+        {
+            "iter": 9,
+            "hyp_id": "job_iter_009",
+            "status": "reject",
+            "capability_investigated": "cap1",
+            "what_i_learned": "fact number 1",
+            "hypothesis": "h",
+            "fingerprint": ["x"],
+        }
+    )
+    (sm / "job_candidate_meta.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8"
+    )
+
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    state = HarnessState(job_id="job", iteration=10)
+    prompt = build_candidate_prompt(config, state)
+
+    assert "fact number 1" in prompt  # outside the 5-iter dedup window
+    assert "fact number 8" in prompt
+    assert prompt.count("fact number 1") == 1  # deduped
+
+
 def test_parse_meta_rejects_whitespace_only_fingerprint_tokens(
     tmp_path: Path,
 ) -> None:

@@ -56,9 +56,14 @@ _PROFILE_PATH = Path("harness/prompts/candidate.md")
 # discovery directive (parameter tweaks declared dead, structural change
 # allowed) and minimizes HISTORY anchoring (§4.3).
 _COLD_RESTART_THRESHOLD = 5
-# How many recent iterations' `what_i_learned` facts to replay as the findings
-# ledger (§3.3) so discoveries survive code rollback and compound.
-_LEDGER_DEPTH = 5
+# Recent-iterations dedup window: how many of the latest iters to show as the
+# "do not repeat this fingerprint" table.
+_RECENT_DEDUP_WINDOW = 5
+# Findings ledger cap (§3.3): the ledger is built from the WHOLE job's durable
+# candidate-meta record (runs/_summary/<job>_candidate_meta.jsonl), not just the
+# dedup window — so surface discoveries compound across the job even after the
+# code change was rolled back. Capped to bound prompt size; the newest facts win.
+_LEDGER_MAX_FACTS = 30
 
 # Format-reject abort threshold — if the candidate fails to emit a valid
 # YAML metadata block in 4 out of the first 5 iterations, the profile itself
@@ -440,19 +445,59 @@ def _format_recent_table(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _format_findings_ledger(rows: list[dict[str, Any]]) -> str:
-    """Replay recent `what_i_learned` facts so discoveries survive code
-    rollback and compound across iterations (proposal §3.3). Facts only — no
-    prescriptions — to avoid re-anchoring the candidate on a dead approach.
+def _ledger_rows(config: RunnerConfig, fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Findings-ledger source (proposal §3.3): the WHOLE job's durable
+    candidate-meta record, so discoveries compound across the job rather than
+    sliding out of a 5-iteration window. Reads
+    runs/_summary/<job>_candidate_meta.jsonl (written by commit_iteration).
+    Falls back to the recent-dirs rows when the jsonl is absent (e.g. a
+    no-commit debug run, or the very first iter before any commit).
     """
-    facts = [
-        f"- ({r['iter']}) probed `{r['capability']}` → {r['learned']}"
-        for r in rows
-        if r.get("learned")
-    ]
+    path = config.repo_root / config.summary_dir / f"{config.job_id}_candidate_meta.jsonl"
+    if not path.is_file():
+        return fallback
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        learned = rec.get("what_i_learned")
+        if not learned:
+            continue
+        rows.append(
+            {
+                "iter": rec.get("hyp_id") or f"iter_{rec.get('iter')}",
+                "capability": rec.get("capability_investigated", ""),
+                "learned": learned,
+            }
+        )
+    return rows or fallback
+
+
+def _format_findings_ledger(rows: list[dict[str, Any]]) -> str:
+    """Render `what_i_learned` facts so discoveries survive code rollback and
+    compound across iterations (proposal §3.3). Facts only — no prescriptions —
+    to avoid re-anchoring the candidate on a dead approach. Deduplicated by
+    learned text (newest kept) and capped to the most recent _LEDGER_MAX_FACTS.
+    """
+    seen: set[str] = set()
+    facts: list[str] = []
+    # Walk newest-first so dedup keeps the latest phrasing, then re-reverse for
+    # chronological display.
+    for r in reversed(rows):
+        learned = r.get("learned")
+        if not learned or learned in seen:
+            continue
+        seen.add(learned)
+        facts.append(f"- ({r['iter']}) probed `{r['capability']}` → {learned}")
+        if len(facts) >= _LEDGER_MAX_FACTS:
+            break
     if not facts:
         return "(no findings recorded yet — you are mapping the surface from scratch)"
-    return "\n".join(facts)
+    return "\n".join(reversed(facts))
 
 
 def parse_candidate_metadata(
@@ -577,10 +622,10 @@ def build_candidate_prompt(config: RunnerConfig, state: HarnessState) -> str:
     profile = _load_profile(config.repo_root)
     workspace_body = _load_workspace_body(config)
     recent = _recent_iters(
-        config.repo_root, config.runs_dir, config.job_id, n=_LEDGER_DEPTH
+        config.repo_root, config.runs_dir, config.job_id, n=_RECENT_DEDUP_WINDOW
     )
     recent_table = _format_recent_table(recent)
-    findings_ledger = _format_findings_ledger(recent)
+    findings_ledger = _format_findings_ledger(_ledger_rows(config, fallback=recent))
 
     # Cold-restart / discovery mode (§4.1): once the best has stalled, switch
     # the directive and minimize HISTORY anchoring (§4.3 — best line only).
@@ -643,7 +688,7 @@ Current state:
 - best_cer: {state.best_cer}
 - noise_floor sigma: {noise.get("sigma")} (provisional={noise.get("is_provisional")})
 
-Recent iterations (your own job, last {_LEDGER_DEPTH} — for dedup; do not repeat a fingerprint):
+Recent iterations (your own job, last {_RECENT_DEDUP_WINDOW} — for dedup; do not repeat a fingerprint):
 {recent_table}
 
 Findings ledger (what you have already learned about the backend surface —
