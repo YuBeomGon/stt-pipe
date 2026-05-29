@@ -179,11 +179,11 @@ python3 scripts/evolve.py --job-id phase3_NNN --iters 50 --candidate-cmd "claude
 
 <!-- AUDIT-RESULT-START -->
 
-**실행**: `python3 scripts/audit_candidate_context.py` (cwd = 프로젝트 root)
-**결과 사이드카**: [`reports/2026-05-29_context_audit.json`](reports/2026-05-29_context_audit.json)
-**Probe 응답 키 파싱**: 13/13 (전체 정상)
+### 7.1 첫 baseline — 2026-05-29 (정리 전)
 
-**검출된 누수 5 건**:
+**사이드카**: [`reports/2026-05-29_context_audit.json`](reports/2026-05-29_context_audit.json) — 13/13 키 파싱
+
+**누수 5 건**:
 
 | # | 항목 | 관찰값 | 영향 |
 |---|---|---|---|
@@ -210,17 +210,66 @@ python3 scripts/evolve.py --job-id phase3_NNN --iters 50 --candidate-cmd "claude
   candidate session 의 Tool 표면에 Drive read/write 가 등장 → 본 프로젝트와
   무관한 외부 표면 leak. `--mcp-config` 로 빈 설정 명시 권장 (§8).
 
-**상태**: 5 건 모두 알려진 leak. phase3_001 도 동일 환경에서 돌았으므로 본
-baseline 은 *phase3_001 의 회고적 환경 기록* 이기도 함. phase3_002 시작 전
-재실행 → diff 없으면 ablation 일관성 유지.
+phase3_001 도 동일 환경에서 돌았으므로 본 baseline 은 phase3_001 의
+*회고적 환경 기록* 이기도 함.
 
-**Probe 응답 한계**:
+### 7.2 1차 정리 후 — 2026-05-29 (CLAUDE.md gate)
 
-- 첫 시도는 Anthropic API 529 Overloaded 로 실패. 재시도 2 회차에 성공
-  (재시도 로직은 본 스크립트에 없음 — 운영자 수동).
-- claude 가 응답 형식을 *대부분* 따랐으나 `HOOKS_FIRED_AT_START` 값에 부가
-  설명 추가 (`YES — SessionStart hook (...)`). 본 parser 는 `YES` prefix 만
-  보므로 detection 영향 없음.
+**사이드카**: [`reports/2026-05-29_context_audit_after_cleanup.json`](reports/2026-05-29_context_audit_after_cleanup.json)
+
+**정리 내용**:
+1. CLAUDE.md 최상단에 *candidate session gate* 추가 — "prompt 가
+   `--- BEGIN CANDIDATE PROFILE ---` 로 시작하면 본 파일 무시"
+2. 운영자용 §1 / §3 / §4 제거 (AGENTS.md 가 이미 권한 표·정보 출처·Phase
+   행동 다 다룸)
+3. 본문에 §2 채팅 응답 스타일만 남기고 "interactive 운영자 한정" 명시
+4. `audit_candidate_context.py` 의 `detect_leaks` 가 `CLAUDE_MD_FIRST_50` 에
+   `Candidate session gate` 마커 감지 시 `CLAUDE_MD_LOADED` 누수 제외
+
+**누수 5 → 4**:
+
+| 누수 | 상태 |
+|---|---|
+| ~~CLAUDE.md auto-load~~ | ✅ **해소** (gate 마커 감지) |
+| superpowers SessionStart 훅 | ⚠️ 잔여 — project 레벨 차단 수단 미발견 |
+| 플러그인 inject | ⚠️ 잔여 — 위와 동일 |
+| 운영자 email PII | ⚠️ 잔여 — `~/.claude/` user-global / account context |
+| Git 최근 commit 5 개 | ⚠️ 잔여 — claude 기본 system prompt 섹션, suppress 불가 |
+
+**잔여 4 건의 정리 시도 결과**:
+
+- `claude -p --disable-slash-commands` 테스트: `SKILLS_AVAILABLE_COUNT` 43 → 1,
+  `MCP_SERVERS_VISIBLE` 사라짐 — 부분 효과. **단 SessionStart 훅 발화는 그대로**
+  (skill catalog 제공과 hook 발화는 다른 메커니즘).
+- `.claude/settings.json` 의 `hooks.SessionStart` 빈 배열 override 가능성:
+  미검증. claude code 의 hook 병합 의미가 override 인지 merge 인지 문서화 부족.
+  실험 시 운영자 세션에도 영향 가능.
+- `claude -p --bare` 사용 가능성: ❌ 우리 `.claude/hooks/restrict_workspace.py`
+  / `block_swap_and_seal.py` 도 같이 꺼져 candidate 샌드박스 깨짐. 사용
+  하려면 `--allowedTools` / `--disallowedTools` / `--settings` 로 권한
+  모델 처음부터 재구성 필요 (작업량 큼).
+- Email / git: 운영자 환경 의존이라 project 레벨 손 못 댐.
+
+### 7.3 결론 — phase3_002 진입 환경
+
+| 항목 | 상태 |
+|---|---|
+| Candidate 가 받는 CLAUDE.md 본문 | gate 마커 + 운영자 chat-style 한정 (≈ 8 줄). LLM 이 gate 를 준수하면 무해 |
+| Candidate 가 받는 superpowers 훅 | **그대로** — A’ YAML emission 에 부정적 영향 가능성 잔존 |
+| Candidate 가 받는 email / git commits | **그대로** — 의사결정 영향 작음 (PII 우려만) |
+| Phase3_001 vs Phase3_002 환경 차이 | CLAUDE.md 본문만 (다른 4 누수는 동일) |
+
+**ablation 영향**: phase3_001 은 CLAUDE.md 본문 (특히 "짧고 간결" 규칙) 노출,
+phase3_002 는 gate 적용. 두 잡 비교 시 A’ 효과 + CLAUDE.md 정리 효과가
+같이 측정됨. 분리 위해서는 phase3_003 (A’ 동일, 누수 정리만 변화) 추가 필요.
+*혹은* phase3_001 의 prompt.md 들 분석으로 candidate 가 실제로 CLAUDE.md
+의 "짧게" 를 따랐는지 사후 검증 가능.
+
+**Probe 응답 한계** (양 차수 공통):
+- 첫 시도 Anthropic API 529 Overloaded 가능 (재시도 로직은 본 스크립트에
+  없음 — 운영자 수동 재시도).
+- LLM 자기 보고 → 거짓말/hallucinate 가능성 X 임을 *증명* 못 함. Probe 결과
+  는 *증거* 일 뿐, 결정적 검증 X.
 
 <!-- AUDIT-RESULT-END -->
 

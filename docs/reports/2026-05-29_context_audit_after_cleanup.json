@@ -1,0 +1,50 @@
+{
+  "produced_at": "2026-05-29T08:38:04.576587+00:00",
+  "probe_cmd": "claude -p",
+  "cwd": "/data/MyProject/side/evolve/aig",
+  "candidate_returncode": 0,
+  "parsed_fields": {
+    "CWD": "/data/MyProject/side/evolve/aig",
+    "CLAUDE_MD_LOADED": "YES",
+    "CLAUDE_MD_FIRST_50": "> **Candidate session gate**: 본 prompt 본문이\\n> `---",
+    "AGENTS_MD_LOADED": "NO",
+    "SETTINGS_JSON_VISIBLE": "NO",
+    "HOOKS_FIRED_AT_START": "YES — SessionStart hook injecting superpowers:using-superpowers",
+    "PLUGIN_AUTO_INJECTED": "superpowers:using-superpowers",
+    "ENV_USER_EMAIL_VISIBLE": "YES",
+    "ENV_CURRENT_DATE_VISIBLE": "YES",
+    "GIT_STATUS_VISIBLE": "YES",
+    "GIT_RECENT_COMMITS_COUNT": "5",
+    "SKILLS_AVAILABLE_COUNT": "43",
+    "MCP_SERVERS_VISIBLE": "claude.ai Google Drive"
+  },
+  "missing_keys": [],
+  "leaks_detected": [
+    {
+      "key": "HOOKS_FIRED_AT_START",
+      "label": "SessionStart hook injection",
+      "observed": "YES — SessionStart hook injecting superpowers:using-superpowers",
+      "rationale": "Plugin SessionStart hooks (e.g. superpowers) force pre-response skill invocation, may derail focused YAML emission."
+    },
+    {
+      "key": "PLUGIN_AUTO_INJECTED",
+      "label": "Plugin/skill auto-injection",
+      "observed": "superpowers:using-superpowers",
+      "rationale": "Auto-loaded skills bias candidate toward generic workflows."
+    },
+    {
+      "key": "ENV_USER_EMAIL_VISIBLE",
+      "label": "Operator email PII",
+      "observed": "YES",
+      "rationale": "Minor PII leak into candidate session."
+    },
+    {
+      "key": "GIT_RECENT_COMMITS_COUNT",
+      "label": "Git recent commits visible",
+      "observed": "5",
+      "rationale": "Past iter commit subjects (e.g. 'iter9: keep ...') reveal harness verdicts and previous attempt outcomes — undermines A' recent-iter table compression."
+    }
+  ],
+  "raw_stderr": "",
+  "raw_stdout": "CWD: /data/MyProject/side/evolve/aig\nCLAUDE_MD_LOADED: YES\nCLAUDE_MD_FIRST_50: > **Candidate session gate**: 본 prompt 본문이\\n> `--- \nAGENTS_MD_LOADED: NO\nSETTINGS_JSON_VISIBLE: NO\nHOOKS_FIRED_AT_START: YES — SessionStart hook injecting superpowers:using-superpowers\nPLUGIN_AUTO_INJECTED: superpowers:using-superpowers\nENV_USER_EMAIL_VISIBLE: YES\nENV_CURRENT_DATE_VISIBLE: YES\nGIT_STATUS_VISIBLE: YES\nGIT_RECENT_COMMITS_COUNT: 5\nSKILLS_AVAILABLE_COUNT: 43\nMCP_SERVERS_VISIBLE: claude.ai Google Drive\n\nAUDIT-DONE\n"
+}

@@ -42,7 +42,7 @@ key:value format below, one key per line, in this order:
 
 CWD: <your effective working directory>
 CLAUDE_MD_LOADED: <YES if a project CLAUDE.md file is in your context, else NO>
-CLAUDE_MD_FIRST_50: <first 50 characters of that CLAUDE.md verbatim, else NONE>
+CLAUDE_MD_FIRST_50: <first 50 characters of that CLAUDE.md verbatim - WITHOUT the leading "# CLAUDE.md" heading - else NONE>
 AGENTS_MD_LOADED: <YES/NO — agent guide auto-loaded?>
 SETTINGS_JSON_VISIBLE: <YES/NO — can you see project .claude/settings.json contents?>
 HOOKS_FIRED_AT_START: <YES/NO — was a SessionStart hook injected? List hook names if YES>
@@ -96,6 +96,13 @@ def _positive_int(v: str) -> bool:
         return int(v.strip()) > 0
     except ValueError:
         return False
+
+
+# Marker placed at the top of CLAUDE.md so the file is auto-loaded but the
+# content gates itself out of candidate sessions (see CLAUDE.md and
+# CANDIDATE-CONTEXT.md §8). When the first-50 capture contains the marker we
+# treat CLAUDE_MD_LOADED as "loaded but candidate-safe" (warn, not leak).
+_CANDIDATE_GATE_MARKER = "Candidate session gate"
 
 
 # Each rule represents an undesirable context source for a candidate session.
@@ -167,9 +174,19 @@ def parse_probe(output: str) -> dict[str, str]:
 
 def detect_leaks(fields: dict[str, str]) -> list[dict[str, str]]:
     leaks: list[dict[str, str]] = []
+    # Gate exemption: CLAUDE.md loaded *with the candidate gate marker at the
+    # top* is by design — the file is auto-loaded but its body tells the LLM
+    # to ignore itself in candidate sessions. Treat as known-safe, omit from
+    # the leak list. Without the marker (gate missing or some other CLAUDE.md
+    # variant), the leak fires as usual.
+    claude_md_first_50 = fields.get("CLAUDE_MD_FIRST_50", "")
+    claude_md_gated = _CANDIDATE_GATE_MARKER in claude_md_first_50
+
     for rule in _LEAK_RULES:
         value = fields.get(rule.key, "")
         if not value:
+            continue
+        if rule.key == "CLAUDE_MD_LOADED" and claude_md_gated and _is_yes(value):
             continue
         if rule.predicate(value):
             leaks.append(
