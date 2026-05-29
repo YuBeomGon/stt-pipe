@@ -162,3 +162,14 @@ first valid candidate
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 2 · phase3_001_iter_002 · cer=0.403517 (Δ+0.007833) · reject
+
+### 관찰
+corpus_cer=0.403517, total_inference_time_s=124.6
+
+### 분석
+not enough improvement: Δcer 0.007833 < 0.010000
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
