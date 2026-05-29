@@ -142,3 +142,27 @@
   **트레이드오프**: 11파일 eval 과적합 위험(holdout 이미 overfit YES) — 잡 종료
   holdout 평가로 감시. 정석은 σ 실측(2σ 게이트)이나 baseline 봉인과 충돌 소지로 보류.
 - **F4 / F5 — follow-up**: candidate Bash/probing 정책, 다양성 관측 지표.
+
+---
+
+## 6. phase3_003 첫 실행 (무효) 에서 드러난 추가 수정
+
+첫 실행은 iter~21 에서 **Claude 세션 한도** ("resets 3:10am") 로 붕괴, iter22~100 이
+전부 candidate-command 실패 → 실험 무효. best 0.1679(iter7). 그 과정에서 3개 결함:
+
+- **R1 (critical) — candidate 가 `frozen/asr_backend.py` 를 못 읽음**: 발견형은
+  "frozen 읽고 표면 매핑" 전제인데 Phase 3 샌드박스가 frozen Read 를 deny.
+  (iter2 후보가 직접 보고: "frozen/asr_backend.py is blocked by this session's
+  sandbox".) → **해결**: `runner._load_frozen_surface` 로 frozen 본문을 프롬프트에
+  inline (workspace inline 과 동형). 샌드박스 무관하게 surface 노출. candidate.md 의
+  "Read frozen" 지시를 inlined 참조로 교체.
+- **R2 (critical) — 연속 command 실패에 abort 없음**: format-reject abort 는 첫 5
+  iter 만 보므로 세션 한도(exit≠0)는 안 잡혀 79 iter 낭비. → **해결**:
+  `IterationResult.command_failed` + `_COMMAND_FAIL_ABORT_COUNT=3` 연속 실패 abort
+  (`aborted_command_failure`).
+- **R3 — YAML free-text 콜론 파싱 실패**: `what_i_learned` 등 자유서술의 콜론/괄호가
+  plain scalar 를 깸 (iter2 format reject, 그 발견 소실). → **해결**: candidate.md
+  출력 포맷을 block scalar(`|`) 로 강제 + 설명.
+
+검증: 발견형 루프·F1/F2/F3 는 실제 발동 확인됨 (iter7 banking, iter10/13/17 discovery
+mode). 재실행은 한도 회복(3:10am) 후 + 위 R1~R3 반영본으로.

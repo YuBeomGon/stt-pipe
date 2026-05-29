@@ -40,10 +40,12 @@ evaluation runs. Do not attempt to bypass them.
 
 ## Your real surface is undermapped
 
-You reach the model only through `frozen.asr_backend`. **Read
-`frozen/asr_backend.py` — this is allowed and expected.** Whatever `load()`
-returns, and whatever that object and the decode call accept and return, is
-your true surface — and the job so far has used a tiny fraction of it.
+You reach the model only through `frozen.asr_backend`. **Its full source is
+inlined in the runtime prompt below (section "Your backend surface") — you
+cannot Read the file directly (the sandbox denies `frozen/`), so that inlined
+copy IS your surface map. Study it.** Whatever `load()` returns, and whatever
+that object and the decode call accept and return, is your true surface — and
+the job so far has used a tiny fraction of it.
 
 The obvious parameter tweaks (beam size, temperature scalar, penalties) are
 exhausted. The remaining headroom is in capabilities of the backend you have
@@ -59,8 +61,8 @@ and reasoning from the diagnosis — is the work.
 
 Before you edit, do reconnaissance and be able to state it:
 
-1. **Surface**: What part of `frozen.asr_backend` (or the object `load()`
-   returns) did you investigate this iteration? What does it actually expose
+1. **Surface**: What part of the inlined `frozen.asr_backend` (or the object
+   `load()` returns) did you study this iteration? What does it actually expose
    or return that the current `workspace/transcribe.py` ignores?
 2. **Ledger**: The runtime prompt gives you a *findings ledger* — facts you
    already established about the surface in earlier iterations. Build on it.
@@ -86,13 +88,21 @@ Your final emission **must end with a YAML fenced block** in exactly this
 form. The harness parses it with `yaml.safe_load`; deviation is treated as
 absence and the iteration is rejected before any compute is spent.
 
+**The three prose fields almost always contain colons, parentheses, or commas
+(e.g. "Negative: align() is...") which break a plain `key: value` line. You
+MUST write them as YAML block scalars (`|`) — indent the text under the key —
+so punctuation is safe.** Use exactly this shape:
+
 ````
 ```yaml
-capability_investigated: <what part of the backend surface you probed this iter>
-what_i_learned: <a concrete fact about the surface — a negative result counts>
-hypothesis: <the single change and why this discovery motivates it>
-fingerprint: [token1, token2, ...]   # 1-6 lowercase tokens, for dedup
-# lane: <optional free-form tag, e.g. segmentation/decoding/prompt/postprocess>
+capability_investigated: |
+  what part of the backend surface you studied this iter
+what_i_learned: |
+  a concrete fact about the surface — a negative result counts
+hypothesis: |
+  the single change and why this discovery motivates it
+fingerprint: [token1, token2]   # 1-6 lowercase tokens, for dedup (inline list, no colons)
+# lane: optional-free-form-tag
 ```
 ````
 

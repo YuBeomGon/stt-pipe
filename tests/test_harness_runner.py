@@ -590,6 +590,65 @@ def test_run_job_aborts_after_4_of_5_format_rejects(
     assert len(call_log) == 5
 
 
+def test_run_job_aborts_after_consecutive_command_failures(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """3 consecutive candidate-command failures (exit!=0, e.g. session limit)
+    abort the job instead of burning the whole budget on no-op rejects
+    (phase3_003 ran 79 such iters)."""
+    _init_repo(tmp_path)
+    config = RunnerConfig(job_id="job", repo_root=tmp_path, iterations=25)
+
+    from harness.runner import IterationResult
+
+    def fake_iter(cfg, state, state_path):
+        state.advance()
+        return IterationResult(
+            hyp_id=f"job_iter_{state.iteration:03d}",
+            status="reject",
+            decision=None,
+            verify_result=None,
+            reason="candidate command 실패",
+            command_failed=True,
+        )
+
+    monkeypatch.setattr("harness.runner.run_iteration", fake_iter)
+    state = run_job(config)
+
+    assert state.status == "aborted_command_failure"
+    assert state.iteration == 3  # aborts at the 3rd consecutive failure
+
+
+def test_command_failure_streak_resets_on_success(tmp_path: Path, monkeypatch) -> None:
+    """A command that runs resets the streak, so intermittent failures don't
+    accumulate to a false abort."""
+    _init_repo(tmp_path)
+    config = RunnerConfig(job_id="job", repo_root=tmp_path, iterations=6)
+
+    from harness.runner import IterationResult
+
+    # fail, fail, OK, fail, fail, fail  → abort only at the final 3-streak (iter6)
+    pattern = [True, True, False, True, True, True]
+
+    def fake_iter(cfg, state, state_path):
+        idx = state.iteration
+        state.advance()
+        return IterationResult(
+            hyp_id=f"job_iter_{state.iteration:03d}",
+            status="reject",
+            decision=None,
+            verify_result=None,
+            reason="x",
+            command_failed=pattern[idx],
+        )
+
+    monkeypatch.setattr("harness.runner.run_iteration", fake_iter)
+    state = run_job(config)
+
+    assert state.status == "aborted_command_failure"
+    assert state.iteration == 6
+
+
 # ----------------------------------------------------------------------- #
 # Review followup fixes (F1–F5) regression guards                          #
 # ----------------------------------------------------------------------- #

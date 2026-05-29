@@ -75,6 +75,13 @@ _LEDGER_MAX_FACTS = 30
 _FORMAT_REJECT_PROBE_ITERS = 5
 _FORMAT_REJECT_ABORT_COUNT = 4
 
+# Consecutive candidate-command-failure abort: if the candidate CLI exits
+# non-zero this many times in a row (session/usage limit, auth failure, crash),
+# abort the job — re-invoking will keep failing and just burn the iteration
+# budget on no-op reject commits (phase3_003 ran 79 such iters after the Claude
+# session limit was hit). Resets on any iteration whose command runs.
+_COMMAND_FAIL_ABORT_COUNT = 3
+
 # Candidate-context skills/MCP hardening — appended automatically when
 # candidate_cmd starts with `claude`. These suppress user-invocable skill
 # catalog (29 → 0) and external MCP servers (Google Drive etc. → none).
@@ -218,6 +225,13 @@ class IterationResult:
     # job-level format-reject abort guard but otherwise treated as a normal
     # reject (workspace rolled back, no verify run).
     format_reject: bool = False
+    # Set when the candidate *command itself* exited non-zero (e.g. `claude -p`
+    # hit a session/usage limit, auth failure, or crashed). Distinct from
+    # format_reject (command ran, output malformed). Drives the consecutive-
+    # command-failure abort guard so a job doesn't burn its whole iteration
+    # budget re-invoking a CLI that will keep failing (phase3_003: 79 no-op
+    # iters after the session limit was hit).
+    command_failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -371,6 +385,26 @@ def _load_workspace_body(config: RunnerConfig) -> str:
     path = config.repo_root / config.allowed_path
     if not path.is_file():
         return f"(workspace file not found at {config.allowed_path.as_posix()})"
+    return path.read_text(encoding="utf-8")
+
+
+_FROZEN_SURFACE_PATH = Path("frozen/asr_backend.py")
+
+
+def _load_frozen_surface(config: RunnerConfig) -> str:
+    """Inline frozen/asr_backend.py so the candidate can actually study its
+    real surface. The Phase 3 sandbox DENIES Read of frozen/ (settings.json
+    deny rules), so a profile instruction to "read frozen" is impossible —
+    the candidate confirmed this at runtime (phase3_003 iter_002: "frozen/
+    asr_backend.py is blocked by this session's sandbox"). Inlining the wrapper
+    here is safe (it is the public API the workspace already imports, not an
+    answer key or holdout) and makes discovery-first real regardless of the
+    sandbox: load()'s return type + generate()'s **decoding_kwargs docstring
+    are the surface the candidate must mine.
+    """
+    path = config.repo_root / _FROZEN_SURFACE_PATH
+    if not path.is_file():
+        return f"({_FROZEN_SURFACE_PATH.as_posix()} not found)"
     return path.read_text(encoding="utf-8")
 
 
@@ -626,6 +660,7 @@ def build_candidate_prompt(config: RunnerConfig, state: HarnessState) -> str:
     diagnosis = _best_diagnosis(config, state)
     profile = _load_profile(config.repo_root)
     workspace_body = _load_workspace_body(config)
+    frozen_surface = _load_frozen_surface(config)
     recent = _recent_iters(
         config.repo_root, config.runs_dir, config.job_id, n=_RECENT_DEDUP_WINDOW
     )
@@ -671,6 +706,15 @@ the file's current state):
 
 ```python
 {workspace_body}
+```
+
+Your backend surface — frozen/asr_backend.py (inlined; you cannot Read it
+directly — the sandbox denies frozen/. THIS is your surface map. Study what
+load() returns and what generate()'s **decoding_kwargs accepts/returns — the
+unused capabilities live here):
+
+```python
+{frozen_surface}
 ```
 
 Goal:
@@ -915,6 +959,7 @@ def run_iteration(
             decision=None,
             verify_result=None,
             reason="candidate command 실패",
+            command_failed=True,
         )
         append_event(
             str(state.iteration),
@@ -1115,6 +1160,7 @@ def run_job(config: RunnerConfig) -> HarnessState:
     _check_bypass_in_production(config)
     state, state_path = load_or_init_state(config)
     format_reject_count = 0
+    command_fail_streak = 0
     starting_iteration = state.iteration
     for _ in range(config.iterations):
         if state.status == "success":
@@ -1122,6 +1168,23 @@ def run_job(config: RunnerConfig) -> HarnessState:
         result = run_iteration(config, state, state_path)
         if result is not None and result.format_reject:
             format_reject_count += 1
+
+        # Consecutive candidate-command-failure abort: a non-zero CLI exit
+        # (session/usage limit, auth, crash) will keep recurring, so stop after
+        # _COMMAND_FAIL_ABORT_COUNT in a row instead of burning the budget on
+        # no-op rejects. Streak resets the moment a command actually runs.
+        if result is not None and result.command_failed:
+            command_fail_streak += 1
+        else:
+            command_fail_streak = 0
+        if command_fail_streak >= _COMMAND_FAIL_ABORT_COUNT:
+            state.status = "aborted_command_failure"
+            state.save(state_path)
+            if config.commit_results:
+                commit_iteration(
+                    config, state_path, "abort", "command_failure", state.iteration
+                )
+            break
         # Format-reject abort guard (proposal §2.1) — only evaluated within
         # the *first* probe window of this run, not across jobs. If the
         # candidate fails the YAML contract in 4 of the first 5 iterations,
