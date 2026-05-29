@@ -79,12 +79,12 @@ rm -rf runs/dry_*
 git status   # working tree clean 확인
 ```
 
-### 2. 본 잡 (예: phase3_002 50 iter)
+### 2. 본 잡 (예: phase3_002 25 iter)
 
 ```bash
 python3 scripts/evolve.py \
   --job-id phase3_002 \
-  --iters 50 \
+  --iters 25 \
   --candidate-cmd "claude -p" \
   --commit-results
 ```
@@ -92,15 +92,26 @@ python3 scripts/evolve.py \
 `--iters > 1` 이면 `--commit-results` 가 **필수** (직전 best 를 git 기준점으로 고정해야
 reject 시 안전한 rollback 가능 — PLAN §4).
 
-**시간 / 토큰 가이드** (50 iter 기준, phase3_001 25 iter / 2 h 실측 외삽):
+**시간 / 토큰 가이드** (25 iter 기준, phase3_001 25 iter / 2 h 실측):
 
 | 항목 | 추정 |
 |---|---|
-| 잡 시간 | 3.5 – 4.5 h (iter 당 ~5 min × 50) |
+| 잡 시간 | ~2 h (iter 당 ~5 min × 25) |
 | iter 당 input | ~10 – 12 k token (profile + state + recent + HISTORY tail + diagnosis + auto-push) |
 | iter 당 output | ~2 – 4 k token (diff + YAML meta) |
-| 총 토큰 | ~600 – 800 k (대부분 input) |
-| 한도 주의 | Claude Max 사용 시 잡 시간 ≈ 한도 리셋 window. 시작 시점 = 한도 리셋 직후 권장. 잡 중 한도 hit = format reject 누적 → abort 가드 발동 위험 |
+| 총 토큰 | ~300 – 400 k (대부분 input) |
+| 한도 주의 | Claude Max 사용 시 토큰 한도 여유 확인. 잡 중 한도 hit = format reject 누적 → abort 가드 발동 위험 |
+
+**잡 시작 전 — HISTORY 리셋** (PLAN §7 정책, 잡 단위 ablation 보호):
+
+```bash
+# 직전 잡의 narrative 가 남아있으면 archive 로 이동, 빈 HISTORY 로 시작
+if [ -s runs/_summary/HISTORY.md ] && grep -q "^iter" runs/_summary/HISTORY.md; then
+  PREV_JOB=$(ls runs/_summary/*_state.json 2>/dev/null | head -1 | xargs -I{} basename {} _state.json)
+  mv runs/_summary/HISTORY.md docs/history-archive/HISTORY.${PREV_JOB:-prev}.md
+  printf '# Phase 3 HISTORY\n\nIteration narratives. harness 만 append.\n' > runs/_summary/HISTORY.md
+fi
+```
 
 운영자 interactive `claude` 세션은 `claude -p` subprocess 와 분리됨
 (runner 가 candidate cmd 에만 hardening flag 자동 부착, CANDIDATE-CONTEXT §7.6).

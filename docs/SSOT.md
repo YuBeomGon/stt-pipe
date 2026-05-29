@@ -30,7 +30,8 @@
 | candidate 컨텍스트 (PUSH/AUTO-PUSH/PULL) + 감사 | [`CANDIDATE-CONTEXT.md`](CANDIDATE-CONTEXT.md) | `claude -p` 가 자동 로드하는 것 + 검증 스크립트 + 누수 baseline |
 | harness 변경 제안 (RFC) — *결정 이력 only, 정본 X* | [`proposals/`](proposals/) | 채택되면 §2 의 해당 정본 (PHASE3-PLAN / CANDIDATE-CONTEXT / candidate.md) 에 흡수. 진행 중 목록은 §5 |
 | 세션 종료 인계 메모 | [`status/`](status/) | 날짜별 스냅샷 |
-| 실제 iteration 로그 | [`../runs/_summary/HISTORY.md`](../runs/_summary/HISTORY.md) | 실험 기록 정본 |
+| 실제 iteration 로그 — *현재 잡 한정* | [`../runs/_summary/HISTORY.md`](../runs/_summary/HISTORY.md) | 잡 단위로 reset. 잡 종료 후 `docs/history-archive/HISTORY.<job_id>.md` 로 이동 |
+| 과거 잡 narrative 아카이브 | [`history-archive/`](history-archive/) | `HISTORY.<job_id>.md`. 분석 자산 보존. 다음 잡 시작 시 HISTORY 누적 차단 (anchoring 방지) |
 | 종료 후 종합 리포트 | [`reports/`](reports/) | `<job_id>_<KIND>_<YYYY-MM-DD>.{md,json}` |
 | autoresearch 조사 기록 | [`AUTORESEARCH.md`](AUTORESEARCH.md) | historical/deprecated |
 | 일반 self-evolve 참고 | [`SELF-EVOLVE-HARNESS-SPEC.md`](SELF-EVOLVE-HARNESS-SPEC.md) | 참고용, 정본 아님 |
@@ -49,9 +50,10 @@
 | `workspace/` | 후보 파이프라인 표면 (`transcribe(audio, sr) -> str`) |
 | `baseline/` | 봉인된 target/baseline/noise floor |
 | `runs/<hyp_id>/` | iteration별 평가 산출물 + `candidate_meta.json` / `.err` |
-| `runs/_summary/` | harness 전용 누적 — `<job_id>_state.json`, `HISTORY.md`, `JOB_DONE.lock` |
+| `runs/_summary/` | harness 전용 누적 — `<job_id>_state.json`, `HISTORY.md` (현재 잡 한정), `JOB_DONE.lock` |
 | `docs/reports/` | analyze_run / evaluate_holdout 의 잡별 산출물 |
 | `docs/proposals/` | harness 변경 RFC (채택 후 정본 갱신 + historical) |
+| `docs/history-archive/` | 잡 종료 후 `runs/_summary/HISTORY.md` 를 `HISTORY.<job_id>.md` 로 이동 → 다음 잡은 빈 HISTORY 부터 시작 (잡 단위 ablation 보호) |
 
 ---
 

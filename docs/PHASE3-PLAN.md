@@ -309,7 +309,11 @@ Iteration 산출물:
 - `runs/<hyp_id>/candidate_meta.err` — A' format reject 사유. 파싱 실패 시 (둘 중 정확히 하나만 존재)
 
 누적 기록:
-- `runs/_summary/HISTORY.md`
+- `runs/_summary/HISTORY.md` — **현재 잡 한정**. 잡 종료 후
+  `docs/history-archive/HISTORY.<job_id>.md` 로 이동, 새 빈 HISTORY 로 다음
+  잡 시작. 이유: candidate 가 매 iter prompt 에서 HISTORY tail 을 받는데,
+  과거 잡 narrative 가 anchoring 으로 작용 → lane 선택 / fingerprint 회피
+  판단 흐려짐. 잡 단위 ablation 정합성 보호.
 - `runs/_summary/<job_id>_state.json` — `HarnessState.status` 가 `"aborted_format_reject"` 이면 §4 의 잡 abort 가드가 작동한 것
 
 `HISTORY.md`는 실험 로그 정본이다. harness만 append하며, 후보가 직접 만들거나
