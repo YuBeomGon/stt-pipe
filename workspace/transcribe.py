@@ -25,8 +25,10 @@ _INITIAL_PROMPT_TEXT = (
 
 
 def _vad_chunks(audio: np.ndarray, sr: int, max_seconds: int = 30) -> list[tuple[int, int]]:
-    """librosa.effects.split (top_db=30) → max_seconds 까지 합친 (start, end) 리스트."""
+    """librosa.effects.split (top_db=25) → max_seconds 까지 합친 (start, end) 리스트.
+    양쪽 0.2s margin 확장 (단어 경계 절단 보호)."""
     max_samples = max_seconds * sr
+    margin_samples = int(0.2 * sr)
     intervals = librosa.effects.split(audio, top_db=25)
     if len(intervals) == 0:
         return [(0, len(audio))]
@@ -41,7 +43,12 @@ def _vad_chunks(audio: np.ndarray, sr: int, max_seconds: int = 30) -> list[tuple
             chunks.append((cur_start, cur_end))
             cur_start, cur_end = s_i, e_i
     chunks.append((cur_start, cur_end))
-    return chunks
+
+    audio_len = len(audio)
+    return [
+        (max(0, s - margin_samples), min(audio_len, e + margin_samples))
+        for s, e in chunks
+    ]
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
