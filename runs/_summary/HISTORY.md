@@ -259,3 +259,15 @@ candidate command 실패
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 24 · phase3_003_iter_024 · cer=NA (ΔNA) · reject
+
+### 관찰
+score_report 없음
+candidate command exit=1
+
+### 분석
+candidate command 실패
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
