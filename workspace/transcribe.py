@@ -41,10 +41,53 @@ _DOMAIN_PROMPT = (
     "보험금 본인확인 상담사 동의 청구 확인"
 )
 
+_EQ_BANDS = 32  # coarse magnitude bands estimating the channel envelope
+_EQ_CLIP = 3.0  # max boost/cut of any band — gentle channel correction, not whitening
+
+
+def _equalize_channel(audio: np.ndarray) -> np.ndarray:
+    """Blind channel (spectral-coloration) equalization on the full waveform.
+
+    NEW MECHANISM (EXPLORE): every prior waveform lever reshaped the signal
+    only by a fixed spectral tilt (pre-emphasis, iter_024/025), a flat level
+    rescale (RMS, iter_026), an out-of-band mask (band-limit, iter_029/043/051),
+    or a memoryless amplitude nonlinearity (companding, iter_054). None touched
+    the *in-band spectral ENVELOPE*. Telephony (handset + codec) imposes a fixed
+    band coloration that tilts that envelope and shifts formant energy ratios —
+    the kind of channel distortion that drives consonant/vowel substitution, the
+    dominant error axis. We estimate the channel as the coarse (32-band) magnitude
+    envelope and divide it out, flattening the coloration toward the training
+    distribution while the coarse binning leaves fine formant structure intact and
+    the ±3x clip keeps it a gentle EQ (not full whitening that would amplify the
+    inter-formant noise floor). Phase is preserved; level is restored to the input
+    RMS so downstream mel scaling is unchanged. numpy-only, once per file (outside
+    the window loop) — budget-neutral.
+    """
+    n = len(audio)
+    if n < _EQ_BANDS * 2:
+        return audio
+    spec = np.fft.rfft(audio)
+    mag = np.abs(spec)
+    m = mag.size
+    binsz = int(np.ceil(m / _EQ_BANDS))
+    padded = np.pad(mag, (0, binsz * _EQ_BANDS - m), mode="edge")
+    coarse = padded.reshape(_EQ_BANDS, binsz).mean(axis=1)
+    channel = np.repeat(coarse, binsz)[:m]
+    channel = channel / (np.median(channel) + 1e-8)
+    channel = np.clip(channel, 1.0 / _EQ_CLIP, _EQ_CLIP)
+    out = np.fft.irfft(spec / channel, n=n).astype(np.float32)
+    in_rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2))) + 1e-8
+    out_rms = float(np.sqrt(np.mean(out.astype(np.float64) ** 2))) + 1e-8
+    return (out * (in_rms / out_rms)).astype(np.float32)
+
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
     tok = processor.tokenizer
+
+    # flatten the fixed telephony channel coloration once before any windowing,
+    # so the encoder sees a spectral envelope closer to the training distribution.
+    audio = _equalize_channel(audio)
 
     # NOTE: <|notimestamps|> is intentionally omitted so the decoder emits
     # timestamp tokens; they are stripped from the text by skip_special_tokens
