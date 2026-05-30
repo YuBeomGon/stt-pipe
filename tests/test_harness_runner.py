@@ -17,7 +17,11 @@ from harness.runner import (
     _CLAUDE_HARDENING_FLAGS,
     _HARDEN_BYPASS_ENV,
     _check_bypass_in_production,
+    _dominant_axis,
+    _format_error_profile,
+    _format_recent_table,
     _harden_candidate_cmd,
+    _read_score_report,
     _recent_iters,
     build_candidate_prompt,
     candidate_owned_statuses,
@@ -999,3 +1003,136 @@ def test_build_candidate_prompt_does_not_start_with_double_dash(tmp_path: Path) 
     )
     assert "=== BEGIN CANDIDATE PROFILE" in prompt
     assert "--- BEGIN CANDIDATE PROFILE" not in prompt
+
+
+# --- Step 1: diagnosis injection (error profile + recent-table signature) ---
+
+
+def _write_score(dir_path: Path, **kw: object) -> None:
+    """Write a minimal score_report.json for tests."""
+    dir_path.mkdir(parents=True, exist_ok=True)
+    (dir_path / "score_report.json").write_text(json.dumps(kw), encoding="utf-8")
+
+
+def test_dominant_axis_substitution() -> None:
+    """sub dominant + healthy length_ratio → substitution axis."""
+    report = {
+        "error_breakdown": {"sub_ratio": 0.59, "del_ratio": 0.35, "ins_ratio": 0.06},
+        "length_ratio": {"mean": 0.95},
+        "hallucination_hit_rate": 0.18,
+    }
+    out = _dominant_axis(report)
+    assert "substitution" in out.lower(), out
+
+
+def test_dominant_axis_coverage_deletion() -> None:
+    """deletion >= sub OR low length_ratio → coverage/deletion axis."""
+    report = {
+        "error_breakdown": {"sub_ratio": 0.18, "del_ratio": 0.80, "ins_ratio": 0.02},
+        "length_ratio": {"mean": 0.60},
+        "hallucination_hit_rate": 0.09,
+    }
+    out = _dominant_axis(report)
+    assert "coverage" in out.lower() or "deletion" in out.lower(), out
+
+
+def test_dominant_axis_over_generation() -> None:
+    """high hallucination/insertion → over-generation axis."""
+    report = {
+        "error_breakdown": {"sub_ratio": 0.30, "del_ratio": 0.20, "ins_ratio": 0.50},
+        "length_ratio": {"mean": 1.20},
+        "hallucination_hit_rate": 0.40,
+    }
+    out = _dominant_axis(report)
+    assert "over-generation" in out.lower(), out
+
+
+def test_dominant_axis_missing_breakdown_degrades() -> None:
+    """No error_breakdown → unknown, not a crash."""
+    assert "unknown" in _dominant_axis({}).lower()
+
+
+def test_read_score_report_missing_returns_empty(tmp_path: Path) -> None:
+    assert _read_score_report(tmp_path) == {}
+
+
+def test_format_error_profile_renders_axis(tmp_path: Path) -> None:
+    """build the best dir's score_report and confirm the profile block names
+    the measured mix + dominant axis."""
+    runs = tmp_path / "runs"
+    _write_score(
+        runs / "job_iter_007",
+        corpus_cer=0.1574,
+        error_breakdown={"sub_ratio": 0.59, "del_ratio": 0.35, "ins_ratio": 0.06},
+        length_ratio={"mean": 0.95, "p05": 0.93},
+        hallucination_hit_rate=0.18,
+        repeated_text_rate=0.09,
+    )
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    state = HarnessState(job_id="job", iteration=8, best_hyp_id="job_iter_007", best_cer=0.1574)
+    block = _format_error_profile(config, state)
+    assert "substitution 59%" in block
+    assert "DOMINANT AXIS: substitution" in block
+    assert "0.1574" in block
+
+
+def test_format_error_profile_no_best_yet() -> None:
+    config = RunnerConfig(job_id="job", repo_root=Path("."))
+    state = HarnessState(job_id="job", iteration=1)
+    assert "no best yet" in _format_error_profile(config, state).lower()
+
+
+def test_recent_table_includes_failure_signature(tmp_path: Path) -> None:
+    """_recent_iters pulls sub/del/ins + len + hal from score_report, and the
+    table renders them so the candidate sees *how* each attempt failed."""
+    runs = tmp_path / "runs"
+    d = runs / "job_iter_001"
+    d.mkdir(parents=True)
+    (d / "candidate_meta.json").write_text(
+        json.dumps({"fingerprint": ["beam"]}), encoding="utf-8"
+    )
+    _write_score(
+        d,
+        corpus_cer=0.16,
+        error_breakdown={"sub_ratio": 0.59, "del_ratio": 0.35, "ins_ratio": 0.06},
+        length_ratio={"mean": 0.95},
+        hallucination_hit_rate=0.18,
+    )
+    rows = _recent_iters(tmp_path, Path("runs"), "job", n=5)
+    assert rows[0]["sub_ratio"] == 0.59
+    assert rows[0]["length_ratio_mean"] == 0.95
+    table = _format_recent_table(rows)
+    assert "sub/del/ins" in table
+    assert "0.59/0.35/0.06" in table
+
+
+def test_recent_table_degrades_when_no_score(tmp_path: Path) -> None:
+    """An iter with meta but no score_report (format reject) renders — for the
+    signature columns, not a crash."""
+    runs = tmp_path / "runs"
+    d = runs / "job_iter_001"
+    d.mkdir(parents=True)
+    (d / "candidate_meta.err").write_text("missing yaml", encoding="utf-8")
+    rows = _recent_iters(tmp_path, Path("runs"), "job", n=5)
+    table = _format_recent_table(rows)
+    assert "job_iter_001" in table
+    assert "—" in table  # signature columns degrade gracefully
+
+
+def test_error_profile_injected_into_prompt(tmp_path: Path) -> None:
+    """End-to-end: build_candidate_prompt surfaces the error profile block."""
+    _init_repo(tmp_path)
+    runs = tmp_path / "runs"
+    _write_score(
+        runs / "job_iter_001",
+        corpus_cer=0.20,
+        error_breakdown={"sub_ratio": 0.59, "del_ratio": 0.35, "ins_ratio": 0.06},
+        length_ratio={"mean": 0.95, "p05": 0.93},
+        hallucination_hit_rate=0.18,
+        repeated_text_rate=0.09,
+    )
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    state = HarnessState(job_id="job", iteration=2, best_hyp_id="job_iter_001", best_cer=0.20)
+    prompt = build_candidate_prompt(config, state)
+    assert "Error profile (best = job_iter_001" in prompt
+    assert "DOMINANT AXIS" in prompt

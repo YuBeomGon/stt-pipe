@@ -361,6 +361,105 @@ def _best_diagnosis(config: RunnerConfig, state: HarnessState, max_chars: int = 
     return path.read_text(encoding="utf-8")[:max_chars]
 
 
+def _read_score_report(dir_path: Path) -> dict[str, Any]:
+    """Best-effort read of a single iter dir's score_report.json. Returns {} if
+    absent or malformed so callers can degrade gracefully (a reverted/aborted
+    iter may have no score)."""
+    path = dir_path / "score_report.json"
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _dominant_axis(report: dict[str, Any]) -> str:
+    """One-line auto-diagnosis of the dominant error axis from a score_report.
+
+    The candidate otherwise only sees a scalar corpus_cer and cannot tell
+    *which* error class now bounds the score — so it keeps re-attacking
+    already-solved axes (coverage was solved at iter_007 yet 30+ later iters
+    still chased it). This collapses error_breakdown + length_ratio +
+    hallucination into the single signal that should steer the next hypothesis.
+    """
+    eb = report.get("error_breakdown") or {}
+    sub = eb.get("sub_ratio")
+    dele = eb.get("del_ratio")
+    ins = eb.get("ins_ratio")
+    lr = (report.get("length_ratio") or {}).get("mean")
+    hal = report.get("hallucination_hit_rate")
+    if sub is None or dele is None or ins is None:
+        return "DOMINANT AXIS: unknown (no error_breakdown in best score_report)"
+    # Over-generation first: high insertion or hallucination dominates meaning.
+    if (hal is not None and hal >= 0.30) or ins > 0.30:
+        return (
+            f"DOMINANT AXIS: over-generation (ins {ins:.0%}, "
+            f"hallucination {hal if hal is not None else float('nan'):.0%}) "
+            f"→ the model emits text not in the audio; gate/suppress, don't add coverage."
+        )
+    # Deletion/coverage: the classic long-form truncation signature.
+    if dele >= sub or (lr is not None and lr < 0.85):
+        lr_str = f"{lr:.2f}" if lr is not None else "n/a"
+        return (
+            f"DOMINANT AXIS: coverage/deletion (del {dele:.0%}, length_ratio {lr_str}) "
+            f"→ audio is being dropped; recover the missing span (chunking/timestamps)."
+        )
+    # Substitution: words are heard but wrong — needs *what*, not *how much*.
+    lr_str = f"{lr:.2f}" if lr is not None else "n/a"
+    return (
+        f"DOMINANT AXIS: substitution (sub {sub:.0%} ≫ del/ins, "
+        f"length_ratio {lr_str} healthy) → headroom is in *what* gets "
+        f"mis-recognized (domain terms, phone-band audio), not coverage."
+    )
+
+
+def _format_error_profile(config: RunnerConfig, state: HarnessState) -> str:
+    """Corpus-level error profile of the current best, with an auto-diagnosed
+    dominant axis. Injected so the candidate sees the standing failure mode as
+    *measured data*, not something it must infer from the scalar cer."""
+    if not state.best_hyp_id:
+        return "(no best yet — first improving iter sets the baseline profile.)"
+    report = _read_score_report(
+        config.repo_root / config.runs_dir / state.best_hyp_id
+    )
+    if not report:
+        return "(best score_report unavailable.)"
+    eb = report.get("error_breakdown") or {}
+    sub = eb.get("sub_ratio")
+    dele = eb.get("del_ratio")
+    ins = eb.get("ins_ratio")
+    lr = report.get("length_ratio") or {}
+    mix = (
+        f"substitution {sub:.0%} / deletion {dele:.0%} / insertion {ins:.0%}"
+        if None not in (sub, dele, ins)
+        else "(error_breakdown unavailable)"
+    )
+    lr_mean = lr.get("mean")
+    lr_p05 = lr.get("p05")
+    lr_line = (
+        f"mean {lr_mean:.2f} (p05 {lr_p05:.2f}) — coverage proxy (≈1.0 = full)"
+        if lr_mean is not None and lr_p05 is not None
+        else "(length_ratio unavailable)"
+    )
+    hal = report.get("hallucination_hit_rate")
+    rep = report.get("repeated_text_rate")
+    hal_line = (
+        f"hallucination {hal:.2f} | repeated {rep:.2f}"
+        if hal is not None and rep is not None
+        else ""
+    )
+    lines = [
+        f"Error profile (best = {state.best_hyp_id}, corpus_cer {state.best_cer:.4f}):",
+        f"- error mix: {mix}",
+        f"- length_ratio: {lr_line}",
+    ]
+    if hal_line:
+        lines.append(f"- {hal_line}")
+    lines.append(f"- {_dominant_axis(report)}")
+    return "\n".join(lines)
+
+
 def _load_profile(repo_root: Path) -> str:
     """Load the candidate profile body inlined into every prompt.
 
@@ -445,13 +544,13 @@ def _recent_iters(
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 meta = {}
-        cer: float | None = None
-        score_path = d / "score_report.json"
-        if score_path.is_file():
-            try:
-                cer = json.loads(score_path.read_text(encoding="utf-8")).get("corpus_cer")
-            except (json.JSONDecodeError, AttributeError):
-                cer = None
+        # Pull cer + the failure signature (error mix / coverage / hallucination)
+        # so the recent table shows *how* each attempt failed, not just a scalar
+        # cer the candidate cannot diagnose from.
+        report = _read_score_report(d)
+        cer = report.get("corpus_cer")
+        eb = report.get("error_breakdown") or {}
+        lr = report.get("length_ratio") or {}
         # Support both the discovery schema (`fingerprint`) and the legacy A'
         # schema (`diff_fingerprint`) so a job that spans the migration still
         # renders a sane recent table.
@@ -465,6 +564,11 @@ def _recent_iters(
                 "capability": meta.get("capability_investigated", ""),
                 "learned": meta.get("what_i_learned", ""),
                 "cer": cer,
+                "sub_ratio": eb.get("sub_ratio"),
+                "del_ratio": eb.get("del_ratio"),
+                "ins_ratio": eb.get("ins_ratio"),
+                "length_ratio_mean": lr.get("mean"),
+                "hallucination_hit_rate": report.get("hallucination_hit_rate"),
             }
         )
     return out
@@ -474,13 +578,24 @@ def _format_recent_table(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "(no prior iterations yet)"
     lines = [
-        "| iter | fingerprint                          | cer    |",
-        "|------|--------------------------------------|--------|",
+        "| iter | fingerprint                          | cer    | sub/del/ins | len  | hal  |",
+        "|------|--------------------------------------|--------|-------------|------|------|",
     ]
     for r in rows:
         fp = ",".join(r["fingerprint"]) if r["fingerprint"] else "—"
         cer_str = f"{r['cer']:.4f}" if isinstance(r["cer"], (int, float)) else "n/a"
-        lines.append(f"| {r['iter']} | {fp:36} | {cer_str} |")
+        sdi = (
+            f"{r['sub_ratio']:.2f}/{r['del_ratio']:.2f}/{r['ins_ratio']:.2f}"
+            if None not in (r.get("sub_ratio"), r.get("del_ratio"), r.get("ins_ratio"))
+            else "—"
+        )
+        lr = r.get("length_ratio_mean")
+        lr_str = f"{lr:.2f}" if isinstance(lr, (int, float)) else "—"
+        hal = r.get("hallucination_hit_rate")
+        hal_str = f"{hal:.2f}" if isinstance(hal, (int, float)) else "—"
+        lines.append(
+            f"| {r['iter']} | {fp:36} | {cer_str} | {sdi:^11} | {lr_str:^4} | {hal_str:^4} |"
+        )
     return "\n".join(lines)
 
 
@@ -665,6 +780,7 @@ def build_candidate_prompt(config: RunnerConfig, state: HarnessState) -> str:
         config.repo_root, config.runs_dir, config.job_id, n=_RECENT_DEDUP_WINDOW
     )
     recent_table = _format_recent_table(recent)
+    error_profile = _format_error_profile(config, state)
     findings_ledger = _format_findings_ledger(_ledger_rows(config, fallback=recent))
 
     # Cold-restart / discovery mode (§4.1): once the best has stalled, switch
@@ -737,7 +853,11 @@ Current state:
 - best_cer: {state.best_cer}
 - noise_floor sigma: {noise.get("sigma")} (provisional={noise.get("is_provisional")})
 
-Recent iterations (your own job, last {_RECENT_DEDUP_WINDOW} — for dedup; do not repeat a fingerprint):
+{error_profile}
+
+Recent iterations (your own job, last {_RECENT_DEDUP_WINDOW} — for dedup AND
+diagnosis; the sub/del/ins, len, hal columns show *how* each attempt failed,
+not just its cer. Do not repeat a fingerprint):
 {recent_table}
 
 Findings ledger (what you have already learned about the backend surface —
