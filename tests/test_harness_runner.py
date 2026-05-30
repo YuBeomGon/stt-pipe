@@ -1264,7 +1264,7 @@ def test_iteration_mode_explores_until_best_exists() -> None:
     assert _iteration_mode(state) == "explore"
 
 
-def test_synthesize_mode_injects_rejects_and_exploit(tmp_path: Path) -> None:
+def test_exploit_mode_injects_rejects_and_tuning(tmp_path: Path) -> None:
     """A synthesize-slot iteration surfaces promising rejects' diffs and
     re-permits decode-param tuning."""
     _init_repo(tmp_path)
@@ -1283,7 +1283,7 @@ def test_synthesize_mode_injects_rejects_and_exploit(tmp_path: Path) -> None:
         repeated_text_rate=0.09,
     )
     config = RunnerConfig(job_id="job", repo_root=tmp_path)
-    # Find a late iteration that the deterministic schedule marks "synthesize".
+    # Find a late iteration that the deterministic schedule marks "exploit".
     synth_iter = next(
         n for n in range(30, 80)
         if not _is_explore_iter(n)
@@ -1292,9 +1292,9 @@ def test_synthesize_mode_injects_rejects_and_exploit(tmp_path: Path) -> None:
         job_id="job", iteration=synth_iter, best_hyp_id="job_iter_001",
         best_cer=0.157, iters_since_best_update=synth_iter - 1,
     )
-    assert _iteration_mode(state) == "synthesize"
+    assert _iteration_mode(state) == "exploit"
     prompt = build_candidate_prompt(config, state)
-    assert "SYNTHESIZE MODE" in prompt
+    assert "EXPLOIT MODE" in prompt
     assert "EXPLORE MODE" not in prompt
     assert "SUBFIX_DIFF" in prompt  # promising reject's actual code injected
     assert "EXPLOITATION" in prompt  # decode-param tuning re-permitted
@@ -1320,4 +1320,4 @@ def test_explore_mode_prompts_for_novelty(tmp_path: Path) -> None:
     assert _iteration_mode(state) == "explore"
     prompt = build_candidate_prompt(config, state)
     assert "EXPLORE MODE" in prompt
-    assert "SYNTHESIZE MODE" not in prompt
+    assert "EXPLOIT MODE" not in prompt

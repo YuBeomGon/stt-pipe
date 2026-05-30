@@ -62,7 +62,8 @@
 
 - [x] RFC 작성 — `docs/proposals/2026-05-29-agent-design.md`
 - [x] candidate profile 신설 — `harness/prompts/candidate.md`
-- [x] runner profile inline + YAML parse + format reject + 권고 lane round-robin + abort 가드 — PLAN §4
+- [x] runner profile inline + YAML parse + format reject + abort 가드 — PLAN §4
+  (초기 A' 의 권고 lane round-robin 은 이후 discovery-first 재작성에서 **제거** — §9)
 - [x] `analyze_run.py` D 축 확장 — lane entropy / fingerprint Jaccard / max streak / format reject 비율
 - [x] 테스트 — `parse_candidate_metadata`, format reject path, abort 가드, `LANES ↔ profile` 일관성
 - [x] 문서 정본 갱신 — PHASE3-PLAN §2 / §4 / §5 / §7, SSOT
@@ -90,3 +91,21 @@
 ## 8. 후속 RFC
 
 - [ ] [`proposals/2026-05-29-skills-and-prompt-eval.md`](proposals/2026-05-29-skills-and-prompt-eval.md) — 내부 skill/agent + prompt-eval. 본문은 phase3_002 결과 후 채움
+
+## 9. Candidate 루프 진화 — discovery-first → explore/exploit
+
+A' (§6) 의 5-lane round-robin · `lane`/`diff_fingerprint`/`why_different_from_last_5`
+스키마는 이후 두 단계로 대체됨. 운영 정본은 PHASE3-PLAN §4/§5 + `candidate.md`.
+
+- [x] **discovery-first 재작성** (proposal `2026-05-29-prompt-diversification` 흡수):
+  스키마 → `capability_investigated`/`what_i_learned`/`hypothesis`/`fingerprint`
+  (`lane` optional). round-robin 폐지. findings ledger 잡 전체 누적 (F1),
+  banking ε=0.002 (F2), cold-restart 조기화 (F3).
+- [x] **진단 주입** (phase3_004 회고 §1, branch `phase3-diagnosis-feedback`):
+  프롬프트에 error profile (sub/del/ins·length·hallucination + DOMINANT AXIS
+  자동 판정) + 최근 iter failure-signature 테이블. 후보가 병목을 측정으로 인지.
+- [x] **explore/exploit 스케줄 + synthesis** (회고 §2/§3): iteration 기반 감쇠
+  비율로 explore↔exploit 결정 (초반 explore 우세, floor 보장). exploit 시 한 축
+  개선한 유망 reject diff 주입 + 디코딩 파라미터 재방문 허용.
+- [x] 회귀 테스트 전부 통과 (`tests/test_harness_runner.py`).
+- [ ] 새 잡 실행 후 효과 판정 (analyze_run D 축 + holdout).

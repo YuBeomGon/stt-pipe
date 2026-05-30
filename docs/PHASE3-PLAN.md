@@ -34,7 +34,7 @@
 | 영역 | 책임 |
 |------|------|
 | `harness/` | Phase 3 controller 본체. guard, policy, state, history, runner |
-| `harness/prompts/candidate.md` | candidate runtime profile (역할 / 5 lane / 자기검증 / YAML response format). runner 가 매 iter prompt 에 inline. 변경 = candidate 행동 변경 (proposal 2026-05-29-agent-design) |
+| `harness/prompts/candidate.md` | candidate runtime profile (역할 / 정찰 / discovery-first YAML response format). runner 가 매 iter prompt 에 inline. 변경 = candidate 행동 변경 |
 | `scripts/` | 사람이 실행하는 얇은 CLI와 일회성 운영 명령 |
 | `judge/` | 평가자. 후보 텍스트를 점수와 diagnosis로 변환 |
 | `workspace/transcribe.py` | 후보가 수정하는 유일한 STT pipeline 표면 |
@@ -171,14 +171,25 @@ historical 문서로 보존한다.
 
 한 iteration은 다음 순서를 따른다.
 
-1. **prompt 빌드** — `build_candidate_prompt` 가 `harness/prompts/candidate.md`
-   본문 + goal + state + 최근 5 iter 의 `(lane, fingerprint, cer)` 표 + 권고
-   lane (round-robin) + HISTORY tail + best diagnosis 를 inline 으로 합쳐
-   `runs/<hyp_id>/prompt.md` 로도 저장 (재현용)
+1. **prompt 빌드** — `build_candidate_prompt` 가 다음을 inline 으로 합쳐
+   `runs/<hyp_id>/prompt.md` 로도 저장 (재현용):
+   - `harness/prompts/candidate.md` 프로필 (역할·정찰·응답 포맷)
+   - 현재 `workspace/transcribe.py` 본문 + frozen backend 표면 (sandbox 가 frozen
+     Read 를 deny 하므로 surface 를 inline — 발견형 정찰의 전제)
+   - goal / state + **error profile** — best 의 sub/del/ins·length_ratio·
+     hallucination + `DOMINANT AXIS` 자동 판정 (substitution / coverage /
+     over-generation). 후보가 병목을 scalar cer 가 아니라 측정으로 본다
+   - 최근 5 iter 표 `(fingerprint, cer, sub/del/ins, len, hal)` — 각 시도가
+     *어떻게* 실패했는지 (dedup + 진단)
+   - **explore/exploit 모드 directive** — iteration 기반 감쇠 스케줄
+     (`_iteration_mode`): 초반 explore 우세 → floor 보장 explore 유지, 그 외
+     exploit. exploit 시 한 축을 개선한 유망 reject 2–3 개의 실제 diff 주입
+   - findings ledger — 잡 전체 누적 발견 (rollback 돼도 보존)
 2. 후보 변경 생성 (`claude -p` 를 candidate worker 로 사용)
-3. **A' format 게이트** — candidate stdout 의 마지막 ```yaml fenced block 을
-   `yaml.safe_load` 로 파싱해 `lane` / `diff_fingerprint` (1–6 token) /
-   `why_different_from_last_5` 키 + lane 값 유효성 검사. 누락·malformed 면
+3. **format 게이트** (discovery-first schema) — candidate stdout 의 마지막
+   ```yaml fenced block 을 `yaml.safe_load` 로 파싱해 `capability_investigated` /
+   `what_i_learned` / `hypothesis` (각 non-empty 문자열) + `fingerprint`
+   (1–6 token) 검사. `lane` 은 optional free-form (강제 X). 누락·malformed 면
    `candidate_meta.err` 만 남기고 workspace rollback + reject (verify 호출 X).
    성공 시 `candidate_meta.json` 저장 → 이후 단계 진행
 4. `workspace/transcribe.py` 정적 금지 패턴 검사 (§5)
@@ -192,10 +203,14 @@ historical 문서로 보존한다.
 10. keep이면 best 갱신과 기록, reject면 후보 변경 rollback
 11. `runs/_summary/HISTORY.md` append
 
-**잡 레벨 abort 가드 (proposal 2026-05-29-agent-design §2.1)**: 첫 5 iter 중
-4 회 이상 format reject 가 발생하면 잡 중단 → `HarnessState.status =
-"aborted_format_reject"`. profile (`harness/prompts/candidate.md`) 가 LLM 의
-실제 응답 형식과 어긋난 신호이며, 운영자가 profile 재작성 후 새 job_id 로 재실행.
+**잡 레벨 abort 가드**: 두 종류.
+- *format reject abort*: 첫 5 iter 중 4 회 이상 format reject → 잡 중단,
+  `HarnessState.status = "aborted_format_reject"`. profile 이 LLM 응답 형식과
+  어긋난 신호 — 운영자가 profile 재작성 후 새 job_id 로 재실행.
+- *command failure abort*: candidate command (`claude -p`) 가 연속
+  `_COMMAND_FAIL_ABORT_COUNT` (3) 회 exit≠0 → 잡 중단,
+  `status = "aborted_command_failure"`. 세션 한도/환경 오류로 후보가 아예 안
+  도는 상태를 조기 차단 (phase3_003 에서 세션 한도로 79 iter 낭비한 뒤 추가).
 
 ### Flag semantics
 
@@ -233,18 +248,19 @@ Hard fail:
 - `total_inference_time_s > baseline_time * RUNTIME_HARD_MULTIPLIER`
 - verify 직후 `workspace/transcribe.py` 와 `runs/<hyp_id>/` 밖에 변경 (`runs/_summary/`, `baseline/`, `docs/`, `judge/`, `frozen/` 등) 가 발견되면 reject + rollback. candidate 의 `transcribe()` 가 verify 중 임의 파일 I/O 로 정본을 오염시키는 것을 막는다.
 
-Pre-verify format gate (A', proposal 2026-05-29-agent-design §2.1):
-- candidate stdout 의 마지막 ```yaml fenced block 이 없거나 (`lane`,
-  `diff_fingerprint`, `why_different_from_last_5`) 키 누락 → reject **before
-  verify** (verify 호출 X, GPU 비용 0). 실패 사유는 `candidate_meta.err` 에
-  기록되어 `scripts/analyze_run.py` 의 D 축 format_reject_pct 로 집계.
-- `lane` 이 5 lane (`segmentation` / `decoding` / `prompt` / `postprocess` /
-  `telemetry`) 외 값 → reject.
-- `diff_fingerprint` 가 list of strings 아님 또는 길이 1–6 범위 밖 → reject
-  (7+ token = "one focused change" 위반).
-- `why_different_from_last_5` 가 빈 문자열 → reject.
-- fingerprint *중복* (직전 N iter 과 동일) 은 **reject 대상이 아님** — 기록만.
-  중복 reject 는 C-lite 단계로 분리 (proposal §2.2 ablation 보호).
+Pre-verify format gate (discovery-first schema):
+- candidate stdout 의 마지막 ```yaml fenced block 이 없거나 필수 키
+  (`capability_investigated` / `what_i_learned` / `hypothesis` / `fingerprint`)
+  누락 → reject **before verify** (verify 호출 X, GPU 비용 0). 실패 사유는
+  `candidate_meta.err` 에 기록되어 `scripts/analyze_run.py` 의 D 축
+  format_reject_pct 로 집계.
+- 세 prose 필드 (`capability_investigated` / `what_i_learned` / `hypothesis`)
+  중 빈 문자열 → reject.
+- `fingerprint` 가 list of strings 아님 또는 길이 1–6 범위 밖 → reject
+  (7+ token = "one focused change" 위반). 빈/공백 token 포함 → reject.
+- `lane` 은 optional free-form tag — 검증·강제하지 않는다 (round-robin 폐지).
+- fingerprint *중복* (직전 N iter 과 동일) 은 **reject 대상이 아님** — 기록만
+  (dedup 테이블로 후보에게 노출, novelty 압력은 explore directive 가 담당).
 
 Static guard 한계:
 - `harness.verify.check_workspace_static` 의 AST/regex 검사는 **best-effort** 다.

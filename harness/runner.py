@@ -484,7 +484,7 @@ def _explore_ratio(iteration: int) -> float:
 
 
 def _is_explore_iter(iteration: int) -> bool:
-    """Deterministic explore/synthesize decision via an error-diffusion
+    """Deterministic explore/exploit decision via an error-diffusion
     accumulator over the decaying explore ratio. Selecting "explore" at density
     explore_ratio(n) spaces the explore iters evenly without an RNG, so a
     resumed/replayed job makes the identical choice each time."""
@@ -499,14 +499,15 @@ def _is_explore_iter(iteration: int) -> bool:
 
 
 def _iteration_mode(state: HarnessState) -> str:
-    """'explore' or 'synthesize' for this iteration.
+    """'explore' or 'exploit' for this iteration.
 
-    Synthesis needs a baseline + prior attempts to combine, so until a best
-    exists every iter explores. After that the decaying schedule decides.
+    Exploit (synthesis + decode-param tuning) needs a baseline + prior attempts
+    to work from, so until a best exists every iter explores. After that the
+    decaying schedule decides.
     """
     if not state.best_hyp_id:
         return "explore"
-    return "explore" if _is_explore_iter(state.iteration) else "synthesize"
+    return "explore" if _is_explore_iter(state.iteration) else "exploit"
 
 
 def _axis_scores(report: dict[str, Any]) -> dict[str, float | None]:
@@ -925,11 +926,12 @@ rule is relaxed when a structurally new mechanism justifies it.
 === END EXPLORE MODE ==="""
 
 
-_SYNTHESIZE_DIRECTIVE = """\
-=== SYNTHESIZE MODE (exploit / combine) ===
-This iteration is a SYNTHESIS slot. Enough mechanisms have been surfaced;
-inventing yet another novel structure is not the move here. Two plays are
-first-class (the "one focused change" rule is relaxed):
+_EXPLOIT_DIRECTIVE = """\
+=== EXPLOIT MODE ===
+This iteration is an EXPLOITATION slot. Enough mechanisms have been surfaced;
+inventing yet another novel structure is not the move here — extract value from
+what you already found. Two plays are first-class (the "one focused change" rule
+is relaxed):
 
 (A) SYNTHESIS — combine prior attempts that each improved a different error
     axis. The section "Promising prior attempts to SYNTHESIZE" below gives you
@@ -937,14 +939,14 @@ first-class (the "one focused change" rule is relaxed):
     axis-improving part of two such levers into one pipeline and guard the axis
     each one regressed. Do not re-derive them from prose — their code is given.
 
-(B) EXPLOITATION — the pipeline is mature, so a *focused* sweep of decode
+(B) PARAMETER TUNING — the pipeline is mature, so a *focused* sweep of decode
     parameters on the current best (beam_size, temperature/fallback schedule,
     length_penalty, repetition_penalty, patience) IS allowed and encouraged
     here. Tune against the DOMINANT AXIS in the error profile.
 
 Pick (A) or (B), justify it from the error profile and the axis deltas, and make
-the change. Combining beats novelty in this slot.
-=== END SYNTHESIZE MODE ==="""
+the change. Exploiting what you found beats inventing something new in this slot.
+=== END EXPLOIT MODE ==="""
 
 
 def build_candidate_prompt(config: RunnerConfig, state: HarnessState) -> str:
@@ -961,18 +963,19 @@ def build_candidate_prompt(config: RunnerConfig, state: HarnessState) -> str:
     error_profile = _format_error_profile(config, state)
     findings_ledger = _format_findings_ledger(_ledger_rows(config, fallback=recent))
 
-    # Iteration-based phase schedule (§ retrospective phase3_004 #2/#3, refined
-    # 2026-05-30): a decaying explore ratio chooses EXPLORE (find a new
-    # mechanism) vs SYNTHESIZE (combine promising rejects / tune decode params)
-    # each iter — explore-heavy early, floor-guaranteed late. iters_since_best
-    # is surfaced in the directive for context but no longer drives the mode.
+    # Iteration-based explore/exploit schedule (§ retrospective phase3_004
+    # #2/#3, refined 2026-05-30): a decaying explore ratio chooses EXPLORE (find
+    # a new mechanism) vs EXPLOIT (synthesize promising rejects / tune decode
+    # params) each iter — explore-heavy early, floor-guaranteed late.
+    # iters_since_best is surfaced in the directive for context but no longer
+    # drives the mode.
     mode = _iteration_mode(state)
     synthesis_block = ""
-    if mode == "synthesize":
-        discovery_block = _SYNTHESIZE_DIRECTIVE
+    if mode == "exploit":
+        discovery_block = _EXPLOIT_DIRECTIVE
         synthesis_block = _format_synthesis_block(_promising_rejects(config, state))
         history = (
-            f"(HISTORY suppressed in synthesize mode to keep focus on the "
+            f"(HISTORY suppressed in exploit mode to keep focus on the "
             f"promising rejects below. best_cer so far: {state.best_cer}, "
             f"best_hyp_id: {state.best_hyp_id}, stalled {state.iters_since_best_update} iters.)"
         )

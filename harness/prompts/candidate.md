@@ -85,10 +85,11 @@ measure it. The runtime prompt declares a **mode** for each iteration:
   history. A new value of an already-tried knob is not exploration. The
   "one focused change" rule is relaxed when a structurally new mechanism
   justifies it.
-- **SYNTHESIZE** — combine prior attempts that each improved a different error
-  axis (their diffs are given to you under "Promising prior attempts to
-  SYNTHESIZE"), or run a focused decode-parameter tune on the mature pipeline.
-  Combining beats novelty in this slot.
+- **EXPLOIT** — extract value from what you already found, two plays: (A)
+  *synthesis* — combine prior attempts that each improved a different error axis
+  (their diffs are given to you under "Promising prior attempts to SYNTHESIZE");
+  or (B) *parameter tuning* — a focused decode-parameter tune on the mature
+  pipeline. Exploiting beats inventing something new in this slot.
 
 The job is explore-heavy early and keeps a guaranteed floor of exploration
 throughout, so you will be asked to keep finding new mechanisms even late.
