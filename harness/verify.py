@@ -115,13 +115,48 @@ def run_verify(config: VerifyConfig) -> VerifyResult:
         "--out",
         str(report_path),
     ]
-    run = subprocess.run(
-        cmd,
-        cwd=repo_root,
-        env=os.environ.copy(),
-        capture_output=True,
-        text=True,
-    )
+
+    # Wall-clock 타임아웃 = cap + 로드 여유. cap 은 사후 측정 게이트(guards.
+    # check_runtime)라, candidate 가 디코딩에서 무한정 매달리면 report 가 안 나와
+    # cap 체크에 도달조차 못 한다. 타임아웃이 그 hang 을 cap 근처에서 강제 종료.
+    baseline = guards.read_baseline(repo_root / config.baseline_file)
+    timeout_s: float | None = None
+    try:
+        baseline_t = float(baseline.get("total_inference_time_s", 0.0) or 0.0)
+        if baseline_t > 0 and config.runtime_hard_multiplier > 0:
+            cap = baseline_t * config.runtime_hard_multiplier
+            timeout_s = cap + cfg.VERIFY_TIMEOUT_LOAD_MARGIN_S
+    except (TypeError, ValueError):
+        timeout_s = None  # baseline 이상 시 guards.check_runtime 가 별도로 reject
+
+    try:
+        run = subprocess.run(
+            cmd,
+            cwd=repo_root,
+            env=os.environ.copy(),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        partial_out = exc.stdout or ""
+        partial_err = exc.stderr or ""
+        if isinstance(partial_out, bytes):
+            partial_out = partial_out.decode("utf-8", "replace")
+        if isinstance(partial_err, bytes):
+            partial_err = partial_err.decode("utf-8", "replace")
+        return VerifyResult(
+            ok=False,
+            hyp_id=config.hyp_id,
+            out_dir=out_dir,
+            stdout=partial_out,
+            stderr=partial_err,
+            error=(
+                "runtime cap 타임아웃 초과: judge.evaluate 가 "
+                f"{exc.timeout:.0f}s (cap + 로드 여유) 안에 끝나지 않음 — "
+                "디코딩 hang/runaway 로 강제 종료"
+            ),
+        )
     stdout = run.stdout
     stderr = run.stderr
     if run.returncode != 0:
@@ -148,7 +183,7 @@ def run_verify(config: VerifyConfig) -> VerifyResult:
     guard_rc = guards.run_checks(
         report=report,
         per_file=per_file,
-        baseline=guards.read_baseline(repo_root / config.baseline_file),
+        baseline=baseline,
         runtime_hard_multiplier=config.runtime_hard_multiplier,
         quality_budget_hard=config.quality_budget_hard,
     )

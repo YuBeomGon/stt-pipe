@@ -18,6 +18,12 @@ from __future__ import annotations
 # baseline ~152.3s → cap ~1066s.
 RUNTIME_HARD_MULTIPLIER: float = 7.0
 
+# verify subprocess(judge.evaluate) wall-clock 타임아웃 = cap + 이 여유(초).
+# cap 은 사후 측정 게이트라 candidate 가 디코딩에서 무한정 매달리면 report 가
+# 안 나와 cap 체크에 도달조차 못 한다(2-3h hang). 여유는 모델 로드 + 직렬화
+# 오버헤드 몫. 타임아웃 초과 candidate 는 runtime cap reject 로 처리.
+VERIFY_TIMEOUT_LOAD_MARGIN_S: float = 180.0
+
 # ── Keep / banking ───────────────────────────────────────────────────
 # σ가 잠정(deterministic eval, σ~0)일 때 best 대비 개선 폭이 이 값 이상이면
 # bank (review F2). genuine sub-0.01 개선도 누적되도록 0.01→0.002.
