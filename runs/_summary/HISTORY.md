@@ -485,3 +485,14 @@ harness guard 실패
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 45 · phase3_004_iter_045 · cer=0.185107 (Δ-0.027752) · reject
+
+### 관찰
+corpus_cer=0.185107, total_inference_time_s=414.4
+
+### 분석
+not enough improvement: Δcer -0.027752 < 0.002000
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
