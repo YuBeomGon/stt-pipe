@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 import yaml
 
+from harness import config as cfg
 from harness.history import append_event
 from harness.policy import Decision, PolicyConfig, decide_candidate
 from harness.state import HarnessState
@@ -63,17 +64,19 @@ _PROFILE_PATH = Path("harness/prompts/candidate.md")
 # stall directive demanded NEW mechanisms forever and never consolidated; a
 # budgeted decay forces explore→exploit while guaranteeing the floor of
 # continued discovery.
-_EXPLORE_RATIO_START = 0.9   # ~90% explore at the start
-_EXPLORE_RATIO_FLOOR = 0.2   # guaranteed ≥20% explore even late
-_EXPLORE_RATIO_DECAY = 18.0  # iters; ~halves the gap above floor every 12-13 iters
+# Operator knobs sourced from harness/config.py (SSOT). Rationale stays here;
+# the values live in one place so a job can be retuned without hunting modules.
+_EXPLORE_RATIO_START = cfg.EXPLORE_RATIO_START   # ~90% explore at the start
+_EXPLORE_RATIO_FLOOR = cfg.EXPLORE_RATIO_FLOOR   # guaranteed ≥20% explore even late
+_EXPLORE_RATIO_DECAY = cfg.EXPLORE_RATIO_DECAY   # ~halves gap above floor every 12-13 iters
 # How many promising rejects to surface (with their diff) in deep-stall mode.
-_PROMISING_REJECT_COUNT = 3
+_PROMISING_REJECT_COUNT = cfg.PROMISING_REJECT_COUNT
 # Per-diff char cap when injecting a promising reject's code into the prompt.
-_PROMISING_DIFF_MAX_CHARS = 4000
+_PROMISING_DIFF_MAX_CHARS = cfg.PROMISING_DIFF_MAX_CHARS
 # An axis counts as "improved vs best" only beyond this margin (noise guard).
-_AXIS_IMPROVE_EPSILON = 0.02
+_AXIS_IMPROVE_EPSILON = cfg.AXIS_IMPROVE_EPSILON
 # Skip rejects whose cer blew up past best * this factor (not a useful lever).
-_PROMISING_CER_MAX_FACTOR = 1.25
+_PROMISING_CER_MAX_FACTOR = cfg.PROMISING_CER_MAX_FACTOR
 # Recent-iterations dedup window: how many of the latest iters to show as the
 # "do not repeat this fingerprint" table.
 _RECENT_DEDUP_WINDOW = 5
@@ -87,15 +90,15 @@ _LEDGER_MAX_FACTS = 30
 # YAML metadata block in 4 out of the first 5 iterations, the profile itself
 # is misaligned with what the LLM produces. Abort and surface for profile
 # rewrite rather than burning the rest of the job budget.
-_FORMAT_REJECT_PROBE_ITERS = 5
-_FORMAT_REJECT_ABORT_COUNT = 4
+_FORMAT_REJECT_PROBE_ITERS = cfg.FORMAT_REJECT_PROBE_ITERS
+_FORMAT_REJECT_ABORT_COUNT = cfg.FORMAT_REJECT_ABORT_COUNT
 
 # Consecutive candidate-command-failure abort: if the candidate CLI exits
 # non-zero this many times in a row (session/usage limit, auth failure, crash),
 # abort the job — re-invoking will keep failing and just burn the iteration
 # budget on no-op reject commits (phase3_003 ran 79 such iters after the Claude
 # session limit was hit). Resets on any iteration whose command runs.
-_COMMAND_FAIL_ABORT_COUNT = 3
+_COMMAND_FAIL_ABORT_COUNT = cfg.COMMAND_FAIL_ABORT_COUNT
 
 # Candidate-context skills/MCP hardening — appended automatically when
 # candidate_cmd starts with `claude`. These suppress user-invocable skill
@@ -221,10 +224,10 @@ class RunnerConfig:
     noise_floor_file: Path = Path("baseline/noise_floor.json")
     batch: str = "AIG_녹취반출_20250715"
     transcribe: str = "workspace.transcribe:transcribe"
-    runtime_hard_multiplier: float = 5.0
+    runtime_hard_multiplier: float = cfg.RUNTIME_HARD_MULTIPLIER
     # Keep/bank threshold while σ provisional (review F2 banking → 0.002). See
-    # PolicyConfig.absolute_delta_fallback.
-    absolute_delta_fallback: float = 0.002
+    # PolicyConfig.absolute_delta_fallback. Value SSOT: harness/config.py.
+    absolute_delta_fallback: float = cfg.BANKING_ABSOLUTE_DELTA
     commit_results: bool = False
 
 
@@ -1531,8 +1534,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--absolute-delta-fallback",
         type=float,
-        default=0.002,
-        help="keep/bank threshold while σ provisional (review F2 banking; default 0.002)",
+        default=cfg.BANKING_ABSOLUTE_DELTA,
+        help="keep/bank threshold while σ provisional (review F2 banking; SSOT harness/config.py)",
     )
     args = parser.parse_args(argv)
 

@@ -287,8 +287,13 @@ Quality budget:
   `QB_LENGTH_MEAN_DELTA`, `QB_COVERAGE_DROP`) 은 `harness/guards.py` 상수에 박혀 있다.
   중복 정의를 피하기 위해 PLAN 은 정성 표현만 두고 수치 정본은 코드에 위임한다.
 
+운영자 튜닝 노브(런타임 배수·뱅킹 임계값·explore 스케줄·synthesis·abort 카운트)는
+`harness/config.py` 가 단일 정본(SSOT)이다. guards/policy/runner/verify 는 이 모듈을
+참조만 한다 — 값 변경은 `config.py` 한 곳에서. (가드 내부 게이트 `QB_*` 등은
+로직과 강결합이라 `guards.py` 에 남는다.)
+
 초기 runtime 값:
-- hard cap: `RUNTIME_HARD_MULTIPLIER=3.0`
+- hard cap: `config.RUNTIME_HARD_MULTIPLIER=7.0` (baseline ~152s → cap ~1066s)
 - success cap: baseline time 이하
 
 ---

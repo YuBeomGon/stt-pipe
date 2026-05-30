@@ -9,6 +9,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from harness import config as cfg
+
 DecisionStatus = Literal["keep", "reject", "success"]
 
 
@@ -21,7 +23,7 @@ class PolicyConfig:
     # from 0.01 to 0.002 so genuine sub-0.01 improvements (e.g. 0.169→0.161)
     # are kept and compounded instead of discarded. Trade-off: greedier descent
     # on the 11-file eval can overfit — watched via the job-end holdout check.
-    absolute_delta_fallback: float = 0.002
+    absolute_delta_fallback: float = cfg.BANKING_ABSOLUTE_DELTA
     success_runtime_multiplier: float = 1.0
 
 

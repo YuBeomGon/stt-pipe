@@ -13,6 +13,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from harness import config as cfg
+
+# 가드 내부 임계값은 로직과 강결합이라 여기 둔다(운영자 노브 아님).
+# 운영자가 조정하는 런타임 배수는 harness/config.py 가 SSOT.
 EMPTY_OUTPUT_RATE_MAX = 0.50
 LENGTH_RATIO_P05_MIN = 0.10
 LENGTH_RATIO_P95_MAX = 5.0
@@ -214,7 +218,7 @@ def run_checks(
     report: dict[str, Any],
     per_file: list[dict[str, Any]],
     baseline: dict[str, Any],
-    runtime_hard_multiplier: float = 5.0,
+    runtime_hard_multiplier: float = cfg.RUNTIME_HARD_MULTIPLIER,
     quality_budget_hard: bool = False,
 ) -> int:
     hard_checks = (
@@ -253,7 +257,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--per-file", required=True, type=Path)
     parser.add_argument("--baseline", required=True, type=Path)
-    parser.add_argument("--runtime-hard-multiplier", type=float, default=5.0)
+    parser.add_argument(
+        "--runtime-hard-multiplier",
+        type=float,
+        default=cfg.RUNTIME_HARD_MULTIPLIER,
+    )
     args = parser.parse_args(argv)
 
     return run_checks(

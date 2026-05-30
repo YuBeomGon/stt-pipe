@@ -39,7 +39,24 @@ stub 의 치명적 결함: 30s 한 윈도우만 디코드 → 멀티분 통화�
 | 34/42 | overlap-stitch — 25s stride 5s 겹침 + `difflib.SequenceMatcher` 로 warm-tail 유지, cold-onset 폐기 | rej |
 | 35/45 | coverage-gap — 마지막 timestamp 시각을 "얼마나 받아썼나" 척도로 재해석, 부족하면 notimestamps 재디코드 | rej |
 | 16/50 | `max_initial_timestamp_index=0` — 첫 segment 를 `<\|0.00\|>` 에 고정해 leading-onset skip(최대 1.0s) 금지 | rej |
-| 44 | `align().alignments` (token↔frame 매핑)로 최대 pause 에서 seek 재앵커 | rej |
+| **44** | **token/word-level timestamp** — `align().alignments` = (text_token_index, encoder_frame_index) 쌍으로 emit된 **각 토큰**을 음향 force-align해 audio 시각 부여. 토큰 간 gap으로 침묵 위치까지 탐지 → 최대 pause 에서 seek 재앵커 | rej |
+
+### timestamp 두 종류 — segment-level(iter7 KEEP) vs token/word-level(iter44 rej)
+
+운영자가 "word timestamp 구현"으로 기억하는 건 **iter44** 다. iter7 과는 시각의
+**출처와 입도(granularity)** 가 다르다:
+
+| | iter7 (KEEP) | iter44 (reject) |
+|---|---|---|
+| 입도 | **segment** 단위 | **token(≈word)** 단위 |
+| 출처 | 디코더가 emit한 `<\|t\|>` **timestamp 토큰** (vocab id ≥ `<\|0.00\|>`, 0.02s/token) | `align()` 의 **`.alignments`** — 토큰↔encoder frame(20ms) **사후 음향 force-align** |
+| 전제 | timestamp 모드 디코드(= `<\|t\|>` 토큰이 나와야 함) | **`<\|notimestamps\|>` 모드여도** 동작 — 타이밍을 디코드 후 음향에서 복원 |
+| 의의 | Whisper 네이티브 long-form 루프(마지막 segment 마커로 재앵커) | **커버리지 디코드 ↔ 윈도우 전진을 분리**: notimestamps 로 잘린 tail 까지 받아쓰고, 그와 무관하게 토큰 타이밍으로 침묵에서 재앵커 |
+| 결과 | **Δ-0.171, 최대 도약** | 메커니즘은 정확히 구현, 11-file eval 종합 개선엔 미달 → reject |
+
+> iter32/36/37 은 같은 `align()` 객체의 `.text_token_probs`(음향 *신뢰도*)만 썼고,
+> iter44 는 `.alignments`(음향 *타이밍*)를 따로 발견해 쓴 게 차별점. 즉 후보는
+> 한 frozen 메서드의 **서로 다른 반환 필드를 독립적으로 발견·활용**했다.
 
 ---
 

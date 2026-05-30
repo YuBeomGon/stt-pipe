@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from harness import config as cfg
 from harness import guards
 
 _BACKEND_RE = re.compile(
@@ -36,7 +37,7 @@ class VerifyConfig:
     workspace_file: Path = Path("workspace/transcribe.py")
     baseline_file: Path = Path("baseline/target_cer.json")
     runs_dir: Path = Path("runs")
-    runtime_hard_multiplier: float = 5.0
+    runtime_hard_multiplier: float = cfg.RUNTIME_HARD_MULTIPLIER
     quality_budget_hard: bool = False
     python_executable: str = sys.executable
 
@@ -184,7 +185,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace-file", type=Path, default=Path("workspace/transcribe.py"))
     parser.add_argument("--baseline", type=Path, default=Path("baseline/target_cer.json"))
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
-    parser.add_argument("--runtime-hard-multiplier", type=float, default=5.0)
+    parser.add_argument(
+        "--runtime-hard-multiplier",
+        type=float,
+        default=cfg.RUNTIME_HARD_MULTIPLIER,
+    )
     args = parser.parse_args(argv)
 
     result = run_verify(
