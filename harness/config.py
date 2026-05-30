@@ -32,7 +32,7 @@ BANKING_ABSOLUTE_DELTA: float = 0.002
 # ── Explore / exploit schedule ───────────────────────────────────────
 # explore 비율이 iter 증가에 따라 START→FLOOR 로 지수 감쇠. 후반에도 FLOOR 보장.
 EXPLORE_RATIO_START: float = 0.9    # ~90% explore at the start
-EXPLORE_RATIO_FLOOR: float = 0.2    # guaranteed ≥20% explore even late
+EXPLORE_RATIO_FLOOR: float = 0.5    # guaranteed ≥50% explore even late
 EXPLORE_RATIO_DECAY: float = 18.0   # iters; ~halves gap above floor every 12-13 iters
 
 # ── Synthesis (promising rejects) ────────────────────────────────────
