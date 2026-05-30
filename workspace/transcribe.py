@@ -1,34 +1,13 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Sequential 30s-window chunking: the frozen Whisper feature extractor pads or
-truncates any input to a single 30s window, so the full-audio stub silently
-deletes everything past the first 30 seconds on multi-minute 0715 calls. We
-pre-slice the waveform into consecutive windows, decode each on its own, and
-join the transcripts so the long-form tail is recovered.
-
-Timestamp-anchored window advancement: iter_006 dropped ``<|notimestamps|>`` so
-the decoder emits ``<|t|>`` segment markers, but it still threw those markers
-away (``skip_special_tokens=True``) and advanced the window by a blind +30s.
-That fixed-stride slicing cuts a segment mid-sentence at every window boundary,
-and Whisper systematically declines to emit the truncated trailing segment —
-the mechanism behind the residual universal ``length_ratio < 1`` (0.65–0.83 on
-every file) that survived the timestamp switch.
-
-This iter reads the timestamp token *values* (the surface iter_006 enabled but
-never consumed). The decoded sequence ends each complete segment with a
-timestamp token; we keep only the text up to the *last* such marker, drop the
-truncated trailing segment, and advance ``seek`` to that marker's audio time so
-the next window re-transcribes the cut-off tail from a clean segment start.
-This is Whisper's native long-form loop and removes boundary deletion without
-duplicating audio. The final window keeps its full text so the call's tail is
-not dropped.
+Initial stub: one 30-second window through the frozen Whisper backend.
+Long-form audio (most of 0715) will get its tail truncated; that is the
+starting point autoresearch is supposed to improve.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
-
-import zlib
 
 import numpy as np
 
@@ -36,124 +15,29 @@ from frozen.asr_backend import generate, load, to_storage_view
 
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
-_CHUNK_SECONDS = 30
-_TS_RESOLUTION = 0.02  # seconds per Whisper timestamp token
-_MIN_ADVANCE_SECONDS = 2.0  # guard against degenerate tiny advances (progress + runtime)
-
-# Temperature-fallback gate (openai-whisper / faster-whisper generate_with_fallback).
-_FALLBACK_TEMPERATURES = (0.0, 0.4, 0.8)
-_LOGPROB_THRESHOLD = -1.0  # results[0].scores[0] below this => low-confidence window
-_COMPRESSION_RATIO_THRESHOLD = 2.4  # text too repetitive => degenerate decode
-
-
-def _compression_ratio(text: str) -> float:
-    if not text:
-        return 0.0
-    data = text.encode("utf-8")
-    return len(data) / len(zlib.compress(data))
-
-
-def _decode_with_fallback(features, prompt_tokens, tokenizer):
-    """Decode one window at temp 0 (beam search); if the decode fails the
-    avg-logprob / compression-ratio quality gate, escalate temperature sampling
-    and keep the best-scoring hypothesis. Only triggered windows pay extra
-    decode passes, so runtime stays near the single-pass cost on clean audio."""
-    best_tokens = None
-    best_score = None
-    for temp in _FALLBACK_TEMPERATURES:
-        if temp == 0.0:
-            results = generate(
-                features,
-                [prompt_tokens],
-                beam_size=5,
-                sampling_temperature=0.0,
-                return_scores=True,
-            )
-        else:
-            results = generate(
-                features,
-                [prompt_tokens],
-                beam_size=1,
-                sampling_topk=0,
-                sampling_temperature=temp,
-                return_scores=True,
-            )
-
-        token_ids = results[0].sequences_ids[0]
-        score = results[0].scores[0]
-        text = tokenizer.decode(token_ids, skip_special_tokens=True)
-
-        if best_score is None or score > best_score:
-            best_tokens, best_score = token_ids, score
-
-        needs_fallback = (
-            score < _LOGPROB_THRESHOLD
-            or _compression_ratio(text) > _COMPRESSION_RATIO_THRESHOLD
-        )
-        if not needs_fallback:
-            return token_ids
-
-    # Every temperature tripped the gate: keep the highest-scoring attempt.
-    return best_tokens
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
-    prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
-        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
+    inputs = processor(
+        audio,
+        sampling_rate=sr,
+        return_tensors="np",
     )
-    timestamp_begin = processor.tokenizer.convert_tokens_to_ids("<|0.00|>")
+    features = to_storage_view(inputs.input_features)
 
-    chunk_len = _CHUNK_SECONDS * sr
-    min_advance = int(_MIN_ADVANCE_SECONDS * sr)
-    n = len(audio)
+    prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
+        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
+    )
 
-    texts: list[str] = []
-    seek = 0
-    while seek < n:
-        chunk = audio[seek : seek + chunk_len]
-        is_last = seek + chunk_len >= n
+    results = generate(
+        features,
+        [prompt_tokens],
+        beam_size=1,
+        sampling_temperature=0.0,
+    )
 
-        inputs = processor(
-            chunk,
-            sampling_rate=sr,
-            return_tensors="np",
-        )
-        features = to_storage_view(inputs.input_features)
-
-        token_ids = _decode_with_fallback(features, prompt_tokens, processor.tokenizer)
-
-        # Index of the last segment-closing timestamp token in this window.
-        last_ts_idx = None
-        for i in range(len(token_ids) - 1, -1, -1):
-            if token_ids[i] >= timestamp_begin:
-                last_ts_idx = i
-                break
-
-        # Final window (or no usable timestamp): keep everything and finish/step
-        # the full window so no audio is left unprocessed.
-        if is_last or last_ts_idx is None:
-            texts.append(
-                processor.tokenizer.decode(token_ids, skip_special_tokens=True)
-            )
-            seek += chunk_len
-            continue
-
-        advance = int((token_ids[last_ts_idx] - timestamp_begin) * _TS_RESOLUTION * sr)
-        if advance < min_advance:
-            # Degenerate: model anchored its last complete segment too early to
-            # make progress — fall back to the full window rather than crawl.
-            texts.append(
-                processor.tokenizer.decode(token_ids, skip_special_tokens=True)
-            )
-            seek += chunk_len
-            continue
-
-        # Keep only the complete segments (text before the final marker); the
-        # truncated trailing segment is re-decoded by the next, re-anchored window.
-        kept = token_ids[:last_ts_idx]
-        texts.append(processor.tokenizer.decode(kept, skip_special_tokens=True))
-        seek += advance
-
-    return " ".join(t.strip() for t in texts if t.strip())
+    token_ids = results[0].sequences_ids[0]
+    text = processor.tokenizer.decode(token_ids, skip_special_tokens=True)
+    return text
