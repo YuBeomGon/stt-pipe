@@ -27,6 +27,19 @@ _CHUNK_SECONDS = 30
 _MAX_PREV_TOKENS = 224  # Whisper prompt context budget
 _TS_STEP_SECONDS = 0.02  # Whisper timestamp token resolution
 _MIN_ADVANCE_FRACTION = 0.5  # floor seek advance to bound runtime / prevent stall
+_DOMAIN_BUDGET = 24  # tight cap on the domain prior — gentle bias, not forcing
+
+# Static domain-vocabulary prior for the 0715 Korean insurance call-center batch,
+# fed through <|startofprev|> on every window. iter_007 showed a full ~40-term
+# glossary at budget 64 improved substitution (0.54->0.52) and erased the
+# hallucination (0.09->0.00) but pushed insertion up (0.12->0.16): too strong a
+# prior forces unspoken domain terms. SYNTHESIS: keep the sub/hal gain, guard the
+# insertion regression by trimming to the highest-frequency in-domain terms and a
+# much smaller token budget so the decoder is nudged, not over-ridden.
+_DOMAIN_PROMPT = (
+    "고객님 보험 계약 약관 보장 가입 청약 해지 보험료 납입 "
+    "보험금 본인확인 상담사 동의 청구 확인"
+)
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -41,6 +54,10 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     )
     startofprev = tok.convert_tokens_to_ids("<|startofprev|>")
     timestamp_begin = tok.convert_tokens_to_ids("<|0.00|>")
+
+    # encode the tight domain prior once; cap it so it only nudges the lexical
+    # prior toward in-domain terms without crowding out the cross-window context.
+    domain_ids = tok.encode(_DOMAIN_PROMPT, add_special_tokens=False)[:_DOMAIN_BUDGET]
 
     chunk_len = _CHUNK_SECONDS * sr
     min_advance = int(_CHUNK_SECONDS * _MIN_ADVANCE_FRACTION * sr)
@@ -57,10 +74,12 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         inputs = processor(seg, sampling_rate=sr, return_tensors="np")
         features = to_storage_view(inputs.input_features)
 
-        if prev_ids:
-            prompt = [startofprev] + prev_ids[-_MAX_PREV_TOKENS:] + sot
-        else:
-            prompt = sot
+        # domain prior leads the context on every window (incl. window 0, which
+        # previously had no prefix); the remaining budget carries the previous
+        # window's clean text for cross-window coherence.
+        prev_budget = max(_MAX_PREV_TOKENS - len(domain_ids), 0)
+        context = domain_ids + prev_ids[-prev_budget:] if prev_budget else domain_ids
+        prompt = [startofprev] + context + sot
 
         results = generate(
             features,
