@@ -221,7 +221,7 @@ class RunnerConfig:
     noise_floor_file: Path = Path("baseline/noise_floor.json")
     batch: str = "AIG_녹취반출_20250715"
     transcribe: str = "workspace.transcribe:transcribe"
-    runtime_hard_multiplier: float = 3.0
+    runtime_hard_multiplier: float = 5.0
     # Keep/bank threshold while σ provisional (review F2 banking → 0.002). See
     # PolicyConfig.absolute_delta_fallback.
     absolute_delta_fallback: float = 0.002

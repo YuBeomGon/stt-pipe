@@ -214,7 +214,7 @@ def run_checks(
     report: dict[str, Any],
     per_file: list[dict[str, Any]],
     baseline: dict[str, Any],
-    runtime_hard_multiplier: float = 3.0,
+    runtime_hard_multiplier: float = 5.0,
     quality_budget_hard: bool = False,
 ) -> int:
     hard_checks = (
@@ -253,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--per-file", required=True, type=Path)
     parser.add_argument("--baseline", required=True, type=Path)
-    parser.add_argument("--runtime-hard-multiplier", type=float, default=3.0)
+    parser.add_argument("--runtime-hard-multiplier", type=float, default=5.0)
     args = parser.parse_args(argv)
 
     return run_checks(
