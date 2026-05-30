@@ -76,7 +76,7 @@
 
 | 상태 | proposal | 흡수 위치 |
 |---|---|---|
-| Accepted | [`proposals/2026-05-29-agent-design.md`](proposals/2026-05-29-agent-design.md) — A' candidate runtime | PHASE3-PLAN §2/§4/§5/§7, harness/prompts/candidate.md, scripts/analyze_run.py D 축. §11 Addendum 에 RFC 외 audit 인프라 회고 |
+| Accepted (부분 대체) | [`proposals/2026-05-29-agent-design.md`](proposals/2026-05-29-agent-design.md) — A' candidate runtime | PHASE3-PLAN §2/§4/§5/§7, harness/prompts/candidate.md, scripts/analyze_run.py D 축. **단 A' 의 5-lane round-robin·`lane`/`diff_fingerprint`/`why_different` 스키마는 이후 discovery-first → explore/exploit 로 대체** (PHASE3-STATUS §9). §11 Addendum 에 audit 인프라 회고 |
 | Draft | [`proposals/2026-05-29-skills-and-prompt-eval.md`](proposals/2026-05-29-skills-and-prompt-eval.md) — 내부 skill/agent + prompt-eval | 채택 시 .claude/skills/aig/, runner.py default cmd, README workflow. 본문은 phase3_002 결과 후 |
 | 흡수/대체 | [`proposals/2026-05-29-prompt-diversification.md`](proposals/2026-05-29-prompt-diversification.md) — Cold-restart wildcard / HISTORY 망각 / metric reframe | discovery-first 재작성으로 흡수 (cold-restart → 이후 explore/exploit 감쇠 스케줄로 대체). 운영 정본: PHASE3-PLAN §4/§5 + candidate.md. 진화 이력: PHASE3-STATUS §9 |
 

@@ -1082,6 +1082,16 @@ def test_format_error_profile_no_best_yet() -> None:
     assert "no best yet" in _format_error_profile(config, state).lower()
 
 
+def test_format_error_profile_best_hyp_without_cer_does_not_crash() -> None:
+    """Resume from a malformed/migrated state.json (best_hyp_id set but best_cer
+    None) must degrade gracefully, not crash build_candidate_prompt."""
+    config = RunnerConfig(job_id="job", repo_root=Path("."))
+    state = HarnessState(
+        job_id="job", iteration=9, best_hyp_id="job_iter_001", best_cer=None
+    )
+    assert "no best yet" in _format_error_profile(config, state).lower()
+
+
 def test_recent_table_includes_failure_signature(tmp_path: Path) -> None:
     """_recent_iters pulls sub/del/ins + len + hal from score_report, and the
     table renders them so the candidate sees *how* each attempt failed."""

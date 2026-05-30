@@ -433,7 +433,7 @@ def _format_error_profile(config: RunnerConfig, state: HarnessState) -> str:
     """Corpus-level error profile of the current best, with an auto-diagnosed
     dominant axis. Injected so the candidate sees the standing failure mode as
     *measured data*, not something it must infer from the scalar cer."""
-    if not state.best_hyp_id:
+    if not state.best_hyp_id or state.best_cer is None:
         return "(no best yet — first improving iter sets the baseline profile.)"
     report = _read_score_report(
         config.repo_root / config.runs_dir / state.best_hyp_id

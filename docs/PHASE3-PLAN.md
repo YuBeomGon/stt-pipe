@@ -305,7 +305,9 @@ Quality budget:
 - hard fail은 항상 reject다.
 - 최종 target과 time budget을 만족하면 success다.
 - sigma가 유효하면 `best_cer - candidate_cer >= 2 * sigma`일 때 keep한다.
-- sigma가 provisional이거나 0이면 절대 개선폭 fallback을 쓴다. 초기 권장값은 `0.01`.
+- sigma가 provisional이거나 0이면 절대 개선폭 fallback을 쓴다. 현재값 `0.002`
+  (`PolicyConfig.absolute_delta_fallback`, review F2 banking — 작은 실질 개선도
+  채택해 compound. 옛 `0.01` 에서 하향).
 - keep/reject 판단은 자기 보고나 추측이 아니라 산출물 수치로만 한다.
 
 ---
@@ -321,16 +323,20 @@ Iteration 산출물:
 - `runs/<hyp_id>/claude_stdout.txt`
 - `runs/<hyp_id>/claude_stderr.txt`
 - `runs/<hyp_id>/candidate.diff`
-- `runs/<hyp_id>/candidate_meta.json` — A' YAML 메타데이터 (lane / fingerprint / why). 파싱 성공 시
-- `runs/<hyp_id>/candidate_meta.err` — A' format reject 사유. 파싱 실패 시 (둘 중 정확히 하나만 존재)
+- `runs/<hyp_id>/candidate_meta.json` — discovery-first YAML 메타데이터
+  (`capability_investigated` / `what_i_learned` / `hypothesis` / `fingerprint`,
+  optional `lane`). 파싱 성공 시
+- `runs/<hyp_id>/candidate_meta.err` — format reject 사유. 파싱 실패 시 (둘 중 정확히 하나만 존재)
 
 누적 기록:
 - `runs/_summary/HISTORY.md` — **현재 잡 한정**. 잡 종료 후
   `docs/history-archive/HISTORY.<job_id>.md` 로 이동, 새 빈 HISTORY 로 다음
   잡 시작. 이유: candidate 가 매 iter prompt 에서 HISTORY tail 을 받는데,
-  과거 잡 narrative 가 anchoring 으로 작용 → lane 선택 / fingerprint 회피
+  과거 잡 narrative 가 anchoring 으로 작용 → mechanism 선택 / fingerprint 회피
   판단 흐려짐. 잡 단위 ablation 정합성 보호.
-- `runs/_summary/<job_id>_state.json` — `HarnessState.status` 가 `"aborted_format_reject"` 이면 §4 의 잡 abort 가드가 작동한 것
+- `runs/_summary/<job_id>_state.json` — `HarnessState.status` 가
+  `"aborted_format_reject"` 또는 `"aborted_command_failure"` 이면 §4 의 잡 abort
+  가드가 작동한 것
 
 `HISTORY.md`는 실험 로그 정본이다. harness만 append하며, 후보가 직접 만들거나
 덮어쓰면 scope 위반으로 rollback한다. 각 iteration은 최소한 다음 정보를 남긴다.
