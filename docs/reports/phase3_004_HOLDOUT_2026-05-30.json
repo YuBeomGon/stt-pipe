@@ -1,0 +1,12 @@
+{
+  "eval_run": "phase3_004_iter_018",
+  "holdout_run": "holdout_1780111354",
+  "eval_cer": 0.1573549657564087,
+  "holdout_cer": 0.1847022162455714,
+  "delta_cer": 0.0273472504891627,
+  "sigma": 0.0,
+  "sigma_provisional": true,
+  "threshold": 0.01,
+  "overfit_suspected": true,
+  "produced_at": "2026-05-30T03:31:02.751891+00:00"
+}
