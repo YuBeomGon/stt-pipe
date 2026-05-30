@@ -552,3 +552,14 @@ judge.evaluate 종료 코드 비정상
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 51 · phase3_005_iter_051 · cer=0.236960 (Δ-0.053465) · reject
+
+### 관찰
+corpus_cer=0.236960, total_inference_time_s=423.5
+
+### 분석
+not enough improvement: Δcer -0.053465 < 0.002000
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
