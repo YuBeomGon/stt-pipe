@@ -111,3 +111,14 @@ not enough improvement: Δcer 0.000000 < 0.002000
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 11 · phase3_005_iter_011 · cer=NA (ΔNA) · reject
+
+### 관찰
+score_report 없음
+
+### 분석
+runtime cap 타임아웃 초과: judge.evaluate 가 1246s (cap + 로드 여유) 안에 끝나지 않음 — 디코딩 hang/runaway 로 강제 종료
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
