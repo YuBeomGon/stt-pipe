@@ -88,7 +88,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             patience=1.0,
             sampling_temperature=0.0,
             repetition_penalty=1.1,
-            no_repeat_ngram_size=3,
+            no_repeat_ngram_size=4,
         )
 
         token_ids = results[0].sequences_ids[0]
