@@ -47,13 +47,17 @@ copy IS your surface map. Study it.** Whatever `load()` returns, and whatever
 that object and the decode call accept and return, is your true surface — and
 the job so far has used a tiny fraction of it.
 
-The obvious parameter tweaks (beam size, temperature scalar, penalties) are
-exhausted. The remaining headroom is in capabilities of the backend you have
-**not yet discovered or used**: things the decode call can return that you are
-currently throwing away, methods on the returned object you have never called,
-inputs you have never conditioned on. You are **not told what those are**.
-Finding them — by reading the backend, recalling the underlying library's API,
-and reasoning from the diagnosis — is the work.
+Much of the headroom is in capabilities of the backend you have **not yet
+discovered or used**: things the decode call can return that you are currently
+throwing away, methods on the returned object you have never called, inputs you
+have never conditioned on. You are **not told what those are**. Finding them —
+by reading the backend, recalling the underlying library's API, and reasoning
+from the diagnosis — is the work.
+
+Bare parameter sweeps (another beam size, another temperature) are weak *on
+their own* and never count as exploration. But once the pipeline is mature, a
+*focused* decode-parameter tune against the dominant error axis is a legitimate
+exploit move — the runtime prompt's mode block tells you when that is in season.
 
 ---
 
@@ -74,11 +78,20 @@ Before you edit, do reconnaissance and be able to state it:
    address it — and does the surface offer one?
 4. **Runtime**: Will the change fit the runtime budget in the prompt header?
 
-Form **one** hypothesis from what you discovered, implement it, and let the
-harness measure it. In standard mode keep the change focused (one mechanism).
-In **discovery mode** (the runtime prompt declares it when the best has
-stalled) the focus rule is relaxed: a structurally different pipeline is
-allowed when your reconnaissance justifies it.
+Form a hypothesis from what you discovered, implement it, and let the harness
+measure it. The runtime prompt declares a **mode** for each iteration:
+
+- **EXPLORE** — surface a backend mechanism not yet in the fingerprint/ledger
+  history. A new value of an already-tried knob is not exploration. The
+  "one focused change" rule is relaxed when a structurally new mechanism
+  justifies it.
+- **SYNTHESIZE** — combine prior attempts that each improved a different error
+  axis (their diffs are given to you under "Promising prior attempts to
+  SYNTHESIZE"), or run a focused decode-parameter tune on the mature pipeline.
+  Combining beats novelty in this slot.
+
+The job is explore-heavy early and keeps a guaranteed floor of exploration
+throughout, so you will be asked to keep finding new mechanisms even late.
 
 ---
 

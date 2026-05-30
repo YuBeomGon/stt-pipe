@@ -1136,3 +1136,188 @@ def test_error_profile_injected_into_prompt(tmp_path: Path) -> None:
     prompt = build_candidate_prompt(config, state)
     assert "Error profile (best = job_iter_001" in prompt
     assert "DOMINANT AXIS" in prompt
+
+
+# --- Step 2/3: iteration-based explore/synthesize schedule + synthesis ---
+
+from harness.runner import (  # noqa: E402
+    _EXPLORE_RATIO_FLOOR,
+    _axis_scores,
+    _explore_ratio,
+    _format_synthesis_block,
+    _is_explore_iter,
+    _iteration_mode,
+    _promising_rejects,
+)
+
+
+def _write_iter(runs: Path, name: str, *, diff: str = "x", **score: object) -> None:
+    d = runs / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "candidate_meta.json").write_text(
+        json.dumps({"fingerprint": ["f"]}), encoding="utf-8"
+    )
+    (d / "score_report.json").write_text(json.dumps(score), encoding="utf-8")
+    (d / "candidate.diff").write_text(diff, encoding="utf-8")
+
+
+def test_axis_scores_clamps_coverage_at_one() -> None:
+    s = _axis_scores(
+        {
+            "corpus_cer": 0.2,
+            "error_breakdown": {"sub_ratio": 0.5, "del_ratio": 0.4, "ins_ratio": 0.1},
+            "length_ratio": {"mean": 1.3},
+        }
+    )
+    assert s["coverage"] == 1.0  # over-generation not counted as more coverage
+
+
+def test_promising_rejects_ranks_by_sub_coverage_not_hallucination(tmp_path: Path) -> None:
+    """A reject that only got lucky on the coarse hallucination rate (no sub /
+    coverage gain) must NOT outrank one that genuinely lowered substitution."""
+    runs = tmp_path / "runs"
+    # best: sub .59 cov .95 hal .18
+    _write_iter(
+        runs, "job_iter_010",
+        corpus_cer=0.157,
+        error_breakdown={"sub_ratio": 0.59, "del_ratio": 0.35, "ins_ratio": 0.06},
+        length_ratio={"mean": 0.95}, hallucination_hit_rate=0.18,
+    )
+    # genuine sub improver (sub .49) — should be selected & ranked first
+    _write_iter(
+        runs, "job_iter_011", diff="GLOSSARY",
+        corpus_cer=0.170,
+        error_breakdown={"sub_ratio": 0.49, "del_ratio": 0.45, "ins_ratio": 0.06},
+        length_ratio={"mean": 0.93}, hallucination_hit_rate=0.18,
+    )
+    # hallucination-luck only (sub/cov unchanged, hal 0) — must be excluded
+    _write_iter(
+        runs, "job_iter_012",
+        corpus_cer=0.158,
+        error_breakdown={"sub_ratio": 0.59, "del_ratio": 0.35, "ins_ratio": 0.06},
+        length_ratio={"mean": 0.95}, hallucination_hit_rate=0.0,
+    )
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    state = HarnessState(
+        job_id="job", iteration=20, best_hyp_id="job_iter_010", best_cer=0.157,
+        iters_since_best_update=10,
+    )
+    rej = _promising_rejects(config, state)
+    names = [r["iter"] for r in rej]
+    assert "job_iter_011" in names
+    assert "job_iter_012" not in names  # hal-luck excluded
+    assert rej[0]["iter"] == "job_iter_011"
+    assert "GLOSSARY" in rej[0]["diff"]
+
+
+def test_promising_rejects_skips_cer_blowups(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    _write_iter(
+        runs, "job_iter_010", corpus_cer=0.157,
+        error_breakdown={"sub_ratio": 0.59, "del_ratio": 0.35, "ins_ratio": 0.06},
+        length_ratio={"mean": 0.95}, hallucination_hit_rate=0.18,
+    )
+    # improved sub massively but cer blew up (0.52) — not a usable lever
+    _write_iter(
+        runs, "job_iter_011", corpus_cer=0.52,
+        error_breakdown={"sub_ratio": 0.10, "del_ratio": 0.88, "ins_ratio": 0.02},
+        length_ratio={"mean": 0.56}, hallucination_hit_rate=0.18,
+    )
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    state = HarnessState(
+        job_id="job", iteration=20, best_hyp_id="job_iter_010", best_cer=0.157,
+        iters_since_best_update=10,
+    )
+    assert _promising_rejects(config, state) == []
+
+
+def test_explore_ratio_decays_to_floor() -> None:
+    """High early, monotonically decaying toward (never below) the floor."""
+    r1 = _explore_ratio(1)
+    r_mid = _explore_ratio(20)
+    r_late = _explore_ratio(200)
+    assert r1 > r_mid > r_late
+    assert r_late >= _EXPLORE_RATIO_FLOOR
+    assert abs(r_late - _EXPLORE_RATIO_FLOOR) < 1e-3  # converged to floor
+
+
+def test_explore_density_high_early_floor_late() -> None:
+    """Explore fraction is high in the first iters and approaches the floor in a
+    late window — deterministic, so the counts are stable."""
+    early = sum(_is_explore_iter(n) for n in range(1, 11)) / 10
+    late = sum(_is_explore_iter(n) for n in range(191, 211)) / 20
+    assert early >= 0.6  # explore-heavy start
+    assert _EXPLORE_RATIO_FLOOR - 0.1 <= late <= _EXPLORE_RATIO_FLOOR + 0.15
+    assert late > 0  # floor guarantees exploration never fully stops
+
+
+def test_is_explore_iter_deterministic() -> None:
+    """Same iteration → same decision every call (resume-safe)."""
+    assert [_is_explore_iter(n) for n in range(1, 30)] == [
+        _is_explore_iter(n) for n in range(1, 30)
+    ]
+
+
+def test_iteration_mode_explores_until_best_exists() -> None:
+    """No best yet → always explore (nothing to synthesize from)."""
+    state = HarnessState(job_id="job", iteration=50)  # no best_hyp_id
+    assert _iteration_mode(state) == "explore"
+
+
+def test_synthesize_mode_injects_rejects_and_exploit(tmp_path: Path) -> None:
+    """A synthesize-slot iteration surfaces promising rejects' diffs and
+    re-permits decode-param tuning."""
+    _init_repo(tmp_path)
+    runs = tmp_path / "runs"
+    _write_iter(
+        runs, "job_iter_001", corpus_cer=0.157,
+        error_breakdown={"sub_ratio": 0.59, "del_ratio": 0.35, "ins_ratio": 0.06},
+        length_ratio={"mean": 0.95, "p05": 0.93}, hallucination_hit_rate=0.18,
+        repeated_text_rate=0.09,
+    )
+    _write_iter(
+        runs, "job_iter_002", diff="SUBFIX_DIFF",
+        corpus_cer=0.170,
+        error_breakdown={"sub_ratio": 0.49, "del_ratio": 0.45, "ins_ratio": 0.06},
+        length_ratio={"mean": 0.93, "p05": 0.90}, hallucination_hit_rate=0.18,
+        repeated_text_rate=0.09,
+    )
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    # Find a late iteration that the deterministic schedule marks "synthesize".
+    synth_iter = next(
+        n for n in range(30, 80)
+        if not _is_explore_iter(n)
+    )
+    state = HarnessState(
+        job_id="job", iteration=synth_iter, best_hyp_id="job_iter_001",
+        best_cer=0.157, iters_since_best_update=synth_iter - 1,
+    )
+    assert _iteration_mode(state) == "synthesize"
+    prompt = build_candidate_prompt(config, state)
+    assert "SYNTHESIZE MODE" in prompt
+    assert "EXPLORE MODE" not in prompt
+    assert "SUBFIX_DIFF" in prompt  # promising reject's actual code injected
+    assert "EXPLOITATION" in prompt  # decode-param tuning re-permitted
+
+
+def test_explore_mode_prompts_for_novelty(tmp_path: Path) -> None:
+    """An explore-slot iteration is in EXPLORE MODE and asks for an unused
+    mechanism, not a synthesis of rejects."""
+    _init_repo(tmp_path)
+    runs = tmp_path / "runs"
+    _write_iter(
+        runs, "job_iter_001", corpus_cer=0.157,
+        error_breakdown={"sub_ratio": 0.59, "del_ratio": 0.35, "ins_ratio": 0.06},
+        length_ratio={"mean": 0.95, "p05": 0.93}, hallucination_hit_rate=0.18,
+        repeated_text_rate=0.09,
+    )
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    explore_iter = next(n for n in range(2, 40) if _is_explore_iter(n))
+    state = HarnessState(
+        job_id="job", iteration=explore_iter, best_hyp_id="job_iter_001",
+        best_cer=0.157, iters_since_best_update=explore_iter - 1,
+    )
+    assert _iteration_mode(state) == "explore"
+    prompt = build_candidate_prompt(config, state)
+    assert "EXPLORE MODE" in prompt
+    assert "SYNTHESIZE MODE" not in prompt
