@@ -474,3 +474,14 @@ judge.evaluate 종료 코드 비정상
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 44 · phase3_004_iter_044 · cer=NA (ΔNA) · reject
+
+### 관찰
+corpus_cer=0.312410, total_inference_time_s=663.5
+
+### 분석
+harness guard 실패
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
