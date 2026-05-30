@@ -386,3 +386,14 @@ harness guard 실패
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 36 · phase3_004_iter_036 · cer=NA (ΔNA) · reject
+
+### 관찰
+corpus_cer=0.159080, total_inference_time_s=506.0
+
+### 분석
+harness guard 실패
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
