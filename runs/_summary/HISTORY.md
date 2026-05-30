@@ -695,3 +695,14 @@ meaningful improvement: Δcer 0.003241 >= 0.002000
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 64 · phase3_005_iter_064 · cer=0.230103 (Δ-0.052594) · reject
+
+### 관찰
+corpus_cer=0.230103, total_inference_time_s=472.3
+
+### 분석
+not enough improvement: Δcer -0.052594 < 0.002000
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
