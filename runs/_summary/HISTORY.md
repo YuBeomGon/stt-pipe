@@ -1135,3 +1135,14 @@ runtime cap 타임아웃 초과: judge.evaluate 가 1246s (cap + 로드 여유) 
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 104 · phase3_005_iter_104 · cer=0.177762 (Δ-0.000253) · reject
+
+### 관찰
+corpus_cer=0.177762, total_inference_time_s=479.5
+
+### 분석
+not enough improvement: Δcer -0.000253 < 0.002000
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
