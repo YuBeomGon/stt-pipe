@@ -1,25 +1,40 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Timestamp-decoding (iter_004) lifted coverage to length_ratio 0.74, but that
-number is suspiciously specific: if large-v3 reliably EOTs after transcribing
-only ~22s of each 30s window, a *fixed* 30s stride skips the un-transcribed
-~8s tail of every window (22/30 ≈ 0.73). The early-EOT does not vanish in
-timestamp mode — it just becomes observable, because the decoder stamps where
-it actually stopped.
+The standing best (iter_018: adaptive timestamp-seek + beam=3 / patience=4.0 /
+length_penalty=1.1) has coverage saturated (length_ratio 0.96) but stalled at
+cer 0.1932 for 10 iters under pure scoring-knob tuning. The per-file diagnosis
+shows where the remaining mass lives: it is NOT a coverage problem. The worst
+file (01_8088…10_01_57, cer 0.407) has length_ratio 0.99 yet carries
+``repeated_text`` — full length, wrong text — and ~half the batch shares that
+flag (repeated 0.45). A scoring knob cannot fix this: once the beam has fallen
+into a degenerate repeat run, re-ranking the same poisoned candidate set just
+re-picks a poisoned hypothesis, and the collapsed run reads as substitution.
 
-This iteration surfaces the timestamp tokens as a **seek-feedback signal**
-(prior iters decoded their offsets only to filter padding). Instead of a fixed
-30s stride we advance the window to the END of the last emitted segment — the
-standard long-form Whisper seek. The tail the decoder never reached is then
-re-read at the head of the next window instead of being skipped, so the
-structural deletion that fixed striding bakes in is recovered. A 20s advance
-floor bounds the per-file window count (and runtime) when a window stamps an
-unusually early stop.
+This iteration synthesises the iter_009 mechanism (zlib-compression-gated
+**temperature fallback**, which improved the substitution axis but regressed
+coverage off a weaker parent) onto the current best beam pipeline. The two
+unused surface capabilities it rests on (ledger iter_009): ``sampling_topk=0``
+makes ``sampling_temperature`` actually sample the full distribution (with the
+default topk=1 the decoder is argmax and temperature is inert), and a window's
+zlib compression ratio spikes exactly on a repeat loop. So: decode each window
+with the current best beam config first; only if its text compresses
+suspiciously well (ratio > 2.4 ⇒ repetition) re-decode at escalating
+temperature with full sampling to break the loop, keeping whichever pass
+compresses least.
+
+Coverage guard for iter_009's regression: a CLEAN window (ratio <= threshold)
+takes the temp=0.0 beam result unchanged and is byte-identical to the standing
+best, so it cannot regress; the fallback touches only the few repetition-prone
+windows. The adaptive seek follows the kept (cleaner) result, and the
+min_advance floor still bounds the decode-call count, so runtime stays inside
+the ~190s/719.9s the parent measured even with the handful of extra re-decodes.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
+
+import zlib
 
 import numpy as np
 
@@ -33,6 +48,27 @@ _WINDOW_SECONDS = 30
 # count (runtime). 20s caps the worst-case window growth at 1.5x while leaving
 # the typical ~22-29s last-segment advance untouched.
 _MIN_ADVANCE_SECONDS = 20
+
+# Temperature-fallback schedule. The first attempt (0.0) is exactly the parent's
+# beam decode, so clean windows incur zero extra cost and byte-match the best.
+# Higher temps are tried only when a window is judged a repetition loop, so the
+# runtime hit is bounded to the (few) repeated_text-prone windows.
+_FALLBACK_TEMPS = (0.0, 0.4, 0.8)
+# Whisper's standard repetition gate: a degenerate repeat run compresses far
+# better than natural speech, so its zlib ratio (raw/compressed bytes) spikes
+# above ~2.4. Below the threshold the window is accepted as-is.
+_COMPRESSION_RATIO_THRESHOLD = 2.4
+
+
+def _compression_ratio(text: str) -> float:
+    """zlib compression ratio (raw bytes / compressed bytes) of the decoded
+    text. A repeated run compresses far better than natural speech, so this
+    spikes exactly on the repetition loop that the temperature fallback targets.
+    """
+    if not text:
+        return 0.0
+    data = text.encode("utf-8")
+    return len(data) / len(zlib.compress(data))
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -67,34 +103,48 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         # short chunk up to the full 30s window for us.
         features = to_storage_view(inputs.input_features)
 
-        # Greedy (beam_size=1) leaves length_penalty inert and lets the decoder
-        # fall into repetition loops that collapse to apparent deletion. Beam
-        # search activates length_penalty>1, which rewards longer hypotheses —
-        # aimed straight at the dominant deletion/coverage axis — and the beam
-        # margin suppresses the greedy repeat loop (the repeated_text file).
-        # beam_size=3 (not 5) keeps ~3x decode within the 719.9s budget.
-        # patience>1 deepens beam exploration WITHOUT widening it: with beam=3,
-        # patience keeps the beam search running ~patience x longer before it
-        # finalizes, so a globally-better hypothesis can overtake a locally-
-        # greedy substitution (the dominant axis: sub 50%, coverage already
-        # healthy at length_ratio 0.96). Unlike beam=5 (iter_012, which
-        # regressed cer 0.2130 / hal 0.36), it does not broaden the beam front
-        # that fed the extra hallucination — it searches the existing width
-        # more thoroughly. REFINE: parent iter_016 set patience=2.0 and spent
-        # only 189.8s of the 719.9s budget (~4x slack). Substitution is still
-        # the dominant axis, so push patience 2.0 -> 4.0 — deepen the width-3
-        # search further so the correct token can win on global sequence score,
-        # paid for by the runtime headroom (est. ~380s, still well in budget).
-        results = generate(
-            features,
-            [prompt_tokens],
-            beam_size=3,
-            patience=4.0,
-            length_penalty=1.1,
-            sampling_temperature=0.0,
-        )
+        # Temperature fallback: decode with the parent's beam config first; only
+        # re-decode (sampling the full distribution to escape a repeat loop) if
+        # the text compresses suspiciously well. Keep the least-compressible
+        # (least-repetitive) pass. Clean windows stop after temp=0.0 and are
+        # byte-identical to the standing best, so they cannot regress.
+        best_ids = None
+        best_ratio = None
+        for temp in _FALLBACK_TEMPS:
+            if temp == 0.0:
+                # Beam=3 / patience=4.0 / length_penalty=1.1 — the iter_018 best.
+                results = generate(
+                    features,
+                    [prompt_tokens],
+                    beam_size=3,
+                    patience=4.0,
+                    length_penalty=1.1,
+                    sampling_temperature=0.0,
+                )
+            else:
+                # sampling_topk=0 makes sampling_temperature actually sample the
+                # full distribution (default topk=1 is argmax, temperature inert),
+                # giving the decoder a path OUT of the repeat run the beam locked.
+                results = generate(
+                    features,
+                    [prompt_tokens],
+                    beam_size=1,
+                    sampling_topk=0,
+                    sampling_temperature=temp,
+                )
 
-        token_ids = results[0].sequences_ids[0]
+            token_ids = results[0].sequences_ids[0]
+            text_ids = [t for t in token_ids if t < timestamp_begin]
+            text = tokenizer.decode(text_ids, skip_special_tokens=True)
+            ratio = _compression_ratio(text)
+            if best_ratio is None or ratio < best_ratio:
+                best_ratio = ratio
+                best_ids = token_ids
+            # Accept the first non-degenerate pass; no re-decode for clean windows.
+            if ratio <= _COMPRESSION_RATIO_THRESHOLD:
+                break
+
+        token_ids = best_ids
         text_ids = [t for t in token_ids if t < timestamp_begin]
         texts.append(tokenizer.decode(text_ids, skip_special_tokens=True))
 
@@ -102,12 +152,12 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         if len(chunk) < window:
             break
 
-        # Advance to the end of the last emitted segment (last timestamp token).
-        # If the window emitted no timestamp, fall back to a full-window stride.
+        # Advance to the end of the last emitted segment (last timestamp token)
+        # of the KEPT result. If the window emitted no timestamp, full stride.
         ts_tokens = [t for t in token_ids if t >= timestamp_begin]
         if ts_tokens:
             advance = int((ts_tokens[-1] - timestamp_begin) * 0.02 * sr)
-            advance = min(max(advance, min_advance), window)
+            advance = max(advance, min_advance)
         else:
             advance = window
         seek += advance

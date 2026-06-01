@@ -1,7 +1,7 @@
 {
   "job_id": "phase3_007",
-  "updated_at_iter": 27,
-  "global_best": "phase3_007_iter_018",
+  "updated_at_iter": 28,
+  "global_best": "phase3_007_iter_028",
   "family_best": {
     "family_001": {
       "hyp_id": "phase3_007_iter_002",
@@ -129,28 +129,28 @@
       }
     },
     "family_007": {
-      "hyp_id": "phase3_007_iter_009",
-      "iter": 9,
-      "status": "micro_bank",
-      "cer": 0.20910374152623598,
-      "harness_signature": "sig_13699f88",
+      "hyp_id": "phase3_007_iter_028",
+      "iter": 28,
+      "status": "keep",
+      "cer": 0.1847324120384086,
+      "harness_signature": "sig_4fc0c511",
       "harness_family_id": "family_007",
       "self_declared_family_id": null,
       "fingerprint": [
         "temperature-fallback",
-        "return-scores",
         "compression-ratio",
         "sampling-topk",
-        "avg-logprob"
+        "repetition-gate",
+        "synthesis"
       ],
-      "mode": "explore",
-      "diff_path": "runs/phase3_007_iter_009/candidate.diff",
-      "runtime_s": 145.44725388600637,
+      "mode": "plateau",
+      "diff_path": "runs/phase3_007_iter_028/candidate.diff",
+      "runtime_s": 213.0685910169923,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.492291024252021,
-        "error_breakdown.sub_ratio": 0.4370780898408201,
+        "error_breakdown.del_ratio": 0.383283807367577,
+        "error_breakdown.sub_ratio": 0.5003537568982596,
         "hallucination_hit_rate": 0.18181818181818182,
-        "total_inference_time_s": 145.44725388600637
+        "total_inference_time_s": 213.0685910169923
       }
     },
     "family_008": {
