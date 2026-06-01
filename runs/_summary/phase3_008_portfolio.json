@@ -1,6 +1,6 @@
 {
   "job_id": "phase3_008",
-  "updated_at_iter": 23,
+  "updated_at_iter": 24,
   "global_best": "phase3_008_iter_006",
   "family_best": {
     "family_001": {
@@ -326,6 +326,31 @@
         "error_breakdown.sub_ratio": 0.37204251914504516,
         "hallucination_hit_rate": 0.2727272727272727,
         "total_inference_time_s": 182.73203306000505
+      }
+    },
+    "family_014": {
+      "hyp_id": "phase3_008_iter_024",
+      "iter": 24,
+      "status": "micro_bank",
+      "cer": 0.17729118380008016,
+      "harness_signature": "sig_4740e70d",
+      "harness_family_id": "family_014",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "preemphasis",
+        "highpass",
+        "spectralfrontend",
+        "consonant",
+        "substitution"
+      ],
+      "mode": "plateau",
+      "diff_path": "runs/phase3_008_iter_024/candidate.diff",
+      "runtime_s": 208.35759073399822,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.35666191576153733,
+        "error_breakdown.sub_ratio": 0.5266624072344818,
+        "hallucination_hit_rate": 0.09090909090909091,
+        "total_inference_time_s": 208.35759073399822
       }
     }
   },
@@ -855,6 +880,31 @@
         "error_breakdown.sub_ratio": 0.37204251914504516,
         "hallucination_hit_rate": 0.2727272727272727,
         "total_inference_time_s": 182.73203306000505
+      }
+    },
+    {
+      "hyp_id": "phase3_008_iter_024",
+      "iter": 24,
+      "status": "micro_bank",
+      "cer": 0.17729118380008016,
+      "harness_signature": "sig_4740e70d",
+      "harness_family_id": "family_014",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "preemphasis",
+        "highpass",
+        "spectralfrontend",
+        "consonant",
+        "substitution"
+      ],
+      "mode": "plateau",
+      "diff_path": "runs/phase3_008_iter_024/candidate.diff",
+      "runtime_s": 208.35759073399822,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.35666191576153733,
+        "error_breakdown.sub_ratio": 0.5266624072344818,
+        "hallucination_hit_rate": 0.09090909090909091,
+        "total_inference_time_s": 208.35759073399822
       }
     }
   ],
