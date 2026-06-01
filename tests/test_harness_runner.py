@@ -369,6 +369,90 @@ def test_run_iteration_rolls_back_workspace_on_verify_failure(tmp_path: Path) ->
     ) == original_workspace
 
 
+def _tracked(root: Path, rel: str) -> bool:
+    r = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", rel],
+        cwd=root,
+        capture_output=True,
+    )
+    return r.returncode == 0
+
+
+def test_step1_decision_trace_committed_and_survives_next_iter(tmp_path: Path) -> None:
+    """Step 1 통합 smoke (모델 없이): decisions.jsonl + portfolio.json 이 iter
+    커밋에 포함되고, 그 덕에 다음 iter 의 ensure_worktree_ready 가 깨지지 않는다.
+    (commit_iteration 안의 _persist_decision 배선을 실제 git 경로로 검증.)"""
+    _init_repo(tmp_path)
+    config = RunnerConfig(job_id="job", repo_root=tmp_path, commit_results=True)
+    state = HarnessState(job_id="job")
+    state_path = tmp_path / "runs/_summary/job_state.json"
+
+    def _candidate(diff_line: str):
+        def candidate(_prompt: str, out_dir: Path):
+            (tmp_path / "workspace/transcribe.py").write_text(
+                f"def transcribe(audio, sr):\n    {diff_line}\n    return 'ok'\n",
+                encoding="utf-8",
+            )
+            _write_valid_meta(out_dir)
+            # production 의 run_candidate_command 가 쓰는 산출물 흉내
+            (out_dir / "candidate.diff").write_text(
+                f"@@ @@ def transcribe(audio, sr):\n+    {diff_line}\n",
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+        return candidate
+
+    def _verifier(cer: float):
+        def verifier(hyp_id: str) -> VerifyResult:
+            report = {
+                "corpus_cer": cer,
+                "total_inference_time_s": 90.0,
+                "error_breakdown": {"sub_ratio": 0.3, "del_ratio": 0.3},
+                "hallucination_hit_rate": 0.1,
+            }
+            out_dir = tmp_path / "runs" / hyp_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "score_report.json").write_text(
+                json.dumps(report), encoding="utf-8"
+            )
+            return VerifyResult(
+                ok=True, hyp_id=hyp_id, out_dir=out_dir, report=report, per_file=[]
+            )
+
+        return verifier
+
+    # iter 1 — keep
+    r1 = run_iteration(
+        config, state, state_path,
+        _candidate("results = generate(features, beam_size=5)"), _verifier(0.40),
+    )
+    assert r1.status == "keep"
+    assert _tracked(tmp_path, "runs/_summary/job_decisions.jsonl")
+    assert _tracked(tmp_path, "runs/_summary/job_portfolio.json")
+
+    # iter 2 — worse cer → reject. ensure_worktree_ready 가 깨지지 않아야 한다
+    # (decisions/portfolio 가 iter1 커밋에 들어가 working tree clean).
+    r2 = run_iteration(
+        config, state, state_path,
+        _candidate("audio = preemphasis(channel_eq(audio))"), _verifier(0.55),
+    )
+    assert r2.status == "reject"
+
+    decisions = (tmp_path / "runs/_summary/job_decisions.jsonl").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert len(decisions) == 2
+    fams = [json.loads(d)["harness_family_id"] for d in decisions]
+    assert fams[0] != fams[1]  # decode vs audio → distinct family
+
+    # working tree clean (커밋에 다 포함됨)
+    porcelain = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=tmp_path, capture_output=True, text=True
+    ).stdout.strip()
+    assert porcelain == "", f"dirty tree: {porcelain}"
+
+
 # ----------------------------------------------------------------------- #
 # A' (proposal 2026-05-29-agent-design) — candidate metadata + format gate #
 # ----------------------------------------------------------------------- #
