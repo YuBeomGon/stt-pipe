@@ -197,3 +197,72 @@ def test_parents_explore_and_repair_empty() -> None:
     _populate(p, "j_iter_001", 1, "family_001", 0.18)
     assert pf.parents_for_mode(p, "explore") == []
     assert pf.parents_for_mode(p, "repair") == []
+
+
+# ── near-best pool (global best × factor 근방 보존) ───────────────────
+def _reject(p, hyp, it, fam, cer, best):
+    """best 를 못 깨는 reject 후보를 portfolio 에 흘려보낸다."""
+    return p.update(
+        hyp_id=hyp, iteration=it, decision_status="reject",
+        report=_report(cer), best_report=best,
+        harness_signature=f"sig_{fam}", harness_family_id=fam,
+    )
+
+
+def test_near_best_retains_reject_within_factor() -> None:
+    # best 0.10, factor 1.20 → 0.12 까지 보존. 0.115 reject 은 best 를 못 깼지만 근방.
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.10)
+    updated = _reject(p, "j_iter_002", 2, "family_002", 0.115, _report(0.10))
+    assert "near_best" in updated
+    assert any(e["hyp_id"] == "j_iter_002" for e in p.near_best)
+
+
+def test_near_best_excludes_reject_outside_factor() -> None:
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.10)
+    updated = _reject(p, "j_iter_002", 2, "family_002", 0.13, _report(0.10))  # >0.12
+    assert "near_best" not in updated
+    assert not any(e["hyp_id"] == "j_iter_002" for e in p.near_best)
+
+
+def test_near_best_prunes_when_global_best_improves() -> None:
+    # 0.115 는 best 0.10 근방이라 보존됐다가, best 가 0.09(→0.108)로 내려가면 탈락.
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.10)
+    _reject(p, "j_iter_002", 2, "family_002", 0.115, _report(0.10))
+    assert any(e["hyp_id"] == "j_iter_002" for e in p.near_best)
+    _populate(p, "j_iter_003", 3, "family_003", 0.09)  # 새 best → threshold 0.108
+    assert not any(e["hyp_id"] == "j_iter_002" for e in p.near_best)
+
+
+def test_parents_refine_rotates_over_pool() -> None:
+    # 풀에 서로 다른 family 근방 후보가 여럿이면 refine 은 evaluated_index 로 회전한다
+    # (항상 global_best 만 고르지 않음 — 다양성).
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.10)  # global best
+    _reject(p, "j_iter_002", 2, "family_002", 0.11, _report(0.10))
+    _reject(p, "j_iter_003", 3, "family_003", 0.115, _report(0.10))
+    picks = {
+        pf.parents_for_mode(p, "refine", evaluated_index=i)[0]["hyp_id"]
+        for i in range(3)
+    }
+    assert len(picks) >= 2  # 회전으로 두 개 이상의 서로 다른 parent 가 선택됨
+
+
+def test_parents_combine_draws_from_near_best_pool() -> None:
+    # combine 은 근방 풀의 서로 다른 family 2개를 재료로 쓴다(reject 도 포함).
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.10)
+    _reject(p, "j_iter_002", 2, "family_002", 0.11, _report(0.10))
+    parents = pf.parents_for_mode(p, "combine")
+    assert {e["harness_family_id"] for e in parents} == {"family_001", "family_002"}
+
+
+def test_parents_refine_single_entry_is_global_best() -> None:
+    # 풀이 1개뿐이면 회전해도 global_best.
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.18)
+    for i in range(3):
+        got = pf.parents_for_mode(p, "refine", evaluated_index=i)
+        assert len(got) == 1 and got[0]["hyp_id"] == "j_iter_001"

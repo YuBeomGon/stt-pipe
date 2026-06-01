@@ -31,6 +31,12 @@ AXES: tuple[tuple[str, str], ...] = (
 # 축 개선으로 인정할 최소 폭 (noise guard).
 _AXIS_EPS: float = 1e-4
 
+# near-best 풀: global best CER 의 이 배수 이내면 best 를 못 깬 후보도 진화 재료로
+# 보존한다(family 무관). best 가 갱신될 때마다 풀을 이 기준으로 재필터한다.
+_NEAR_BEST_FACTOR: float = 1.20
+# 풀 상한(초반 best 가 높을 때 무한정 쌓이지 않게; CER 낮은 순으로 자른다).
+_NEAR_BEST_MAX: int = 24
+
 
 def axis_value(report: dict[str, Any], dotted: str) -> float | None:
     cur: Any = report
@@ -116,13 +122,28 @@ def _entry(
 
 
 def _all_entries(p: "Portfolio") -> list[dict[str, Any]]:
-    """family_best + metric_best + micro_bank 의 후보 entry 들(hyp_id 중복 제거)."""
+    """family_best + metric_best + micro_bank + near_best 의 후보 entry 들
+    (hyp_id 중복 제거). near_best 가 best 근방 reject 까지 포함하므로 combine/
+    refine 의 재료 풀이 single-best 가 아니라 다양한 family 의 근방군이 된다."""
     seen: dict[str, dict[str, Any]] = {}
-    for e in list(p.family_best.values()) + list(p.metric_best.values()) + p.micro_bank:
+    pools = (
+        list(p.family_best.values())
+        + list(p.metric_best.values())
+        + p.micro_bank
+        + p.near_best
+    )
+    for e in pools:
         hyp = e.get("hyp_id")
         if hyp and hyp not in seen:
             seen[hyp] = e
     return list(seen.values())
+
+
+def _ranked_pool(p: "Portfolio") -> list[dict[str, Any]]:
+    """근방 풀 전체를 CER 낮은 순으로 정렬(파생 모드 parent 선택용)."""
+    pool = [e for e in _all_entries(p) if isinstance(e.get("cer"), (int, float))]
+    pool.sort(key=lambda e: e["cer"])
+    return pool
 
 
 def global_best_entry(p: "Portfolio") -> dict[str, Any] | None:
@@ -149,17 +170,30 @@ def feasibility(p: "Portfolio") -> dict[str, bool]:
     }
 
 
-def parents_for_mode(p: "Portfolio", mode: str) -> list[dict[str, Any]]:
-    """mode 별 parent entry 목록(prompt 주입용). MVP 규칙(proposal §4.4):
-    refine/ablate=global_best 1개, combine=서로 다른 family 2개. explore/plateau/
-    repair 는 portfolio parent 없음(repair 는 runner 가 실패 iter 에서 잡는다).
+def parents_for_mode(
+    p: "Portfolio", mode: str, evaluated_index: int = 0
+) -> list[dict[str, Any]]:
+    """mode 별 parent entry 목록(prompt 주입용). proposal §4.4 + near-best 확장:
+    - refine: 근방 풀에서 **회전 선택**(evaluated_index 로 결정적). 늘 global_best
+      만 다듬지 않고 서로 다른 family 의 근방 후보를 돌아가며 튜닝해 다양성을 준다.
+    - ablate: global_best 1개(복잡도 제거는 챔피언 기준이 의미 있음).
+    - combine: 근방 풀의 서로 다른 family 2개.
+    - explore/plateau/repair: portfolio parent 없음(repair 는 runner 가 실패 iter 에서 잡는다).
+
+    풀(`_ranked_pool`)은 family_best/metric_best/micro_bank/near_best 합집합이라
+    best 를 못 깬 근방 후보(global best × {factor})도 재료로 포함된다.
 
     **combine 호환성은 distinct-family MVP**: §4.5 의 diff touched-region overlap /
     same changed-param 충돌 / axis complement 검사는 아직 안 한다 — 서로 다른 family
     면 후보로 본다. 첫 run 의 combine_success_rate 를 보고 충돌 검사를 추가한다."""
-    if mode in ("refine", "ablate"):
+    if mode == "ablate":
         gb = global_best_entry(p)
         return [gb] if gb else []
+    if mode == "refine":
+        pool = _ranked_pool(p)
+        if not pool:
+            return []
+        return [pool[evaluated_index % len(pool)]]
     if mode == "combine":
         # 서로 다른 family 에서 cer 낮은 순 2개 (MVP compatible: family 상이).
         by_family: dict[str, dict[str, Any]] = {}
@@ -185,6 +219,7 @@ class Portfolio:
     metric_best: dict[str, dict[str, Any]] = field(default_factory=dict)
     micro_bank: list[dict[str, Any]] = field(default_factory=list)
     rejected_promising: list[dict[str, Any]] = field(default_factory=list)
+    near_best: list[dict[str, Any]] = field(default_factory=list)
 
     # ── persistence (state.py 와 동일 atomic write) ──────────────────
     @classmethod
@@ -195,7 +230,7 @@ class Portfolio:
         data = json.loads(path.read_text(encoding="utf-8"))
         known = {
             "job_id", "updated_at_iter", "global_best", "family_best",
-            "metric_best", "micro_bank", "rejected_promising",
+            "metric_best", "micro_bank", "rejected_promising", "near_best",
         }
         return cls(**{k: v for k, v in data.items() if k in known})
 
@@ -283,4 +318,37 @@ class Portfolio:
                 self.rejected_promising.append(e)
                 updated.append("rejected_promising")
 
+        # near_best — best 를 못 깬 후보라도 global best × factor 근방이면 보존.
+        # keep/micro_bank/reject 무관(축 개선 없이 단순히 가까운 후보도 combine/
+        # refine 재료). best 갱신 시 prune 되므로 풀은 늘 현 best 기준 근방만 남는다.
+        if cer is not None and self._retain_near_best(entry):
+            updated.append("near_best")
+
         return updated
+
+    def _retain_near_best(self, entry: dict[str, Any]) -> bool:
+        """`entry` 가 현 global best CER × factor 이내면 near_best 풀에 보존하고,
+        풀 전체를 새 기준으로 prune/정렬/cap 한다. 보존했으면 True."""
+        gb = global_best_entry(self)
+        ref = gb.get("cer") if gb else None
+        cer = entry.get("cer")
+        if not isinstance(ref, (int, float)) or not isinstance(cer, (int, float)):
+            return False
+        cutoff = ref * _NEAR_BEST_FACTOR
+        # 새 best 기준으로 기존 풀 prune (best 가 내려가면 멀어진 항목 탈락).
+        self.near_best = [
+            e
+            for e in self.near_best
+            if isinstance(e.get("cer"), (int, float))
+            and e["cer"] <= cutoff
+            and e.get("hyp_id") != entry.get("hyp_id")
+        ]
+        if cer > cutoff:
+            return False
+        self.near_best.append(entry)
+        self.near_best.sort(
+            key=lambda e: e["cer"] if isinstance(e.get("cer"), (int, float)) else 9e9
+        )
+        if len(self.near_best) > _NEAR_BEST_MAX:
+            self.near_best = self.near_best[:_NEAR_BEST_MAX]
+        return True

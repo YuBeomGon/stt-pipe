@@ -1174,7 +1174,9 @@ def _decide_iteration(config: RunnerConfig, state: HarnessState):
     ctx = _scheduler_context(config, state, portfolio)
     sched = scheduler.decide_mode(state.evaluated_count + 1, max(1, config.iterations), ctx)
     parents: list[dict[str, Any]] = []
-    for e in pf.parents_for_mode(portfolio, sched.chosen_mode):
+    for e in pf.parents_for_mode(
+        portfolio, sched.chosen_mode, evaluated_index=state.evaluated_count + 1
+    ):
         entry = dict(e)
         diff_rel = entry.get("diff_path")
         diff_text = ""
