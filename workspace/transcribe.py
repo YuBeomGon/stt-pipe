@@ -67,10 +67,17 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         # short chunk up to the full 30s window for us.
         features = to_storage_view(inputs.input_features)
 
+        # Greedy (beam_size=1) leaves length_penalty inert and lets the decoder
+        # fall into repetition loops that collapse to apparent deletion. Beam
+        # search activates length_penalty>1, which rewards longer hypotheses —
+        # aimed straight at the dominant deletion/coverage axis — and the beam
+        # margin suppresses the greedy repeat loop (the repeated_text file).
+        # beam_size=3 (not 5) keeps ~3x decode within the 719.9s budget.
         results = generate(
             features,
             [prompt_tokens],
-            beam_size=1,
+            beam_size=3,
+            length_penalty=1.1,
             sampling_temperature=0.0,
         )
 
