@@ -1,6 +1,6 @@
 {
   "job_id": "phase3_008",
-  "updated_at_iter": 27,
+  "updated_at_iter": 28,
   "global_best": "phase3_008_iter_006",
   "family_best": {
     "family_001": {
@@ -79,28 +79,29 @@
       }
     },
     "family_004": {
-      "hyp_id": "phase3_008_iter_015",
-      "iter": 15,
+      "hyp_id": "phase3_008_iter_028",
+      "iter": 28,
       "status": "micro_bank",
-      "cer": 0.17863304462994267,
-      "harness_signature": "sig_b189629d",
+      "cer": 0.17087813463917886,
+      "harness_signature": "sig_6a85395f",
       "harness_family_id": "family_004",
       "self_declared_family_id": null,
       "fingerprint": [
-        "peaknormalize",
-        "startofprev",
+        "glossary",
         "prevtext",
-        "conditioning",
-        "synthesis"
+        "startofprev",
+        "promptcontext",
+        "synthesis",
+        "substitution"
       ],
       "mode": "plateau",
-      "diff_path": "runs/phase3_008_iter_015/candidate.diff",
-      "runtime_s": 202.86480630999722,
+      "diff_path": "runs/phase3_008_iter_028/candidate.diff",
+      "runtime_s": 207.72443905699765,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.3654943661284815,
-        "error_breakdown.sub_ratio": 0.5251451148724452,
+        "error_breakdown.del_ratio": 0.3538320330426801,
+        "error_breakdown.sub_ratio": 0.5310794962011116,
         "hallucination_hit_rate": 0.09090909090909091,
-        "total_inference_time_s": 202.86480630999722
+        "total_inference_time_s": 207.72443905699765
       }
     },
     "family_005": {
@@ -980,6 +981,32 @@
         "error_breakdown.sub_ratio": 0.5652775560168184,
         "hallucination_hit_rate": 0.18181818181818182,
         "total_inference_time_s": 207.83635105400754
+      }
+    },
+    {
+      "hyp_id": "phase3_008_iter_028",
+      "iter": 28,
+      "status": "micro_bank",
+      "cer": 0.17087813463917886,
+      "harness_signature": "sig_6a85395f",
+      "harness_family_id": "family_004",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "glossary",
+        "prevtext",
+        "startofprev",
+        "promptcontext",
+        "synthesis",
+        "substitution"
+      ],
+      "mode": "plateau",
+      "diff_path": "runs/phase3_008_iter_028/candidate.diff",
+      "runtime_s": 207.72443905699765,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.3538320330426801,
+        "error_breakdown.sub_ratio": 0.5310794962011116,
+        "hallucination_hit_rate": 0.09090909090909091,
+        "total_inference_time_s": 207.72443905699765
       }
     }
   ],
