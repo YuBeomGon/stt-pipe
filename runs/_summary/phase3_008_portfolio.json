@@ -1,6 +1,6 @@
 {
   "job_id": "phase3_008",
-  "updated_at_iter": 14,
+  "updated_at_iter": 15,
   "global_best": "phase3_008_iter_006",
   "family_best": {
     "family_001": {
@@ -79,28 +79,28 @@
       }
     },
     "family_004": {
-      "hyp_id": "phase3_008_iter_008",
-      "iter": 8,
+      "hyp_id": "phase3_008_iter_015",
+      "iter": 15,
       "status": "micro_bank",
-      "cer": 0.1850373804088319,
-      "harness_signature": "sig_4800b7bb",
+      "cer": 0.17863304462994267,
+      "harness_signature": "sig_b189629d",
       "harness_family_id": "family_004",
       "self_declared_family_id": null,
       "fingerprint": [
+        "peaknormalize",
         "startofprev",
-        "prompt",
+        "prevtext",
         "conditioning",
-        "previoustext",
-        "substitution"
+        "synthesis"
       ],
-      "mode": "explore",
-      "diff_path": "runs/phase3_008_iter_008/candidate.diff",
-      "runtime_s": 221.46246899800462,
+      "mode": "plateau",
+      "diff_path": "runs/phase3_008_iter_015/candidate.diff",
+      "runtime_s": 202.86480630999722,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.33824637408174796,
-        "error_breakdown.sub_ratio": 0.5070634771143342,
-        "hallucination_hit_rate": 0.18181818181818182,
-        "total_inference_time_s": 221.46246899800462
+        "error_breakdown.del_ratio": 0.3654943661284815,
+        "error_breakdown.sub_ratio": 0.5251451148724452,
+        "hallucination_hit_rate": 0.09090909090909091,
+        "total_inference_time_s": 202.86480630999722
       }
     },
     "family_005": {
@@ -505,6 +505,31 @@
         "error_breakdown.sub_ratio": 0.5284784181335905,
         "hallucination_hit_rate": 0.09090909090909091,
         "total_inference_time_s": 210.49464353499934
+      }
+    },
+    {
+      "hyp_id": "phase3_008_iter_015",
+      "iter": 15,
+      "status": "micro_bank",
+      "cer": 0.17863304462994267,
+      "harness_signature": "sig_b189629d",
+      "harness_family_id": "family_004",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "peaknormalize",
+        "startofprev",
+        "prevtext",
+        "conditioning",
+        "synthesis"
+      ],
+      "mode": "plateau",
+      "diff_path": "runs/phase3_008_iter_015/candidate.diff",
+      "runtime_s": 202.86480630999722,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.3654943661284815,
+        "error_breakdown.sub_ratio": 0.5251451148724452,
+        "hallucination_hit_rate": 0.09090909090909091,
+        "total_inference_time_s": 202.86480630999722
       }
     }
   ],
