@@ -26,6 +26,24 @@ _BACKEND_RE = re.compile(
     re.MULTILINE,
 )
 _PROFILE_RE = re.compile(r"(assets|audio_profile|silero)", re.IGNORECASE)
+# Runtime purity (proposal §9) — **accidental/explicit contamination guard**, NOT
+# a complete anti-cheat (static, so deterministic bypass is possible; holdout is
+# chmod 000 regardless). Deny file/network/dynamic-exec surfaces + sensitive
+# repo paths in candidate code. `re.compile` 은 정당한 postprocess(정규식)라 막지
+# 않고, frozen 의 `load()` 도 허용한다 — eval/exec(코드 동적실행)·open·read_text·
+# os.listdir·glob·subprocess/socket/requests/urllib·data//runs//baseline//judge/·
+# holdout·.git 만 막는다.
+_IO_RE = re.compile(
+    r"\bopen\s*\(|"
+    r"\.read_text\s*\(|\.read_bytes\s*\(|\.write_text\s*\(|\.write_bytes\s*\(|"
+    r"\bos\.(?:listdir|scandir|walk)\b|"
+    r"\b(?:glob|iglob)\s*\(|"
+    r"\bsubprocess\b|\bsocket\b|\brequests\b|\burllib\b|"
+    r"\beval\s*\(|\bexec\s*\(|"
+    r"(?<![\w])(?:data|runs|baseline|judge)/|"
+    r"\bholdout\b|\.git\b",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
@@ -82,6 +100,12 @@ def check_workspace_static(workspace_path: Path) -> str | None:
         return (
             f"static profile: {workspace_path} 에 "
             "assets/audio_profile/silero 직접 참조 검출"
+        )
+    io_hit = _IO_RE.search(text)
+    if io_hit:
+        return (
+            f"static runtime-purity: {workspace_path} 에 금지된 I/O/동적실행 표면 "
+            f"검출 ({io_hit.group(0)!r}) — 평가 중 파일/네트워크 접근 차단"
         )
     return None
 

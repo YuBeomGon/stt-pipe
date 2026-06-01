@@ -74,12 +74,32 @@ _CONST_RE = re.compile(r"\b([A-Z_]{2,})\s*=")
 DEFAULT_FAMILY_THRESHOLD: float = 0.5
 
 
+# 주석/문자열 리터럴 제거용(리뷰 #5): candidate 가 주석/문자열에 키워드를 넣어
+# family/signature 를 흔드는 spoofing 차단. diff fragment 라 AST 는 못 쓰고 정규식으로
+# 보수적으로 제거(삼중따옴표 → 단일/이중 따옴표 → 인라인 주석 순).
+_TRIPLE_STR_RE = re.compile(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'')
+_STR_RE = re.compile(r'"[^"\n]*"|\'[^\'\n]*\'')
+_COMMENT_RE = re.compile(r"#.*")
+
+
+def _strip_comments_strings(text: str) -> str:
+    text = _TRIPLE_STR_RE.sub(" ", text)
+    text = _STR_RE.sub(" ", text)
+    text = _COMMENT_RE.sub(" ", text)
+    return text
+
+
 @dataclass(frozen=True)
 class Features:
     touched_regions: frozenset[str] = field(default_factory=frozenset)
     api_keywords: frozenset[str] = field(default_factory=frozenset)
     changed_params: frozenset[str] = field(default_factory=frozenset)
     stage_tokens: frozenset[str] = field(default_factory=frozenset)
+    # removed(-) 라인의 feature (리뷰 #6): deletion-only / ablate diff 가 region 만
+    # 남아 서로 다른 ablation 이 false-merge 되는 것을 막는다. added 와 별도 namespace.
+    removed_api: frozenset[str] = field(default_factory=frozenset)
+    removed_params: frozenset[str] = field(default_factory=frozenset)
+    removed_stages: frozenset[str] = field(default_factory=frozenset)
 
 
 def feature_tokens(f: Features) -> frozenset[str]:
@@ -89,22 +109,40 @@ def feature_tokens(f: Features) -> frozenset[str]:
         + [f"api:{x}" for x in f.api_keywords]
         + [f"param:{x}" for x in f.changed_params]
         + [f"stage:{x}" for x in f.stage_tokens]
+        + [f"rmapi:{x}" for x in f.removed_api]
+        + [f"rmparam:{x}" for x in f.removed_params]
+        + [f"rmstage:{x}" for x in f.removed_stages]
     )
 
 
-def _added_text(diff_text: str) -> str:
-    """diff 의 추가줄(+)만 모은 본문 (헤더 +++ 제외)."""
+def _changed_text(diff_text: str, sign: str) -> str:
+    """diff 의 +(추가) 또는 -(삭제) 줄만 모은 본문 (헤더 +++/--- 제외)."""
+    header = sign * 3
     lines = []
     for line in diff_text.splitlines():
-        if line.startswith("+++"):
+        if line.startswith(header):
             continue
-        if line.startswith("+"):
+        if line.startswith(sign):
             lines.append(line[1:])
     return "\n".join(lines)
 
 
+def _scan(text: str) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+    """주석/문자열 제거 후 (api_keywords, params, stages) 추출."""
+    code = _strip_comments_strings(text)
+    low = code.lower()
+    api = {kw for kw in _API_VOCAB if kw in low}
+    params: set[str] = set()
+    for line in code.splitlines():
+        params.update(_NUMERIC_PARAM_RE.findall(line))
+        params.update(_CONST_RE.findall(line))
+    stages = {stage for stage, kws in _STAGE_MAP if any(kw in low for kw in kws)}
+    return frozenset(api), frozenset(params), frozenset(stages)
+
+
 def extract_features(diff_text: str, meta: dict | None = None) -> Features:
-    """unified diff 텍스트에서 구조적 feature 를 추출한다. meta 는 현재 미사용
+    """unified diff 텍스트에서 구조적 feature 를 추출한다. 주석/문자열은 제거하고
+    (#5), 추가줄과 삭제줄을 별도 namespace 로 추출한다(#6). meta 는 미사용
     (self-declared 값은 신뢰 기준이 아니므로 grouping 에 넣지 않는다)."""
     regions: set[str] = set()
     for line in diff_text.splitlines():
@@ -115,26 +153,17 @@ def extract_features(diff_text: str, meta: dict | None = None) -> Features:
         if m:
             regions.add(m.group(1))
 
-    added = _added_text(diff_text)
-    added_low = added.lower()
-
-    api = {kw for kw in _API_VOCAB if kw in added_low}
-
-    params: set[str] = set()
-    for line in added.splitlines():
-        params.update(_NUMERIC_PARAM_RE.findall(line))
-        params.update(_CONST_RE.findall(line))
-
-    stages: set[str] = set()
-    for stage, kws in _STAGE_MAP:
-        if any(kw in added_low for kw in kws):
-            stages.add(stage)
+    api, params, stages = _scan(_changed_text(diff_text, "+"))
+    rm_api, rm_params, rm_stages = _scan(_changed_text(diff_text, "-"))
 
     return Features(
         touched_regions=frozenset(regions),
-        api_keywords=frozenset(api),
-        changed_params=frozenset(params),
-        stage_tokens=frozenset(stages),
+        api_keywords=api,
+        changed_params=params,
+        stage_tokens=stages,
+        removed_api=rm_api,
+        removed_params=rm_params,
+        removed_stages=rm_stages,
     )
 
 

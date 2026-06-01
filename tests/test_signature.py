@@ -6,8 +6,6 @@ self-declared family 와 무관하게, diff feature 로 결정적·재현적으�
 
 from __future__ import annotations
 
-import pytest
-
 from harness import signature as sig
 
 
@@ -112,26 +110,20 @@ def test_empty_diff_is_handled() -> None:
     assert is_new
 
 
-# ── 알려진 한계 (Step 5 cooldown 전에 보강) ─────────────────────────────
-# signature 가 hard gate(cooldown)로 쓰이기 전까지는 다양성 지표 품질만 영향.
-# 아래는 의도하는 미래 동작을 xfail(strict)로 고정 — 고쳐지면 자동으로 알림.
+# ── 리뷰 #5/#6 보강 (Step 5 cooldown 전 — signature 가 hard gate 토대) ──────
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="리뷰 #5: signature 가 주석/문자열을 무시해야 함(AST/tokenize). "
-    "현재는 added text substring 매칭이라 주석 키워드도 feature 가 된다. Step 5 전 보강.",
-)
 def test_comment_only_keyword_is_not_a_feature() -> None:
+    # 주석만 바뀌면 feature 0 이어야 spoofing 불가 (#5).
     f = sig.extract_features(_diff(["    # uses temperature fallback and beam_size here"]))
-    assert not f.api_keywords  # 주석만 바뀌면 feature 0 이어야 spoofing 불가
+    assert not f.api_keywords
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="리뷰 #6: deletion-only diff 가 같은 함수면 region 토큰만 남아 서로 다른 "
-    "ablation 이 false-merge 된다. removed 라인도 keyword/param 을 removed:* prefix 로 "
-    "추출해야 한다. Step 5/Step 3(ablate) 전 보강.",
-)
+def test_string_literal_keyword_is_not_a_feature() -> None:
+    # 문자열 리터럴 안의 키워드도 무시 (#5).
+    f = sig.extract_features(_diff(['    note = "use temperature fallback beam_size"']))
+    assert not f.api_keywords
+
+
 def test_deletion_only_diffs_stay_distinct() -> None:
     da = (
         "@@ -1,3 +1,2 @@ def transcribe(audio, sr):\n"

@@ -1109,9 +1109,14 @@ def _format_parents_block(parents: list[dict[str, Any]]) -> str:
     return "\n".join(blocks)
 
 
-def _write_scheduler_sidecar(out_dir: Path, sched, parents: list[dict[str, Any]]) -> None:
-    """mode/parent 결정을 out_dir 에 남긴다 → commit 시점 _persist_decision 이 읽어
-    decisions.jsonl 에 채운다(codex resolution B; self-contained 유지)."""
+def _write_scheduler_sidecar(
+    out_dir: Path,
+    sched,
+    parents: list[dict[str, Any]],
+    active_cooldowns: list[str] | None = None,
+) -> None:
+    """mode/parent/cooldown 결정을 out_dir 에 남긴다 → commit 시점 _persist_decision
+    이 읽어 decisions.jsonl 에 채운다(codex resolution B; self-contained 유지)."""
     try:
         (out_dir / "scheduler_decision.json").write_text(
             json.dumps(
@@ -1126,6 +1131,7 @@ def _write_scheduler_sidecar(out_dir: Path, sched, parents: list[dict[str, Any]]
                         }
                         for p in parents
                     ],
+                    "active_cooldowns": active_cooldowns or [],
                 },
                 ensure_ascii=False,
             ),
@@ -1170,7 +1176,14 @@ def build_candidate_prompt(
     parent_block = _format_parents_block(parents)
     if not parent_block and mode in ("explore", "plateau"):
         parent_block = _format_synthesis_block(_promising_rejects(config, state))
-    synthesis_block = parent_block
+    # Soft cooldown(§8): 반복 실패 family/signature 를 "피하라" 경고로만 노출.
+    # 첫 run 은 hard reject 안 함 — decisions.jsonl 로 오탐 본 뒤 강화.
+    from harness import cooldown as _cd
+
+    cooldown_warning = _cd.warning_block(_cd.compute_cooldowns(_decisions_records(config)))
+    synthesis_block = parent_block + (
+        ("\n\n" + cooldown_warning) if cooldown_warning else ""
+    )
     history = (
         f"(HISTORY suppressed to reduce anchoring. mode={mode}"
         f"{'' if sched.override in (None, 'scheduled') else f' (override={sched.override})'}. "
@@ -1529,6 +1542,7 @@ def _persist_decision(
             "chosen_mode": chosen_mode,
             "override": sched_info.get("override"),
             "parent_shortlist": sched_info.get("parents", []),
+            "active_cooldowns": sched_info.get("active_cooldowns", []),
             "harness_signature": signature,
             "harness_family_id": family_id,
             "self_declared_family_id": self_fam,
@@ -1626,7 +1640,10 @@ def run_iteration(
     sched, parents = _decide_iteration(config, state)
     prompt = build_candidate_prompt(config, state, sched=sched, parents=parents)
     out_dir.mkdir(parents=True, exist_ok=True)
-    _write_scheduler_sidecar(out_dir, sched, parents)
+    from harness import cooldown as _cd
+
+    _cooldowns = _cd.compute_cooldowns(_decisions_records(config)).as_list()
+    _write_scheduler_sidecar(out_dir, sched, parents, active_cooldowns=_cooldowns)
 
     candidate_result: subprocess.CompletedProcess[str] | None = None
     if candidate_func is not None:
