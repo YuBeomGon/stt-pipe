@@ -1,12 +1,18 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Long-form windowing (sequential): Whisper's feature extractor pads/truncates
-every input to a single 30s window, so the stub dropped everything past the
-first 30s of a multi-minute 0715 call (massive deletion regime). We split the
-waveform into consecutive 30s windows and decode them ONE AT A TIME, then
-concatenate the per-window text in order. The earlier batched variant fed all
-windows into a single ``generate()`` call and OOM'd the GPU on long calls;
-sequential decoding caps peak memory at one 30s window.
+Long-form windowing (sequential 30s) recovers the audio past 0:30 that a single
+30s feature window would drop. But every prior iteration decoded each window in
+``<|notimestamps|>`` mode, and on dense multi-utterance audio large-v3 Whisper
+reliably emits EOT *early* in that mode — it transcribes the front of the 30s
+window and stops, so each window is only partially covered. That is the exact
+signature of the dominant failure here (length_ratio 0.65, deletion 80%).
+
+This iteration surfaces the unused **timestamp-decoding** path: dropping
+``<|notimestamps|>`` from the prompt puts the decoder in the regime it was
+trained for, where it emits ``<|t|>`` segment-boundary tokens and keeps
+transcribing to the window end instead of terminating early. We strip those
+timestamp tokens back out before decoding to text. Window stride stays a fixed
+30s so the per-call count (and runtime budget) matches the kept best.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -24,14 +30,21 @@ _WINDOW_SECONDS = 30
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
+    tokenizer = processor.tokenizer
 
     audio = np.asarray(audio).reshape(-1)
     window = int(_WINDOW_SECONDS * sr)
     n_windows = max(1, int(np.ceil(len(audio) / window)))
 
-    prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
-        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
+    # Timestamp-decoding prompt: NO <|notimestamps|>, so the decoder emits
+    # <|t|> boundaries and transcribes the whole window instead of stopping
+    # early at the first EOT (the early-EOT collapse is the coverage loss).
+    prompt_tokens = tokenizer.convert_tokens_to_ids(
+        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
     )
+    # Every token id >= <|0.00|> is a timestamp token; strip them before the
+    # text decode so the predicted boundaries don't leak into the transcript.
+    timestamp_begin = tokenizer.convert_tokens_to_ids("<|0.00|>")
 
     texts = []
     for i in range(n_windows):
@@ -55,6 +68,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
 
         token_ids = results[0].sequences_ids[0]
-        texts.append(processor.tokenizer.decode(token_ids, skip_special_tokens=True))
+        text_ids = [t for t in token_ids if t < timestamp_begin]
+        texts.append(tokenizer.decode(text_ids, skip_special_tokens=True))
 
     return " ".join(t.strip() for t in texts if t.strip())
