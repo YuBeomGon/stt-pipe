@@ -3,7 +3,7 @@
   "iteration": 32,
   "best_cer": 0.16515344265723297,
   "best_hyp_id": "phase3_008_iter_006",
-  "status": "running",
+  "status": "aborted_command_failure",
   "iters_since_best_update": 26,
   "evaluated_count": 27,
   "evaluated_since_best_update": 22
