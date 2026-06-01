@@ -1,6 +1,6 @@
 {
   "job_id": "phase3_007",
-  "updated_at_iter": 33,
+  "updated_at_iter": 34,
   "global_best": "phase3_007_iter_028",
   "family_best": {
     "family_001": {
@@ -525,28 +525,28 @@
       }
     },
     "family_022": {
-      "hyp_id": "phase3_007_iter_033",
-      "iter": 33,
+      "hyp_id": "phase3_007_iter_034",
+      "iter": 34,
       "status": "micro_bank",
-      "cer": 0.2049213181604308,
-      "harness_signature": "sig_155905b6",
+      "cer": 0.18797379014690763,
+      "harness_signature": "sig_d29fe2d3",
       "harness_family_id": "family_022",
       "self_declared_family_id": null,
       "fingerprint": [
-        "startofprev",
-        "prev-text-conditioning",
-        "prompt-prefix",
-        "cross-window-context",
-        "substitution"
+        "combine",
+        "suppress-tokens",
+        "temp-fallback",
+        "salvage-len-guard",
+        "coverage"
       ],
-      "mode": "explore",
-      "diff_path": "runs/phase3_007_iter_033/candidate.diff",
-      "runtime_s": 225.24018446899572,
+      "mode": "combine",
+      "diff_path": "runs/phase3_007_iter_034/candidate.diff",
+      "runtime_s": 249.63366400799714,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.37953907645207924,
-        "error_breakdown.sub_ratio": 0.4740198996513309,
+        "error_breakdown.del_ratio": 0.3700922449357994,
+        "error_breakdown.sub_ratio": 0.4934872294071293,
         "hallucination_hit_rate": 0.18181818181818182,
-        "total_inference_time_s": 225.24018446899572
+        "total_inference_time_s": 249.63366400799714
       }
     }
   },
@@ -1220,6 +1220,31 @@
         "error_breakdown.sub_ratio": 0.4740198996513309,
         "hallucination_hit_rate": 0.18181818181818182,
         "total_inference_time_s": 225.24018446899572
+      }
+    },
+    {
+      "hyp_id": "phase3_007_iter_034",
+      "iter": 34,
+      "status": "micro_bank",
+      "cer": 0.18797379014690763,
+      "harness_signature": "sig_d29fe2d3",
+      "harness_family_id": "family_022",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "combine",
+        "suppress-tokens",
+        "temp-fallback",
+        "salvage-len-guard",
+        "coverage"
+      ],
+      "mode": "combine",
+      "diff_path": "runs/phase3_007_iter_034/candidate.diff",
+      "runtime_s": 249.63366400799714,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.3700922449357994,
+        "error_breakdown.sub_ratio": 0.4934872294071293,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 249.63366400799714
       }
     }
   ],
