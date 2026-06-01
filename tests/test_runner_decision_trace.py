@@ -110,6 +110,39 @@ def test_reject_with_axis_gain_becomes_micro_bank(tmp_path: Path) -> None:
     assert port["global_best"] == "phase3_006_iter_001"  # keep 불변
 
 
+def test_early_reject_preserves_reason_and_attempt_status(tmp_path: Path) -> None:
+    """리뷰 #4: early reject 가 전부 'reject' 로 뭉개지지 않고 실제 원인을 보존.
+    score_report 없는(평가 전) reject 는 reason 으로 attempt_status 가 분류된다."""
+    cfg = RunnerConfig(job_id="phase3_006", repo_root=tmp_path)
+    # iter dir 은 있으나 score_report 없음 (format reject 상황)
+    d = tmp_path / "runs" / "phase3_006_iter_001"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "candidate.diff").write_text("@@ @@\n+    x = 1\n", encoding="utf-8")
+    _persist_decision(
+        cfg, "phase3_006_iter_001", 1, "reject",
+        reason="format reject: missing YAML block",
+    )
+    line = json.loads(
+        (tmp_path / "runs/_summary/phase3_006_decisions.jsonl")
+        .read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert line["evaluated"] is False
+    assert line["attempt_status"] == "format_reject"
+    assert "missing YAML block" in line["decision_reason"]
+
+
+def test_attempt_status_evaluated_when_report_present(tmp_path: Path) -> None:
+    cfg = RunnerConfig(job_id="phase3_006", repo_root=tmp_path)
+    _iter_dir(tmp_path, "phase3_006_iter_001", diff=_DIFF_DECODE, report=_report(0.18))
+    _persist_decision(cfg, "phase3_006_iter_001", 1, "keep")
+    line = json.loads(
+        (tmp_path / "runs/_summary/phase3_006_decisions.jsonl")
+        .read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert line["evaluated"] is True
+    assert line["attempt_status"] == "evaluated"
+
+
 def test_synthetic_abort_hyp_id_skipped(tmp_path: Path) -> None:
     cfg = RunnerConfig(job_id="phase3_006", repo_root=tmp_path)
     # 실제 iter dir 없음 (abort 합성 hyp) → 아무 것도 안 만든다.

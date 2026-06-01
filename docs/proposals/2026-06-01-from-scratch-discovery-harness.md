@@ -629,7 +629,9 @@ harness-derived family/signature 기준으로 계산한다.
 ### 12.1 Decision trace
 
 REPORT 집계의 정본 입력은 `runs/_summary/<job_id>_decisions.jsonl` 로 둔다.
-이 파일은 append-only 이며 evaluated iteration 당 한 줄을 남긴다.
+이 파일은 append-only 이며 **candidate iteration 당 한 줄**을 남긴다 — score_report
+가 나오기 전 early reject(command fail / format reject / scope violation /
+verify fail)도 기록하되 `evaluated=false` 와 `attempt_status` 로 구분한다(리뷰 #4/#9).
 
 목적은 candidate 자기보고와 harness 실제 결정을 분리하는 것이다. `candidate_meta.json`
 은 LLM 이 주장한 family/fingerprint/intent 를 저장하고, `decisions.jsonl` 은 harness 가

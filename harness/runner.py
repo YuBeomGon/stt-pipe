@@ -67,7 +67,7 @@ _PROFILE_PATH = Path("harness/prompts/candidate.md")
 # Operator knobs sourced from harness/config.py (SSOT). Rationale stays here;
 # the values live in one place so a job can be retuned without hunting modules.
 _EXPLORE_RATIO_START = cfg.EXPLORE_RATIO_START   # ~90% explore at the start
-_EXPLORE_RATIO_FLOOR = cfg.EXPLORE_RATIO_FLOOR   # guaranteed ≥20% explore even late
+_EXPLORE_RATIO_FLOOR = cfg.EXPLORE_RATIO_FLOOR   # guaranteed floor explore even late (SSOT: config)
 _EXPLORE_RATIO_DECAY = cfg.EXPLORE_RATIO_DECAY   # ~halves gap above floor every 12-13 iters
 # How many promising rejects to surface (with their diff) in deep-stall mode.
 _PROMISING_REJECT_COUNT = cfg.PROMISING_REJECT_COUNT
@@ -1190,6 +1190,8 @@ def _persist_decision(
     hyp_id: str,
     iteration: int,
     status: str,
+    reason: str | None = None,
+    attempt_status: str | None = None,
 ) -> list[str]:
     """Append a harness decision trace line to runs/_summary/<job>_decisions.jsonl
     and mirror the policy decision into runs/_summary/<job>_portfolio.json
@@ -1305,6 +1307,21 @@ def _persist_decision(
             )
             portfolio.save(portfolio_path)
 
+        # attempt_status (리뷰 #4/#9): early-reject 가 전부 "reject" 로 뭉개지지
+        # 않게 실제 원인 계열을 보존. 명시값 우선, 없으면 reason 으로 분류.
+        if attempt_status is None:
+            if report is not None:
+                attempt_status = "evaluated"
+            else:
+                rl = (reason or "").lower()
+                attempt_status = (
+                    "command_fail" if "command" in rl
+                    else "format_reject" if "format" in rl
+                    else "scope_violation" if "scope" in rl
+                    else "verify_fail" if "verify" in rl
+                    else "unknown"
+                )
+
         record = {
             "iter": iteration,
             "hyp_id": hyp_id,
@@ -1316,7 +1333,9 @@ def _persist_decision(
             "self_declared_family_id": self_fam,
             "feature_tokens": sorted(tokens),
             "final_decision": decision_status,
-            "decision_reason": micro_reason or status,
+            "attempt_status": attempt_status,
+            "evaluated": report is not None,
+            "decision_reason": micro_reason or reason or status,
             "cer": axis_value(report, "corpus_cer") if report else None,
             "axis_metrics": (
                 {key: axis_value(report, key) for _slot, key in AXES} if report else {}
@@ -1345,9 +1364,13 @@ def commit_iteration(
     status: str,
     hyp_id: str,
     iteration: int,
+    reason: str | None = None,
+    attempt_status: str | None = None,
 ) -> None:
     meta_jsonl = _persist_candidate_meta(config, hyp_id, iteration, status)
-    decision_paths = _persist_decision(config, hyp_id, iteration, status)
+    decision_paths = _persist_decision(
+        config, hyp_id, iteration, status, reason=reason, attempt_status=attempt_status
+    )
     paths = [
         config.allowed_path.as_posix(),
         str((config.summary_dir / "HISTORY.md").as_posix()),
@@ -1438,7 +1461,10 @@ def run_iteration(
         )
         state.save(state_path)
         if config.commit_results:
-            commit_iteration(config, state_path, "reject", hyp_id, state.iteration)
+            commit_iteration(
+                config, state_path, "reject", hyp_id, state.iteration,
+                reason=result.reason,
+            )
         return result
 
     # A' format check — candidate must emit a valid YAML metadata block.
@@ -1482,7 +1508,10 @@ def run_iteration(
             )
             state.save(state_path)
             if config.commit_results:
-                commit_iteration(config, state_path, "reject", hyp_id, state.iteration)
+                commit_iteration(
+                config, state_path, "reject", hyp_id, state.iteration,
+                reason=result.reason,
+            )
             return result
 
     statuses = git_status(repo_root)
@@ -1508,7 +1537,10 @@ def run_iteration(
         )
         state.save(state_path)
         if config.commit_results:
-            commit_iteration(config, state_path, "reject", hyp_id, state.iteration)
+            commit_iteration(
+                config, state_path, "reject", hyp_id, state.iteration,
+                reason=result.reason,
+            )
         return result
 
     verifier = verify_func or (
@@ -1555,7 +1587,10 @@ def run_iteration(
         )
         state.save(state_path)
         if config.commit_results:
-            commit_iteration(config, state_path, "reject", hyp_id, state.iteration)
+            commit_iteration(
+                config, state_path, "reject", hyp_id, state.iteration,
+                reason=result.reason,
+            )
         return result
 
     baseline = _read_json(repo_root / config.baseline_file)
@@ -1581,7 +1616,10 @@ def run_iteration(
         )
         state.save(state_path)
         if config.commit_results:
-            commit_iteration(config, state_path, "reject", hyp_id, state.iteration)
+            commit_iteration(
+                config, state_path, "reject", hyp_id, state.iteration,
+                reason=result.reason,
+            )
         return result
 
     decision = decide_candidate(
@@ -1618,7 +1656,10 @@ def run_iteration(
     )
     state.save(state_path)
     if config.commit_results:
-        commit_iteration(config, state_path, decision.status, hyp_id, state.iteration)
+        commit_iteration(
+            config, state_path, decision.status, hyp_id, state.iteration,
+            reason=result.reason,
+        )
     return result
 
 

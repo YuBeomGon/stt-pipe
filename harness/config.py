@@ -32,8 +32,12 @@ BANKING_ABSOLUTE_DELTA: float = 0.002
 # ── Explore / exploit schedule ───────────────────────────────────────
 # explore 비율이 iter 증가에 따라 START→FLOOR 로 지수 감쇠. 후반에도 FLOOR 보장.
 EXPLORE_RATIO_START: float = 0.9    # ~90% explore at the start
-# 0.5 는 phase3_005 후반에 악화 후보만 늘리고 plateau 를 못 깼다(005 회고 #3).
-# scheduler(Step 3) 도입 전 최소 변경으로 0.3 회귀. mode schedule 은 Step 3 에서 대체.
+# 0.5 는 phase3_005 후반에 악화 후보만 늘리고 plateau 를 못 깼다(005 회고 #3) →
+# 0.3 으로 회귀. **주의(리뷰 #7)**: 이것은 visibility 가 아니라 candidate prompt mode
+# 비율을 바꾸는 behavior change(Step 1b policy knob)다. 다음 run 분석에서는
+# "portfolio/logging 추가 효과"와 분리된 **별도 변수**로 해석한다. (revert 하지 않는
+# 이유: 0.5 는 005 가 이미 harmful 로 판정했고, portfolio loop 자체가 큰 behavior
+# change라 어차피 clean A/B 가 아니다.)
 EXPLORE_RATIO_FLOOR: float = 0.3    # guaranteed ≥30% explore even late
 EXPLORE_RATIO_DECAY: float = 18.0   # iters; ~halves gap above floor every 12-13 iters
 

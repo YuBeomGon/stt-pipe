@@ -105,10 +105,16 @@
 
 ## D. 탐색 다양성
 
-### A' candidate self-declared lane / fingerprint (정본)
+> **정본은 위 Portfolio Evolution 섹션**(harness-derived `harness_family_id` /
+> `harness_signature`, proposal §12/§12.1). 아래 D 섹션은 candidate **자기보고**
+> lane/fingerprint 기반 — 토큰 rename 으로 흔들릴 수 있어 **비교/참고용**이다
+> (리뷰 #1). 다양성 판정은 family_count(harness-derived)를 우선한다.
+
+### A' candidate self-declared lane / fingerprint (자기보고, 비교용)
 
 candidate 가 매 iter `candidate_meta.json` 에 직접 선언한 lane / fingerprint
-기반. A' (proposal 2026-05-29-agent-design) 도입 이후의 정본 다양성 신호.
+기반. A' (proposal 2026-05-29-agent-design) 도입 이후의 자기보고 다양성 신호이며,
+harness-derived 정본과 **교차 비교**할 때만 쓴다.
 
 | 자동 채택 lane 분포 (자기 선언) | 채택 수 |
 |------|------|

@@ -18,8 +18,12 @@ from typing import Any
 
 # metric_best 축: (slot 이름, score_report dotted key, "lower better"). proposal §3 +
 # §14 (judge corpus_aggregate 가 실제로 내는 키). 전부 낮을수록 좋음.
+# NOTE(리뷰 #2): del_ratio 단일 축이라 slot 이름을 `best_deletion` 으로 둔다.
+# proposal §3 의 의미상 "coverage" 는 length_ratio.mean 1.0 근접 + audio_coverage_rate
+# 조합이라야 맞고, 그 복합 coverage score 는 parent 선택이 실제로 이 slot 을 쓰는
+# Step 2 에서 별도 정의한다. (Step 1 에서 이 slot 은 적재만 되고 소비되지 않음.)
 AXES: tuple[tuple[str, str], ...] = (
-    ("best_coverage", "error_breakdown.del_ratio"),
+    ("best_deletion", "error_breakdown.del_ratio"),
     ("best_substitution", "error_breakdown.sub_ratio"),
     ("best_low_hallucination", "hallucination_hit_rate"),
     ("fast_runtime_variant", "total_inference_time_s"),
@@ -176,12 +180,14 @@ class Portfolio:
         cer = entry["cer"]
         valid = decision_status in ("keep", "success", "micro_bank")
 
-        # global_best — keep/success 만, CER 최저.
+        # global_best — keep/success 를 그대로 미러링한다(리뷰 #3).
+        # policy.decide_candidate 는 best 대비 개선일 때만 keep 을 내므로(success
+        # 는 target 도달), 최신 keep/success 가 곧 최저 CER 이다 — state.record_best
+        # 와 동일 의미. 직접 CER 비교는 family_best(=family_id keyed)를 hyp_id 로
+        # 조회하던 버그였고, 정책 미러링이 의도이므로 비교를 제거한다.
         if decision_status in ("keep", "success") and cer is not None:
-            cur = self.family_best.get(self.global_best, {}).get("cer") if self.global_best else None
-            if self.global_best is None or cur is None or cer <= cur:
-                self.global_best = hyp_id
-                updated.append("global_best")
+            self.global_best = hyp_id
+            updated.append("global_best")
 
         # family_best — valid 후보, family 별 CER 최저.
         if valid and cer is not None:
