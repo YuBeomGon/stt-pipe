@@ -73,10 +73,19 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         # aimed straight at the dominant deletion/coverage axis — and the beam
         # margin suppresses the greedy repeat loop (the repeated_text file).
         # beam_size=3 (not 5) keeps ~3x decode within the 719.9s budget.
+        # patience>1 deepens beam exploration WITHOUT widening it: with beam=3,
+        # patience=2.0 keeps the beam search running ~2x longer before it
+        # finalizes, so a globally-better hypothesis can overtake a locally-
+        # greedy substitution (the dominant axis: sub 46%, coverage already
+        # healthy at length_ratio 0.93). Unlike beam=5 (iter_012, which
+        # regressed cer 0.2130 / hal 0.36), it does not broaden the beam front
+        # that fed the extra hallucination — it searches the existing width
+        # more thoroughly. The ~174.5s/719.9s parent runtime leaves room.
         results = generate(
             features,
             [prompt_tokens],
             beam_size=3,
+            patience=2.0,
             length_penalty=1.1,
             sampling_temperature=0.0,
         )
