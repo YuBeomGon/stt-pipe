@@ -131,6 +131,26 @@ def test_early_reject_preserves_reason_and_attempt_status(tmp_path: Path) -> Non
     assert "missing YAML block" in line["decision_reason"]
 
 
+def test_judge_crash_classified_as_verify_fail(tmp_path: Path) -> None:
+    """후보 transcribe 가 첫 파일에서 크래시해 judge.evaluate 가 non-zero
+    종료하면 reason='judge.evaluate 종료 코드 비정상' → verify_fail 로 분류.
+    (이전엔 키워드 미스로 unknown 으로 떨어져 repair_event 가 안 잡혔다.)"""
+    cfg = RunnerConfig(job_id="phase3_006", repo_root=tmp_path)
+    d = tmp_path / "runs" / "phase3_006_iter_001"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "candidate.diff").write_text("@@ @@\n+    x = 1\n", encoding="utf-8")
+    _persist_decision(
+        cfg, "phase3_006_iter_001", 1, "reject",
+        reason="judge.evaluate 종료 코드 비정상",
+    )
+    line = json.loads(
+        (tmp_path / "runs/_summary/phase3_006_decisions.jsonl")
+        .read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert line["evaluated"] is False
+    assert line["attempt_status"] == "verify_fail"
+
+
 def test_attempt_status_evaluated_when_report_present(tmp_path: Path) -> None:
     cfg = RunnerConfig(job_id="phase3_006", repo_root=tmp_path)
     _iter_dir(tmp_path, "phase3_006_iter_001", diff=_DIFF_DECODE, report=_report(0.18))

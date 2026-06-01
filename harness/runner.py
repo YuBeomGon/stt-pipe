@@ -1535,11 +1535,17 @@ def _persist_decision(
                 attempt_status = "evaluated"
             else:
                 rl = (reason or "").lower()
+                # judge.evaluate 가 후보 transcribe 크래시로 non-zero 종료하면
+                # reason 이 "judge.evaluate 종료 코드 비정상" 형태로 들어온다.
+                # 이는 평가 단계 실패이므로 verify_fail 계열로 분류해야
+                # repair_event 가 정상 발동한다 (#후속).
                 attempt_status = (
                     "command_fail" if "command" in rl
                     else "format_reject" if "format" in rl
                     else "scope_violation" if "scope" in rl
-                    else "verify_fail" if "verify" in rl
+                    else "verify_fail" if (
+                        "verify" in rl or "judge" in rl or "종료 코드" in rl
+                    )
                     else "unknown"
                 )
 
