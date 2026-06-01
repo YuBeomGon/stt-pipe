@@ -1,5 +1,11 @@
 # Full Code Map — Portfolio Evolution Harness (Step 1~7, TEMP)
 
+> **진행 상태 (2026-06-01)**: Step 1~6 **코드 완료**(테스트 210 green).
+> Step 7(50~100 iter GPU run)은 operator. 남은 후속: cooldown **hard gate**
+> (첫 run 오탐 확인 후 §8), legacy `_iteration_mode`/`_EXPLOIT_DIRECTIVE` cleanup,
+> §5.2 2-call prompt 분리(선택). 본 폴더는 그 후속까지 끝나면 삭제.
+
+
 > proposal `2026-06-01-from-scratch-discovery-harness.md` 전체 구현 지도.
 > Step 1 은 **구현 완료, fix batch pending(미커밋)**. 본 문서는 **Step 2~7**.
 > `docs/_workmap/` 는 임시 — 전체 완료 후 삭제.
