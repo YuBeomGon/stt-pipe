@@ -1064,7 +1064,7 @@ def _scheduler_context(config: RunnerConfig, state: HarnessState, portfolio):
         feasible_refine=feas["refine"],
         feasible_combine=feas["combine"],
         feasible_ablate=feas["ablate"],
-        iters_since_best=state.iters_since_best_update,
+        iters_since_best=state.evaluated_since_best_update,  # evaluated 기준(#2)
         recent_new_family_count=_recent_new_family_count(config),
         repair_event=_last_attempt_status(config) == "verify_fail",
     )
@@ -1102,9 +1102,18 @@ def _format_parents_block(parents: list[dict[str, Any]]) -> str:
     for p in parents:
         cer = p.get("cer")
         cer_s = f"{cer:.4f}" if isinstance(cer, (int, float)) else "n/a"
+        # 각 parent 가 어떤 축에 강한지 보여줘 combine/refine 의 "축 보완"을 가능케
+        # 한다(리뷰 #7). public_summary 가 비면 axis_metric 으로 대체.
+        axis = p.get("axis_metric") or {}
+        axis_s = ", ".join(
+            f"{k.rsplit('.', 1)[-1]}={v:.3f}"
+            for k, v in axis.items()
+            if isinstance(v, (int, float))
+        )
+        summary = p.get("public_summary") or axis_s or "(no axis summary)"
         blocks.append(
             f"\n- family {p.get('harness_family_id', '?')} · cer {cer_s}"
-            f" · {p.get('public_summary', '')}\n```diff\n{p.get('diff', '')}\n```"
+            f" · axes: {axis_s or 'n/a'} · {summary}\n```diff\n{p.get('diff', '')}\n```"
         )
     return "\n".join(blocks)
 
@@ -1893,10 +1902,21 @@ def run_job(config: RunnerConfig) -> HarnessState:
     format_reject_count = 0
     command_fail_streak = 0
     starting_iteration = state.iteration
-    for _ in range(config.iterations):
+    # Budget by EVALUATED iterations, not raw attempts (codex Step2-6 review #1,
+    # proposal §13). `--iters N` ⇒ run until N candidates have been *scored*;
+    # format/command/scope rejects (which never reach verify) don't consume the
+    # budget. A generous attempt cap bounds runaways the abort guards miss.
+    start_evaluated = state.evaluated_count
+    max_attempts = config.iterations * 3 + 10
+    attempts = 0
+    while (
+        state.evaluated_count - start_evaluated < config.iterations
+        and attempts < max_attempts
+    ):
         if state.status == "success":
             break
         result = run_iteration(config, state, state_path)
+        attempts += 1
         if result is not None and result.format_reject:
             format_reject_count += 1
 
@@ -1946,7 +1966,11 @@ def run_job(config: RunnerConfig) -> HarnessState:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the Phase 3 evolution harness.")
     parser.add_argument("--job-id", required=True)
-    parser.add_argument("--iters", type=int, default=1)
+    parser.add_argument(
+        "--iters", type=int, default=1,
+        help="evaluated(=scored) iteration 목표. format/command/scope reject 는 "
+             "예산을 소모하지 않는다(공정 attempt cap = iters*3+10).",
+    )
     parser.add_argument("--candidate-cmd", help='Example: "claude -p"')
     parser.add_argument("--manual", action="store_true",
                         help="Do not generate a candidate; verify current workspace state.")

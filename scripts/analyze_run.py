@@ -938,8 +938,35 @@ def portfolio_evolution_section(decisions_path: Path, portfolio_path: Path) -> s
         or "- decision 분포: n/a",
         f"- **iter_to_0.20 / 0.18 / 0.16**: "
         f"{_iter_to(0.20)} / {_iter_to(0.18)} / {_iter_to(0.16)}",
-        f"- **mode_distribution**: n/a (scheduler 미도입 — Step 3)",
     ]
+
+    # mode_distribution / mode_success / combine_success / portfolio_usage —
+    # decisions.jsonl 의 chosen_mode/final_decision/parent_shortlist 에서 집계
+    # (Step 3 scheduler 결과). chosen_mode 가 없는(legacy) 잡은 n/a.
+    moded = [d for d in decisions if d.get("chosen_mode")]
+    if moded:
+        mode_dist = Counter(d["chosen_mode"] for d in moded)
+        lines.append(
+            "- **mode_distribution**: "
+            + ", ".join(f"{m}={c}" for m, c in sorted(mode_dist.items()))
+        )
+        ok = {"keep", "success", "micro_bank"}
+        succ = []
+        for m in sorted(mode_dist):
+            tot = mode_dist[m]
+            good = sum(
+                1 for d in moded if d["chosen_mode"] == m and d.get("final_decision") in ok
+            )
+            succ.append(f"{m} {good}/{tot}")
+        lines.append("- **mode_success_rate** (keep/micro_bank per mode): " + ", ".join(succ))
+        comb = [d for d in moded if d["chosen_mode"] == "combine"]
+        if comb:
+            cgood = sum(1 for d in comb if d.get("final_decision") in ok)
+            lines.append(f"- **combine_success_rate**: {cgood}/{len(comb)}")
+        usage = sum(1 for d in moded if d.get("parent_shortlist"))
+        lines.append(f"- **portfolio_usage** (parent 재사용 iter): {usage}")
+    else:
+        lines.append("- **mode_distribution**: n/a (chosen_mode 기록 없음 — legacy 잡)")
 
     if fam_best:
         lines.append("")

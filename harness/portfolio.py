@@ -152,7 +152,11 @@ def feasibility(p: "Portfolio") -> dict[str, bool]:
 def parents_for_mode(p: "Portfolio", mode: str) -> list[dict[str, Any]]:
     """mode 별 parent entry 목록(prompt 주입용). MVP 규칙(proposal §4.4):
     refine/ablate=global_best 1개, combine=서로 다른 family 2개. explore/plateau/
-    repair 는 portfolio parent 없음(repair 는 runner 가 실패 iter 에서 잡는다)."""
+    repair 는 portfolio parent 없음(repair 는 runner 가 실패 iter 에서 잡는다).
+
+    **combine 호환성은 distinct-family MVP**: §4.5 의 diff touched-region overlap /
+    same changed-param 충돌 / axis complement 검사는 아직 안 한다 — 서로 다른 family
+    면 후보로 본다. 첫 run 의 combine_success_rate 를 보고 충돌 검사를 추가한다."""
     if mode in ("refine", "ablate"):
         gb = global_best_entry(p)
         return [gb] if gb else []

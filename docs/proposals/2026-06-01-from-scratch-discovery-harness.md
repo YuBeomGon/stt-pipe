@@ -421,6 +421,11 @@ Family A
 
 ## 6. Prompt Steps
 
+> **구현 현황(2026-06-01)**: 현재 구현은 **single-call MVP** 다 — mode directive 와
+> parent diff 를 기존 단일 candidate prompt 에 주입한다(추가 LLM 호출 0). 아래 6.2/6.3
+> 의 2-call(`Ideate+Plan -> Implement`) 분리와 plan/idea/implementation-notes 별도 저장은
+> **후속**(첫 run 의 mode_success 데이터를 본 뒤 도입). 본 절은 목표 설계를 기술한다.
+
 ### 6.1 전체 흐름
 
 ```text

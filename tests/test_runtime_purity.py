@@ -79,6 +79,16 @@ def test_re_compile_not_blocked(tmp_path: Path) -> None:
     assert _check(tmp_path, body) is None
 
 
+def test_comment_mentioning_runs_not_blocked(tmp_path: Path) -> None:
+    # 설명 주석에 runs/ 를 언급해도 막지 않는다 (#10: 주석 제거 후 검사).
+    body = (
+        "def transcribe(a, sr):\n"
+        "    # do not touch runs/ or baseline/ here\n"
+        "    return ''\n"
+    )
+    assert _check(tmp_path, body) is None
+
+
 def test_metadata_path_not_false_positive(tmp_path: Path) -> None:
     # 'metadata/' 는 'data/' 부분일치로 오탐하면 안 된다(word boundary).
     body = "def transcribe(a, sr):\n    label = 'metadata/info'\n    return ''\n"

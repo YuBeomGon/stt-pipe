@@ -300,3 +300,28 @@ def test_handles_no_iterations(tmp_path, monkeypatch):
     text = out.read_text(encoding="utf-8")
     # Empty job → no leftover {{vars}}.
     assert re.findall(r"{{\s*[a-zA-Z_]+\s*}}", text) == []
+
+
+def test_portfolio_section_aggregates_modes(tmp_path) -> None:
+    """portfolio_evolution_section 이 decisions.jsonl 의 chosen_mode/final_decision/
+    parent_shortlist 을 집계한다 (#3 Step 3 scheduler 결과 반영)."""
+    from scripts.analyze_run import portfolio_evolution_section
+
+    dec = tmp_path / "job_decisions.jsonl"
+    rows = [
+        {"iter": 1, "harness_family_id": "family_001", "chosen_mode": "explore",
+         "final_decision": "keep", "cer": 0.19, "parent_shortlist": []},
+        {"iter": 2, "harness_family_id": "family_002", "chosen_mode": "refine",
+         "final_decision": "reject", "cer": 0.20,
+         "parent_shortlist": [{"hyp_id": "job_iter_001"}]},
+        {"iter": 3, "harness_family_id": "family_001", "chosen_mode": "combine",
+         "final_decision": "micro_bank", "cer": 0.188,
+         "parent_shortlist": [{"hyp_id": "a"}, {"hyp_id": "b"}]},
+    ]
+    dec.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    section = portfolio_evolution_section(dec, tmp_path / "job_portfolio.json")
+
+    assert "mode_distribution" in section
+    assert "explore=1" in section and "refine=1" in section and "combine=1" in section
+    assert "combine_success_rate" in section  # combine 1개, micro_bank → 1/1
+    assert "portfolio_usage" in section

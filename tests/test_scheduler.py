@@ -73,6 +73,12 @@ def test_plateau_after_k_no_improvement() -> None:
     assert d.override == "plateau"
 
 
+def test_plateau_uses_evaluated_not_attempt_count() -> None:
+    # iters_since_best 는 evaluated 기준 값이 들어와야 한다(#2). 7 < K → plateau 아님.
+    d = sch.decide_mode(20, 50, _ctx(iters_since_best=sch.PLATEAU_K - 1))
+    assert d.override != "plateau"
+
+
 def test_stall_beats_plateau() -> None:
     # 둘 다 참이면 precedence 상 diversity_stall(3) > plateau(4)
     d = sch.decide_mode(20, 50, _ctx(recent_new_family_count=0, iters_since_best=99))

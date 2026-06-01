@@ -638,6 +638,45 @@ def test_run_iteration_format_reject_when_no_yaml(tmp_path: Path) -> None:
     ).is_file()
 
 
+def test_run_job_budgets_by_evaluated_count(tmp_path: Path, monkeypatch) -> None:
+    """--iters 는 evaluated(scored) 예산이다(#1): 평가된 후보가 iters 개가 될
+    때까지만 돈다. 모두 평가되면 정확히 iters 번."""
+    from types import SimpleNamespace
+
+    _init_repo(tmp_path)
+    config = RunnerConfig(job_id="job", repo_root=tmp_path, iterations=3)
+    calls = {"n": 0}
+
+    def fake(cfg, state, state_path):
+        calls["n"] += 1
+        state.advance()
+        state.record_evaluated()
+        return SimpleNamespace(format_reject=False, command_failed=False)
+
+    monkeypatch.setattr("harness.runner.run_iteration", fake)
+    state = run_job(config)
+    assert state.evaluated_count == 3
+    assert calls["n"] == 3
+
+
+def test_run_job_attempt_cap_bounds_unevaluated_loop(tmp_path: Path, monkeypatch) -> None:
+    """평가가 전혀 안 되도(무한 reject) attempt cap = iters*3+10 에서 멈춘다(#1)."""
+    from types import SimpleNamespace
+
+    _init_repo(tmp_path)
+    config = RunnerConfig(job_id="job", repo_root=tmp_path, iterations=2)
+    calls = {"n": 0}
+
+    def fake(cfg, state, state_path):
+        calls["n"] += 1
+        state.advance()  # 평가 없음 → evaluated_count 안 오름
+        return SimpleNamespace(format_reject=False, command_failed=False)
+
+    monkeypatch.setattr("harness.runner.run_iteration", fake)
+    run_job(config)
+    assert calls["n"] == config.iterations * 3 + 10  # 16
+
+
 def test_run_job_aborts_after_4_of_5_format_rejects(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1407,6 +1446,7 @@ def test_plateau_mode_injects_promising_rejects(tmp_path: Path) -> None:
     state = HarnessState(
         job_id="job", iteration=40, best_hyp_id="job_iter_001",
         best_cer=0.157, iters_since_best_update=20, evaluated_count=20,
+        evaluated_since_best_update=20,  # plateau 는 evaluated 기준(#2)
     )
     prompt = build_candidate_prompt(config, state)  # sched=None → 내부 결정
     assert "PLATEAU MODE" in prompt

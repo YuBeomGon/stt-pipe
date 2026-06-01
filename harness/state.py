@@ -31,6 +31,11 @@ class HarnessState:
     # of format-rejects doesn't skip ahead in the mode rotation (codex review A,
     # proposal §4.2). Defaults to 0 → old state files load unchanged.
     evaluated_count: int = 0
+    # Like iters_since_best_update but counted in EVALUATED iters only (not raw
+    # attempts) — drives the scheduler's plateau override so a burst of
+    # format/command/scope rejects doesn't spuriously read as "no improvement"
+    # (codex Step2-6 review #2, proposal §4 "evaluated iteration 기준").
+    evaluated_since_best_update: int = 0
 
     @classmethod
     def load(cls, path: Path) -> "HarnessState":
@@ -58,8 +63,10 @@ class HarnessState:
         self.best_hyp_id = hyp_id
         self.best_cer = corpus_cer
         self.iters_since_best_update = 0
+        self.evaluated_since_best_update = 0
 
     def record_evaluated(self) -> None:
         """Mark that this attempt reached verify and was scored. Called on the
         evaluated path only (not format/command/scope/verify-fail rejects)."""
         self.evaluated_count += 1
+        self.evaluated_since_best_update += 1

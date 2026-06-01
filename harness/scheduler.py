@@ -103,13 +103,18 @@ def _fallback(ctx: SchedulerContext) -> str:
 
 
 def decide_mode(evaluated_index: int, total: int, ctx: SchedulerContext) -> SchedulerDecision:
-    """base schedule + override precedence(codex fix 표). 첫 매칭 우선:
+    """base schedule + override precedence. 첫 매칭 우선:
     1 no_best → explore
     2 repair_event → repair
     3 diversity_stall(recent_new_family==0) → explore
     4 plateau(iters_since_best>=K) → plateau
     5 base feasible → base
     6 else → feasible fallback
+
+    **MVP 범위**: proposal §4.3 의 opportunity override(micro→refine, axis-complement
+    →combine, complex→ablate, metric_best reuse) 와 cooldown-in-precedence 는 아직
+    미구현 — 그 분배는 base schedule 의 비율이 대신한다. 첫 run 데이터로 필요성을 본
+    뒤 추가한다.
     """
     scheduled = base_mode(evaluated_index, total)
 

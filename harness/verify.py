@@ -33,6 +33,7 @@ _PROFILE_RE = re.compile(r"(assets|audio_profile|silero)", re.IGNORECASE)
 # 않고, frozen 의 `load()` 도 허용한다 — eval/exec(코드 동적실행)·open·read_text·
 # os.listdir·glob·subprocess/socket/requests/urllib·data//runs//baseline//judge/·
 # holdout·.git 만 막는다.
+_COMMENT_RE = re.compile(r"#.*")
 _IO_RE = re.compile(
     r"\bopen\s*\(|"
     r"\.read_text\s*\(|\.read_bytes\s*\(|\.write_text\s*\(|\.write_bytes\s*\(|"
@@ -101,7 +102,11 @@ def check_workspace_static(workspace_path: Path) -> str | None:
             f"static profile: {workspace_path} 에 "
             "assets/audio_profile/silero 직접 참조 검출"
         )
-    io_hit = _IO_RE.search(text)
+    # 주석은 제거 후 검사 — 설명 주석의 `runs/` 같은 단어를 오탐하지 않도록(리뷰
+    # #10). 문자열 리터럴은 유지한다: `open('baseline/x')` 처럼 민감 경로를 실제로
+    # 가리키는 문자열은 contamination 신호라 잡아야 한다. 실제 호출(`open(`/`exec(`)도
+    # 코드라 그대로 남는다.
+    io_hit = _IO_RE.search(_COMMENT_RE.sub(" ", text))
     if io_hit:
         return (
             f"static runtime-purity: {workspace_path} 에 금지된 I/O/동적실행 표면 "
