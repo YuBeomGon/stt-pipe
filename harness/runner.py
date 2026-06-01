@@ -923,15 +923,24 @@ def parse_candidate_metadata(
 _EXPLORE_DIRECTIVE = """\
 === EXPLORE MODE ===
 This iteration is an EXPLORATION slot (the job runs explore-heavy early and
-keeps a guaranteed floor of exploration throughout). Goal: SURFACE a backend
-mechanism not yet used. The fingerprint table and findings ledger below record
-what has already been probed — investigate something they do NOT cover. A new
-*value* of a knob already tried (beam 5→6, another temperature) is NOT
-exploration; an unused capability of the surface IS. The mechanism is not named
-for you — find it in frozen.asr_backend, in what `load()` returns, and in what
-the decode call accepts/returns. Let the error profile's DOMINANT AXIS point you
-at which kind of capability would help. The "one focused change / no refactor"
-rule is relaxed when a structurally new mechanism justifies it.
+keeps a guaranteed floor of exploration throughout).
+
+The obvious parameter tweaks (beam size, temperature scalar, penalties) are
+exhausted. The remaining headroom is in capabilities of the backend you have
+**not yet discovered or used**: things the decode call can return that you are
+currently throwing away, methods on the returned object you have never called,
+inputs you have never conditioned on. You are **not told what those are**.
+Finding them — by reading the backend, recalling the underlying library's API,
+and reasoning from the diagnosis — is the work.
+
+The fingerprint table and findings ledger below record what has already been
+probed — investigate something they do NOT cover. A new *value* of a knob
+already tried (beam 5→6, another temperature) is NOT exploration; an unused
+capability of the surface IS. Find it in frozen.asr_backend, in what `load()`
+returns, and in what the decode call accepts/returns. Let the error profile's
+DOMINANT AXIS point you at which kind of capability would help. The "one focused
+change / no refactor" rule is relaxed when a structurally new mechanism
+justifies it.
 === END EXPLORE MODE ==="""
 
 
@@ -1002,11 +1011,15 @@ failed.
 
 _PLATEAU_DIRECTIVE = """\
 === PLATEAU MODE ===
-No improvement for several evaluated iters. A "new knob value" will not break
-this — you need a different KIND of move. AVOID the recently-failed families
-shown in the ledger/recent table. Either compose two different axis-improving
-prior attempts, or investigate a backend capability not yet touched. Structural
-novelty is encouraged here.
+No improvement for several evaluated iters — a "new knob value" will not break
+this. You need a different KIND of move: COMPOSE. TWO parent candidates from
+different algorithm families are given below with their diffs (a rotating pair,
+so consecutive plateau slots try different compositions). Graft the
+axis-improving part of BOTH into one pipeline so their strengths combine, and
+guard the axis each one regressed — their code is given, do not re-derive from
+prose. AVOID the recently-failed families shown in the ledger/recent table.
+If no parents are shown (too few families yet), instead investigate a backend
+capability not yet touched — structural novelty, not another knob value.
 === END PLATEAU MODE ==="""
 
 _MODE_DIRECTIVES = {
@@ -1608,10 +1621,12 @@ def _persist_decision(
         # refine/ablate/repair/combine 이 best 의 다른 영역을 건드릴 때마다 새 family
         # 로 갈라져 과granular 해진다(관측: 36 iter 에 23 family — 파생 ~10 개가 스퓨리어스).
         # "구조적 신규성" 판정은 LLM/불안정 휴리스틱을 요구하므로 조건을 두지 않는다.
-        # explore/plateau(=신규 탐색, parent 없음)만 시그니처로 family 를 새로 만든다.
-        # combine 은 parents[0](=우세=낮은 cer) 의 family 를 상속한다.
+        # explore(=신규 탐색, parent 없음)만 시그니처로 family 를 새로 만든다.
+        # combine/plateau 은 parents[0](=우세=낮은 cer) 의 family 를 상속한다. plateau
+        # 는 이제 부모 2개를 받아 조합하므로(부모 있으면) 새 family 를 찍지 않는다 —
+        # 부모가 없으면(family<2) parent_fam=None 이라 explore 처럼 새 family 가 된다.
         # 시그니처(signature)는 dedup/cooldown 용으로 그대로 계산·기록한다.
-        if chosen_mode in ("refine", "ablate", "repair", "combine"):
+        if chosen_mode in ("refine", "ablate", "repair", "combine", "plateau"):
             parent_fam = next(
                 (
                     p.get("harness_family_id")

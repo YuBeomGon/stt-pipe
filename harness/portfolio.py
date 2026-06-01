@@ -194,19 +194,23 @@ def parents_for_mode(
         if not pool:
             return []
         return [pool[evaluated_index % len(pool)]]
-    if mode == "combine":
-        # 서로 다른 family 에서 cer 낮은 순 2개 (MVP compatible: family 상이).
+    if mode in ("combine", "plateau"):
+        # 서로 다른 family 의 best 를 cer 낮은 순으로. combine 은 최강 2개를 고정으로
+        # 조합하고, plateau 는 evaluated_index 로 페어를 회전해 연속 plateau 가 같은
+        # 조합만 반복하지 않게 한다(rut 탈출 — proposal §4.3).
         by_family: dict[str, dict[str, Any]] = {}
-        for e in sorted(
-            _all_entries(p),
-            key=lambda x: (x.get("cer") if isinstance(x.get("cer"), (int, float)) else 9e9),
-        ):
+        for e in _ranked_pool(p):
             fid = e.get("harness_family_id")
             if fid and fid not in by_family:
                 by_family[fid] = e
-            if len(by_family) >= 2:
-                break
-        return list(by_family.values())[:2] if len(by_family) >= 2 else []
+        fams = list(by_family.values())  # cer 오름차순
+        if len(fams) < 2:
+            return []
+        if mode == "combine":
+            return fams[:2]
+        start = evaluated_index % len(fams)
+        second = (start + 1) % len(fams)
+        return [fams[start], fams[second]]
     return []
 
 

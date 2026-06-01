@@ -266,3 +266,36 @@ def test_parents_refine_single_entry_is_global_best() -> None:
     for i in range(3):
         got = pf.parents_for_mode(p, "refine", evaluated_index=i)
         assert len(got) == 1 and got[0]["hyp_id"] == "j_iter_001"
+
+
+def test_parents_plateau_composes_two_distinct_families() -> None:
+    # plateau 는 combine 처럼 서로 다른 family 부모 2개를 받아 "조합"을 실행한다.
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.10)
+    _reject(p, "j_iter_002", 2, "family_002", 0.11, _report(0.10))
+    parents = pf.parents_for_mode(p, "plateau")
+    assert len(parents) == 2
+    assert {e["harness_family_id"] for e in parents} == {"family_001", "family_002"}
+
+
+def test_parents_plateau_rotates_pair_over_iters() -> None:
+    # 연속 plateau 가 같은 페어만 반복하지 않게 evaluated_index 로 회전한다.
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.10)
+    _reject(p, "j_iter_002", 2, "family_002", 0.11, _report(0.10))
+    _reject(p, "j_iter_003", 3, "family_003", 0.115, _report(0.10))
+    pairs = {
+        frozenset(
+            e["harness_family_id"]
+            for e in pf.parents_for_mode(p, "plateau", evaluated_index=i)
+        )
+        for i in range(3)
+    }
+    assert len(pairs) >= 2  # 서로 다른 페어가 시도됨
+
+
+def test_parents_plateau_empty_when_under_two_families() -> None:
+    # family 가 하나뿐이면 조합 불가 → [] (runner 가 synthesis 로 폴백).
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.18)
+    assert pf.parents_for_mode(p, "plateau") == []
