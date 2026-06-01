@@ -152,6 +152,29 @@ def jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     return len(a & b) / len(union)
 
 
+def assign_family_tokens(
+    tokens: frozenset[str],
+    known_tokens: dict[str, frozenset[str]],
+    threshold: float = DEFAULT_FAMILY_THRESHOLD,
+) -> tuple[str, bool]:
+    """token 집합을 기존 family 의 대표 token 집합과 Jaccard 비교해 배정/신규.
+
+    resume-safe: caller 가 decisions.jsonl 에 저장한 feature_tokens 로
+    `known_tokens` 를 재구성해 넘기면, 프로세스가 재시작해도 family 번호가
+    일관되게 이어진다. 새 id 는 `family_{N+1:03d}`. 동률은 정렬 첫 family.
+    """
+    best_fid: str | None = None
+    best_j = 0.0
+    for fid in sorted(known_tokens):
+        j = jaccard(tokens, known_tokens[fid])
+        if j > best_j:
+            best_j = j
+            best_fid = fid
+    if best_fid is not None and best_j >= threshold:
+        return best_fid, False
+    return f"family_{len(known_tokens) + 1:03d}", True
+
+
 def assign_family(
     features: Features,
     known: dict[str, Features],
@@ -162,14 +185,8 @@ def assign_family(
     `known` 은 {family_id: 대표 Features}. 반환 (family_id, is_new). 새 id 는
     `family_{N+1:03d}` (결정적). 동률은 정렬된 family_id 중 첫 번째를 택해 재현성 유지.
     """
-    tokens = feature_tokens(features)
-    best_fid: str | None = None
-    best_j = 0.0
-    for fid in sorted(known):
-        j = jaccard(tokens, feature_tokens(known[fid]))
-        if j > best_j:
-            best_j = j
-            best_fid = fid
-    if best_fid is not None and best_j >= threshold:
-        return best_fid, False
-    return f"family_{len(known) + 1:03d}", True
+    return assign_family_tokens(
+        feature_tokens(features),
+        {fid: feature_tokens(kf) for fid, kf in known.items()},
+        threshold,
+    )

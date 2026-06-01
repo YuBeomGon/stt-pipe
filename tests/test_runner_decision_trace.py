@@ -1,0 +1,118 @@
+"""``harness.runner._persist_decision`` — Step 1 decision trace 배선.
+
+candidate.diff + score_report.json 이 있는 iter dir 에서 decisions.jsonl 과
+portfolio.json 이 만들어지고, reject 라도 축 개선이면 micro_bank 로 보존되는지 고정.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from harness.runner import RunnerConfig, _persist_decision
+
+
+def _iter_dir(repo: Path, hyp_id: str, *, diff: str, report: dict) -> None:
+    d = repo / "runs" / hyp_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "candidate.diff").write_text(diff, encoding="utf-8")
+    (d / "score_report.json").write_text(json.dumps(report), encoding="utf-8")
+
+
+_DIFF_DECODE = (
+    "diff --git a/workspace/transcribe.py b/workspace/transcribe.py\n"
+    "@@ -1,1 +1,2 @@ def transcribe(audio, sr):\n"
+    "+    results = generate(features, beam_size=5, patience=2.0)\n"
+)
+_DIFF_AUDIO = (
+    "diff --git a/workspace/transcribe.py b/workspace/transcribe.py\n"
+    "@@ -1,1 +1,2 @@ def transcribe(audio, sr):\n"
+    "+    audio = preemphasis(channel_eq(audio))\n"
+)
+
+
+def _report(cer, sub=0.3, dele=0.3, hall=0.1, rt=400.0):
+    return {
+        "corpus_cer": cer,
+        "error_breakdown": {"sub_ratio": sub, "del_ratio": dele, "ins_ratio": 0.1},
+        "hallucination_hit_rate": hall,
+        "total_inference_time_s": rt,
+    }
+
+
+def test_decision_trace_and_portfolio_written(tmp_path: Path) -> None:
+    cfg = RunnerConfig(job_id="phase3_006", repo_root=tmp_path)
+    _iter_dir(tmp_path, "phase3_006_iter_001", diff=_DIFF_DECODE, report=_report(0.18))
+    staged = _persist_decision(cfg, "phase3_006_iter_001", 1, "keep")
+
+    dec = tmp_path / "runs/_summary/phase3_006_decisions.jsonl"
+    port = tmp_path / "runs/_summary/phase3_006_portfolio.json"
+    assert dec.is_file() and port.is_file()
+    assert any("decisions.jsonl" in p for p in staged)
+
+    line = json.loads(dec.read_text(encoding="utf-8").splitlines()[0])
+    assert line["harness_family_id"].startswith("family_")
+    assert line["harness_signature"].startswith("sig_")
+    assert line["final_decision"] == "keep"
+    assert line["cer"] == 0.18
+    assert "global_best" in line["portfolio_slots_updated"]
+
+    p = json.loads(port.read_text(encoding="utf-8"))
+    assert p["global_best"] == "phase3_006_iter_001"
+
+
+def test_family_numbering_stable_across_calls(tmp_path: Path) -> None:
+    cfg = RunnerConfig(job_id="phase3_006", repo_root=tmp_path)
+    # decode 계열 두 번(값만 다름) → 같은 family. audio 계열 → 새 family.
+    _iter_dir(tmp_path, "phase3_006_iter_001", diff=_DIFF_DECODE, report=_report(0.18))
+    _persist_decision(cfg, "phase3_006_iter_001", 1, "keep")
+    _iter_dir(
+        tmp_path,
+        "phase3_006_iter_002",
+        diff=_DIFF_DECODE.replace("beam_size=5", "beam_size=8"),
+        report=_report(0.19),
+    )
+    _persist_decision(cfg, "phase3_006_iter_002", 2, "reject")
+    _iter_dir(tmp_path, "phase3_006_iter_003", diff=_DIFF_AUDIO, report=_report(0.20))
+    _persist_decision(cfg, "phase3_006_iter_003", 3, "reject")
+
+    dec = tmp_path / "runs/_summary/phase3_006_decisions.jsonl"
+    fams = [
+        json.loads(l)["harness_family_id"]
+        for l in dec.read_text(encoding="utf-8").splitlines()
+    ]
+    assert fams[0] == fams[1]            # decode 계열 동일 family
+    assert fams[2] != fams[0]            # audio 는 새 family
+    # 다양성 상한 추정치: distinct family 2개
+    assert len(set(fams)) == 2
+
+
+def test_reject_with_axis_gain_becomes_micro_bank(tmp_path: Path) -> None:
+    cfg = RunnerConfig(job_id="phase3_006", repo_root=tmp_path)
+    _iter_dir(
+        tmp_path, "phase3_006_iter_001", diff=_DIFF_DECODE, report=_report(0.18, sub=0.30)
+    )
+    _persist_decision(cfg, "phase3_006_iter_001", 1, "keep")  # global best
+    # CER 더 나쁘지만 sub 개선 → policy 는 reject, harness 는 micro_bank 보존.
+    _iter_dir(
+        tmp_path, "phase3_006_iter_002", diff=_DIFF_AUDIO, report=_report(0.20, sub=0.20)
+    )
+    _persist_decision(cfg, "phase3_006_iter_002", 2, "reject")
+
+    dec = tmp_path / "runs/_summary/phase3_006_decisions.jsonl"
+    line2 = json.loads(dec.read_text(encoding="utf-8").splitlines()[1])
+    assert line2["final_decision"] == "micro_bank"
+
+    port = json.loads(
+        (tmp_path / "runs/_summary/phase3_006_portfolio.json").read_text(encoding="utf-8")
+    )
+    assert len(port["micro_bank"]) == 1
+    assert port["global_best"] == "phase3_006_iter_001"  # keep 불변
+
+
+def test_synthetic_abort_hyp_id_skipped(tmp_path: Path) -> None:
+    cfg = RunnerConfig(job_id="phase3_006", repo_root=tmp_path)
+    # 실제 iter dir 없음 (abort 합성 hyp) → 아무 것도 안 만든다.
+    staged = _persist_decision(cfg, "command_failure", 5, "abort")
+    assert staged == []
+    assert not (tmp_path / "runs/_summary/phase3_006_decisions.jsonl").exists()

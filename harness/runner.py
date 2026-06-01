@@ -1185,6 +1185,160 @@ def _persist_candidate_meta(
     return jsonl
 
 
+def _persist_decision(
+    config: RunnerConfig,
+    hyp_id: str,
+    iteration: int,
+    status: str,
+) -> list[str]:
+    """Append a harness decision trace line to runs/_summary/<job>_decisions.jsonl
+    and mirror the policy decision into runs/_summary/<job>_portfolio.json
+    (proposal §3/§5/§12.1). Returns repo-relative paths to stage.
+
+    Step 1 is purely additive: keep/reject is decided upstream by
+    ``policy.decide_candidate`` — here we only record the harness-derived
+    signature/family, axis metrics, and (for rejects) whether the candidate is
+    worth banking as micro-material. State is reloaded from disk so the call is
+    self-contained and resume-safe (no threading through run_iteration). Best
+    effort — never raises into the commit path. Synthetic abort hyp_ids (no real
+    iter dir) are skipped.
+    """
+    try:
+        from harness import signature as sig
+        from harness.portfolio import AXES, Portfolio, axis_value, is_micro_bank
+
+        repo_root = config.repo_root.resolve()
+        out_dir = repo_root / config.runs_dir / hyp_id
+        if not out_dir.is_dir():
+            return []  # abort/synthetic — nothing to record
+        decisions_path = (
+            repo_root / config.summary_dir / f"{config.job_id}_decisions.jsonl"
+        )
+        portfolio_path = (
+            repo_root / config.summary_dir / f"{config.job_id}_portfolio.json"
+        )
+
+        diff_text = ""
+        diff_file = out_dir / "candidate.diff"
+        if diff_file.is_file():
+            diff_text = diff_file.read_text(encoding="utf-8")
+        feats = sig.extract_features(diff_text)
+        tokens = sig.feature_tokens(feats)
+        signature = sig.compute_signature(feats)
+
+        # Rebuild known families from the durable trace so family numbering is
+        # stable across a resume (proposal §5.3 / §12.1).
+        known_tokens: dict[str, frozenset[str]] = {}
+        if decisions_path.is_file():
+            for line in decisions_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                fid = rec.get("harness_family_id")
+                ft = rec.get("feature_tokens")
+                if fid and ft is not None and fid not in known_tokens:
+                    known_tokens[fid] = frozenset(ft)
+        family_id, _is_new = sig.assign_family_tokens(tokens, known_tokens)
+
+        report: dict[str, Any] | None = None
+        score_path = out_dir / "score_report.json"
+        if score_path.is_file():
+            try:
+                report = json.loads(score_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                report = None
+
+        self_fam: str | None = None
+        fingerprint: list[str] | None = None
+        meta_path = out_dir / "candidate_meta.json"
+        if meta_path.is_file():
+            try:
+                m = json.loads(meta_path.read_text(encoding="utf-8"))
+                self_fam = m.get("family_id") or m.get("lane")
+                fp = m.get("fingerprint")
+                if isinstance(fp, list):
+                    fingerprint = fp
+            except json.JSONDecodeError:
+                pass
+
+        portfolio = Portfolio.load(portfolio_path)
+        portfolio.job_id = config.job_id
+        best_report: dict[str, Any] | None = None
+        if portfolio.global_best:
+            best_sr = (
+                repo_root / config.runs_dir / portfolio.global_best / "score_report.json"
+            )
+            if best_sr.is_file():
+                try:
+                    best_report = json.loads(best_sr.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    best_report = None
+
+        # keep/success/reject 는 정책 그대로. reject 만 micro_bank 재료인지 검사.
+        decision_status = status
+        micro_reason: str | None = None
+        if status == "reject" and report is not None:
+            banked, micro_reason = is_micro_bank(
+                report, best_report, config.absolute_delta_fallback
+            )
+            if banked:
+                decision_status = "micro_bank"
+
+        updated: list[str] = []
+        if report is not None:
+            updated = portfolio.update(
+                hyp_id=hyp_id,
+                iteration=iteration,
+                decision_status=decision_status,
+                report=report,
+                best_report=best_report,
+                harness_signature=signature,
+                harness_family_id=family_id,
+                self_declared_family_id=self_fam,
+                fingerprint=fingerprint,
+                mode=None,  # Step 3 scheduler 전까지 mode 없음
+                diff_path=(config.runs_dir / hyp_id / "candidate.diff").as_posix(),
+            )
+            portfolio.save(portfolio_path)
+
+        record = {
+            "iter": iteration,
+            "hyp_id": hyp_id,
+            "policy_version": "portfolio_v1",
+            "scheduled_mode": None,  # Step 3 에서 채움
+            "chosen_mode": None,
+            "harness_signature": signature,
+            "harness_family_id": family_id,
+            "self_declared_family_id": self_fam,
+            "feature_tokens": sorted(tokens),
+            "final_decision": decision_status,
+            "decision_reason": micro_reason or status,
+            "cer": axis_value(report, "corpus_cer") if report else None,
+            "axis_metrics": (
+                {key: axis_value(report, key) for _slot, key in AXES} if report else {}
+            ),
+            "portfolio_slots_updated": updated,
+        }
+        decisions_path.parent.mkdir(parents=True, exist_ok=True)
+        with decisions_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        staged: list[str] = []
+        for p in (decisions_path, portfolio_path):
+            if p.is_file():
+                try:
+                    staged.append(p.resolve().relative_to(repo_root).as_posix())
+                except ValueError:
+                    staged.append(str(p))
+        return staged
+    except Exception:
+        return []  # never break the commit path
+
+
 def commit_iteration(
     config: RunnerConfig,
     state_path: Path,
@@ -1193,9 +1347,11 @@ def commit_iteration(
     iteration: int,
 ) -> None:
     meta_jsonl = _persist_candidate_meta(config, hyp_id, iteration, status)
+    decision_paths = _persist_decision(config, hyp_id, iteration, status)
     paths = [
         config.allowed_path.as_posix(),
         str((config.summary_dir / "HISTORY.md").as_posix()),
+        *decision_paths,
     ]
     if meta_jsonl is not None:
         try:
