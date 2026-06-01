@@ -2081,3 +2081,15 @@ not enough improvement: Δcer -0.007973 < 0.002000
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 30 · phase3_008_iter_030 · cer=NA (ΔNA) · reject
+
+### 관찰
+score_report 없음
+candidate command exit=1
+
+### 분석
+candidate command 실패
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
