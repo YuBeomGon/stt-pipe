@@ -1,7 +1,7 @@
 {
   "job_id": "phase3_007",
-  "updated_at_iter": 17,
-  "global_best": "phase3_007_iter_016",
+  "updated_at_iter": 18,
+  "global_best": "phase3_007_iter_018",
   "family_best": {
     "family_001": {
       "hyp_id": "phase3_007_iter_002",
@@ -254,28 +254,27 @@
       }
     },
     "family_011": {
-      "hyp_id": "phase3_007_iter_016",
-      "iter": 16,
+      "hyp_id": "phase3_007_iter_018",
+      "iter": 18,
       "status": "keep",
-      "cer": 0.1960685220361431,
-      "harness_signature": "sig_266d07ed",
+      "cer": 0.19318439259013995,
+      "harness_signature": "sig_3bf10b4c",
       "harness_family_id": "family_011",
       "self_declared_family_id": null,
       "fingerprint": [
-        "patience",
-        "beam-search",
+        "patience-deepen",
+        "refine",
         "substitution",
-        "search-depth",
         "decode-tune"
       ],
       "mode": "refine",
-      "diff_path": "runs/phase3_007_iter_016/candidate.diff",
-      "runtime_s": 189.7567346460055,
+      "diff_path": "runs/phase3_007_iter_018/candidate.diff",
+      "runtime_s": 207.89340620599978,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.3714336503421918,
-        "error_breakdown.sub_ratio": 0.4974668918318372,
-        "hallucination_hit_rate": 0.2727272727272727,
-        "total_inference_time_s": 189.7567346460055
+        "error_breakdown.del_ratio": 0.3640792025619052,
+        "error_breakdown.sub_ratio": 0.48640115466149475,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 207.89340620599978
       }
     },
     "family_012": {
