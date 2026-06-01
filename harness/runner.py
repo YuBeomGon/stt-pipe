@@ -952,7 +952,195 @@ the change. Exploiting what you found beats inventing something new in this slot
 === END EXPLOIT MODE ==="""
 
 
-def build_candidate_prompt(config: RunnerConfig, state: HarnessState) -> str:
+_REFINE_DIRECTIVE = """\
+=== REFINE MODE ===
+This is a REFINEMENT slot. A promising parent pipeline is given below ("Parent
+candidate(s) to build on") with its actual diff. Do NOT invent a new mechanism —
+take that parent as your starting point and TUNE it: decode params (beam_size,
+temperature/fallback schedule, length/repetition penalty, patience), thresholds,
+or a small policy detail. Aim the tuning at the DOMINANT AXIS in the error
+profile. One focused change on top of the parent.
+=== END REFINE MODE ==="""
+
+_COMBINE_DIRECTIVE = """\
+=== COMBINE MODE ===
+This is a COMBINE slot. TWO parent candidates from different algorithm families
+are given below with their diffs, each strong on a different error axis. Graft
+the axis-improving part of BOTH into one pipeline so their strengths compose,
+and guard the axis each one regressed. Do not re-derive them from prose — their
+code is given. The "one focused change" rule is relaxed for a genuine merge.
+=== END COMBINE MODE ==="""
+
+_ABLATE_DIRECTIVE = """\
+=== ABLATE MODE ===
+This is an ABLATION slot. The parent below works but may carry complexity that
+does not pay for itself. REMOVE one part (a step, a guard, a parameter override)
+and keep CER from regressing — a simpler pipeline at equal/better CER is a win
+(faster, more robust). Make the single removal and report what you dropped.
+=== END ABLATE MODE ==="""
+
+_REPAIR_DIRECTIVE = """\
+=== REPAIR MODE ===
+This is a REPAIR slot — the previous attempt failed a guard, regressed an axis,
+hallucinated, or blew the runtime budget. Start from the current best and make
+the minimal change that FIXES that specific failure mode without giving up the
+gains the best already has. Target the failure, not a new idea.
+=== END REPAIR MODE ==="""
+
+_PLATEAU_DIRECTIVE = """\
+=== PLATEAU MODE ===
+No improvement for several evaluated iters. A "new knob value" will not break
+this — you need a different KIND of move. AVOID the recently-failed families
+shown in the ledger/recent table. Either compose two different axis-improving
+prior attempts, or investigate a backend capability not yet touched. Structural
+novelty is encouraged here.
+=== END PLATEAU MODE ==="""
+
+_MODE_DIRECTIVES = {
+    "explore": _EXPLORE_DIRECTIVE,
+    "refine": _REFINE_DIRECTIVE,
+    "combine": _COMBINE_DIRECTIVE,
+    "ablate": _ABLATE_DIRECTIVE,
+    "repair": _REPAIR_DIRECTIVE,
+    "plateau": _PLATEAU_DIRECTIVE,
+}
+
+
+def _load_portfolio(config: RunnerConfig):
+    from harness.portfolio import Portfolio
+
+    p = Portfolio.load(
+        config.repo_root / config.summary_dir / f"{config.job_id}_portfolio.json"
+    )
+    p.job_id = config.job_id
+    return p
+
+
+def _decisions_records(config: RunnerConfig) -> list[dict[str, Any]]:
+    path = config.repo_root / config.summary_dir / f"{config.job_id}_decisions.jsonl"
+    out: list[dict[str, Any]] = []
+    if not path.is_file():
+        return out
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def _recent_new_family_count(config: RunnerConfig, window: int = 10) -> int:
+    """최근 window 평가 decision 안에서 *처음 등장한* harness family 수
+    (diversity stall 감지용). 기록이 없으면 큰 값 → 초반 stall 오발동 방지."""
+    fams = [
+        r.get("harness_family_id")
+        for r in _decisions_records(config)
+        if r.get("harness_family_id")
+    ]
+    if not fams:
+        return 999
+    first_seen: dict[str, int] = {}
+    for i, f in enumerate(fams):
+        first_seen.setdefault(f, i)
+    start = max(0, len(fams) - window)
+    return sum(1 for idx in first_seen.values() if idx >= start)
+
+
+def _last_attempt_status(config: RunnerConfig) -> str | None:
+    recs = _decisions_records(config)
+    return recs[-1].get("attempt_status") if recs else None
+
+
+def _scheduler_context(config: RunnerConfig, state: HarnessState, portfolio):
+    from harness import portfolio as pf
+    from harness.scheduler import SchedulerContext
+
+    feas = pf.feasibility(portfolio)
+    return SchedulerContext(
+        has_best=bool(state.best_hyp_id),
+        feasible_refine=feas["refine"],
+        feasible_combine=feas["combine"],
+        feasible_ablate=feas["ablate"],
+        iters_since_best=state.iters_since_best_update,
+        recent_new_family_count=_recent_new_family_count(config),
+        repair_event=_last_attempt_status(config) == "verify_fail",
+    )
+
+
+def _decide_iteration(config: RunnerConfig, state: HarnessState):
+    """이번 iter 의 (SchedulerDecision, parent entries[+diff]) 을 정한다.
+    scheduler 는 무엇을 *시도*할지만 정한다 — 채택은 policy 가 그대로 한다."""
+    from harness import portfolio as pf
+    from harness import scheduler
+
+    portfolio = _load_portfolio(config)
+    ctx = _scheduler_context(config, state, portfolio)
+    sched = scheduler.decide_mode(state.evaluated_count + 1, max(1, config.iterations), ctx)
+    parents: list[dict[str, Any]] = []
+    for e in pf.parents_for_mode(portfolio, sched.chosen_mode):
+        entry = dict(e)
+        diff_rel = entry.get("diff_path")
+        diff_text = ""
+        if diff_rel:
+            dp = config.repo_root / diff_rel
+            if dp.is_file():
+                diff_text = dp.read_text(encoding="utf-8")[:_PROMISING_DIFF_MAX_CHARS]
+        entry["diff"] = diff_text or "(diff unavailable)"
+        parents.append(entry)
+    return sched, parents
+
+
+def _format_parents_block(parents: list[dict[str, Any]]) -> str:
+    """Parent 후보(요약 + diff)를 prompt 에 주입. family 는 harness id(중립)만 노출,
+    private_label 은 절대 넣지 않는다(proposal §3.2/§5.4)."""
+    if not parents:
+        return ""
+    blocks = ["Parent candidate(s) to build on (harness-selected; their diffs follow):"]
+    for p in parents:
+        cer = p.get("cer")
+        cer_s = f"{cer:.4f}" if isinstance(cer, (int, float)) else "n/a"
+        blocks.append(
+            f"\n- family {p.get('harness_family_id', '?')} · cer {cer_s}"
+            f" · {p.get('public_summary', '')}\n```diff\n{p.get('diff', '')}\n```"
+        )
+    return "\n".join(blocks)
+
+
+def _write_scheduler_sidecar(out_dir: Path, sched, parents: list[dict[str, Any]]) -> None:
+    """mode/parent 결정을 out_dir 에 남긴다 → commit 시점 _persist_decision 이 읽어
+    decisions.jsonl 에 채운다(codex resolution B; self-contained 유지)."""
+    try:
+        (out_dir / "scheduler_decision.json").write_text(
+            json.dumps(
+                {
+                    "scheduled_mode": sched.scheduled_mode,
+                    "chosen_mode": sched.chosen_mode,
+                    "override": sched.override,
+                    "parents": [
+                        {
+                            "hyp_id": p.get("hyp_id"),
+                            "harness_family_id": p.get("harness_family_id"),
+                        }
+                        for p in parents
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def build_candidate_prompt(
+    config: RunnerConfig,
+    state: HarnessState,
+    sched=None,
+    parents: list[dict[str, Any]] | None = None,
+) -> str:
     baseline = _read_json(config.repo_root / config.baseline_file)
     noise = _read_json(config.repo_root / config.noise_floor_file)
     diagnosis = _best_diagnosis(config, state)
@@ -966,29 +1154,29 @@ def build_candidate_prompt(config: RunnerConfig, state: HarnessState) -> str:
     error_profile = _format_error_profile(config, state)
     findings_ledger = _format_findings_ledger(_ledger_rows(config, fallback=recent))
 
-    # Iteration-based explore/exploit schedule (§ retrospective phase3_004
-    # #2/#3, refined 2026-05-30): a decaying explore ratio chooses EXPLORE (find
-    # a new mechanism) vs EXPLOIT (synthesize promising rejects / tune decode
-    # params) each iter — explore-heavy early, floor-guaranteed late.
-    # iters_since_best is surfaced in the directive for context but no longer
-    # drives the mode.
-    mode = _iteration_mode(state)
-    synthesis_block = ""
-    if mode == "exploit":
-        discovery_block = _EXPLOIT_DIRECTIVE
-        synthesis_block = _format_synthesis_block(_promising_rejects(config, state))
-        history = (
-            f"(HISTORY suppressed in exploit mode to keep focus on the "
-            f"promising rejects below. best_cer so far: {state.best_cer}, "
-            f"best_hyp_id: {state.best_hyp_id}, stalled {state.iters_since_best_update} iters.)"
-        )
-    else:  # explore
-        discovery_block = _EXPLORE_DIRECTIVE
-        history = (
-            f"(HISTORY suppressed in explore mode to break anchoring toward "
-            f"novelty. best_cer so far: {state.best_cer}, "
-            f"best_hyp_id: {state.best_hyp_id}, stalled {state.iters_since_best_update} iters.)"
-        )
+    # Portfolio evolution scheduler (proposal §4): explore/refine/combine/ablate
+    # (+repair/plateau). The harness picks the mode + parent(s); the candidate
+    # builds on the injected parent diff(s). Computed by run_iteration and passed
+    # in; if absent (tests / legacy callers) we decide here. keep/reject is still
+    # policy.decide_candidate's job — the scheduler only steers *what to attempt*.
+    if sched is None:
+        sched, parents = _decide_iteration(config, state)
+    if parents is None:
+        parents = []
+    mode = sched.chosen_mode
+    discovery_block = _MODE_DIRECTIVES.get(mode, _EXPLORE_DIRECTIVE)
+    # combine/refine/ablate 는 portfolio parent 를, explore/plateau 는 synthesis
+    # 재료(축 개선 reject)를 보조로 주입한다.
+    parent_block = _format_parents_block(parents)
+    if not parent_block and mode in ("explore", "plateau"):
+        parent_block = _format_synthesis_block(_promising_rejects(config, state))
+    synthesis_block = parent_block
+    history = (
+        f"(HISTORY suppressed to reduce anchoring. mode={mode}"
+        f"{'' if sched.override in (None, 'scheduled') else f' (override={sched.override})'}. "
+        f"best_cer so far: {state.best_cer}, best_hyp_id: {state.best_hyp_id}, "
+        f"stalled {state.iters_since_best_update} iters.)"
+    )
 
     # Profile first — establishes role / lanes / required output format as
     # the anchoring context. Goal / state / recent / history / diagnosis
@@ -1267,6 +1455,17 @@ def _persist_decision(
             except json.JSONDecodeError:
                 pass
 
+        # scheduler 결정 sidecar (codex resolution B) — mode/parent 를 읽어
+        # decisions.jsonl 에 채운다. 없으면(legacy) None.
+        sched_info: dict[str, Any] = {}
+        sched_path = out_dir / "scheduler_decision.json"
+        if sched_path.is_file():
+            try:
+                sched_info = json.loads(sched_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                sched_info = {}
+        chosen_mode = sched_info.get("chosen_mode")
+
         portfolio = Portfolio.load(portfolio_path)
         portfolio.job_id = config.job_id
         best_report: dict[str, Any] | None = None
@@ -1302,7 +1501,7 @@ def _persist_decision(
                 harness_family_id=family_id,
                 self_declared_family_id=self_fam,
                 fingerprint=fingerprint,
-                mode=None,  # Step 3 scheduler 전까지 mode 없음
+                mode=chosen_mode,
                 diff_path=(config.runs_dir / hyp_id / "candidate.diff").as_posix(),
             )
             portfolio.save(portfolio_path)
@@ -1326,8 +1525,10 @@ def _persist_decision(
             "iter": iteration,
             "hyp_id": hyp_id,
             "policy_version": "portfolio_v1",
-            "scheduled_mode": None,  # Step 3 에서 채움
-            "chosen_mode": None,
+            "scheduled_mode": sched_info.get("scheduled_mode"),
+            "chosen_mode": chosen_mode,
+            "override": sched_info.get("override"),
+            "parent_shortlist": sched_info.get("parents", []),
             "harness_signature": signature,
             "harness_family_id": family_id,
             "self_declared_family_id": self_fam,
@@ -1422,8 +1623,10 @@ def run_iteration(
     # and (in iter ≥ 2) displace the oldest real prior iter from the last-N
     # window. _recent_iters also filters by "ran" markers as defense in depth,
     # but ordering matters here too. (F1 fix, review 2026-05-29.)
-    prompt = build_candidate_prompt(config, state)
+    sched, parents = _decide_iteration(config, state)
+    prompt = build_candidate_prompt(config, state, sched=sched, parents=parents)
     out_dir.mkdir(parents=True, exist_ok=True)
+    _write_scheduler_sidecar(out_dir, sched, parents)
 
     candidate_result: subprocess.CompletedProcess[str] | None = None
     if candidate_func is not None:
@@ -1621,6 +1824,10 @@ def run_iteration(
                 reason=result.reason,
             )
         return result
+
+    # 여기 도달 = verify 가 report 를 냈고 scope 도 깨끗 = 평가 완료.
+    # scheduler progress 축(evaluated_count)을 여기서만 올린다(codex resolution A).
+    state.record_evaluated()
 
     decision = decide_candidate(
         report=verify_result.report,

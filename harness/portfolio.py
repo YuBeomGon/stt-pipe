@@ -115,6 +115,63 @@ def _entry(
     }
 
 
+def _all_entries(p: "Portfolio") -> list[dict[str, Any]]:
+    """family_best + metric_best + micro_bank 의 후보 entry 들(hyp_id 중복 제거)."""
+    seen: dict[str, dict[str, Any]] = {}
+    for e in list(p.family_best.values()) + list(p.metric_best.values()) + p.micro_bank:
+        hyp = e.get("hyp_id")
+        if hyp and hyp not in seen:
+            seen[hyp] = e
+    return list(seen.values())
+
+
+def global_best_entry(p: "Portfolio") -> dict[str, Any] | None:
+    """global_best hyp_id 의 entry. 없으면 최저 cer family_best entry 로 대체."""
+    if p.global_best:
+        for e in _all_entries(p):
+            if e.get("hyp_id") == p.global_best:
+                return e
+    cands = [e for e in p.family_best.values() if isinstance(e.get("cer"), (int, float))]
+    return min(cands, key=lambda e: e["cer"]) if cands else None
+
+
+def feasibility(p: "Portfolio") -> dict[str, bool]:
+    """scheduler 의 mode 가능 여부. refine: 재료 1+, combine: 서로 다른 family 2+,
+    ablate: 다듬을 global_best 존재."""
+    entries = _all_entries(p)
+    distinct_families = {
+        e.get("harness_family_id") for e in entries if e.get("harness_family_id")
+    }
+    return {
+        "refine": bool(entries),
+        "combine": len(distinct_families) >= 2,
+        "ablate": global_best_entry(p) is not None,
+    }
+
+
+def parents_for_mode(p: "Portfolio", mode: str) -> list[dict[str, Any]]:
+    """mode 별 parent entry 목록(prompt 주입용). MVP 규칙(proposal §4.4):
+    refine/ablate=global_best 1개, combine=서로 다른 family 2개. explore/plateau/
+    repair 는 portfolio parent 없음(repair 는 runner 가 실패 iter 에서 잡는다)."""
+    if mode in ("refine", "ablate"):
+        gb = global_best_entry(p)
+        return [gb] if gb else []
+    if mode == "combine":
+        # 서로 다른 family 에서 cer 낮은 순 2개 (MVP compatible: family 상이).
+        by_family: dict[str, dict[str, Any]] = {}
+        for e in sorted(
+            _all_entries(p),
+            key=lambda x: (x.get("cer") if isinstance(x.get("cer"), (int, float)) else 9e9),
+        ):
+            fid = e.get("harness_family_id")
+            if fid and fid not in by_family:
+                by_family[fid] = e
+            if len(by_family) >= 2:
+                break
+        return list(by_family.values())[:2] if len(by_family) >= 2 else []
+    return []
+
+
 @dataclass
 class Portfolio:
     job_id: str

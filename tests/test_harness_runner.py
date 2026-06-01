@@ -443,8 +443,14 @@ def test_step1_decision_trace_committed_and_survives_next_iter(tmp_path: Path) -
         encoding="utf-8"
     ).splitlines()
     assert len(decisions) == 2
-    fams = [json.loads(d)["harness_family_id"] for d in decisions]
+    recs = [json.loads(d) for d in decisions]
+    fams = [r["harness_family_id"] for r in recs]
     assert fams[0] != fams[1]  # decode vs audio → distinct family
+    # scheduler 배선: chosen_mode 가 decisions.jsonl 에 채워진다(sidecar→_persist).
+    assert recs[0]["chosen_mode"] is not None
+    assert recs[0]["chosen_mode"] in (
+        "explore", "refine", "combine", "ablate", "repair", "plateau",
+    )
 
     # working tree clean (커밋에 다 포함됨)
     porcelain = subprocess.run(
@@ -1358,9 +1364,28 @@ def test_iteration_mode_explores_until_best_exists() -> None:
     assert _iteration_mode(state) == "explore"
 
 
-def test_exploit_mode_injects_rejects_and_tuning(tmp_path: Path) -> None:
-    """A synthesize-slot iteration surfaces promising rejects' diffs and
-    re-permits decode-param tuning."""
+def test_build_prompt_injects_parent_diff_for_refine(tmp_path: Path) -> None:
+    """scheduler 가 refine 모드 + parent 를 주면 prompt 에 REFINE 지시문과
+    parent 의 실제 diff 가 들어간다 (Step 2/4 배선)."""
+    from harness.scheduler import SchedulerDecision
+
+    _init_repo(tmp_path)
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    state = HarnessState(job_id="job", iteration=10, best_hyp_id="job_iter_001",
+                         best_cer=0.18, evaluated_count=8)
+    sched = SchedulerDecision("refine", "refine", "scheduled")
+    parents = [{
+        "hyp_id": "job_iter_001", "harness_family_id": "family_001",
+        "cer": 0.18, "public_summary": "coverage up", "diff": "PARENT_DIFF_MARKER",
+    }]
+    prompt = build_candidate_prompt(config, state, sched=sched, parents=parents)
+    assert "REFINE MODE" in prompt
+    assert "PARENT_DIFF_MARKER" in prompt
+
+
+def test_plateau_mode_injects_promising_rejects(tmp_path: Path) -> None:
+    """no-improvement 이 길어지면(plateau) scheduler 가 PLATEAU 모드를 켜고,
+    축 개선 reject 의 실제 diff 를 synthesis 재료로 주입한다 (구 exploit 대체)."""
     _init_repo(tmp_path)
     runs = tmp_path / "runs"
     _write_iter(
@@ -1377,21 +1402,15 @@ def test_exploit_mode_injects_rejects_and_tuning(tmp_path: Path) -> None:
         repeated_text_rate=0.09,
     )
     config = RunnerConfig(job_id="job", repo_root=tmp_path)
-    # Find a late iteration that the deterministic schedule marks "exploit".
-    synth_iter = next(
-        n for n in range(30, 80)
-        if not _is_explore_iter(n)
-    )
+    # 긴 stall → plateau override (iters_since_best >= PLATEAU_K). portfolio.json
+    # 이 없어 refine/combine 은 infeasible 이고, plateau 는 synthesis 재료를 붙인다.
     state = HarnessState(
-        job_id="job", iteration=synth_iter, best_hyp_id="job_iter_001",
-        best_cer=0.157, iters_since_best_update=synth_iter - 1,
+        job_id="job", iteration=40, best_hyp_id="job_iter_001",
+        best_cer=0.157, iters_since_best_update=20, evaluated_count=20,
     )
-    assert _iteration_mode(state) == "exploit"
-    prompt = build_candidate_prompt(config, state)
-    assert "EXPLOIT MODE" in prompt
-    assert "EXPLORE MODE" not in prompt
+    prompt = build_candidate_prompt(config, state)  # sched=None → 내부 결정
+    assert "PLATEAU MODE" in prompt
     assert "SUBFIX_DIFF" in prompt  # promising reject's actual code injected
-    assert "EXPLOITATION" in prompt  # decode-param tuning re-permitted
 
 
 def test_explore_mode_prompts_for_novelty(tmp_path: Path) -> None:

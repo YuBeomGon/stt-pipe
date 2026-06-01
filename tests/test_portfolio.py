@@ -145,3 +145,55 @@ def test_load_missing_file() -> None:
 
     q = Portfolio.load(Path("/nonexistent/phase3_006_portfolio.json"))
     assert q.global_best is None
+
+
+# ── parent selection (Step 2) ────────────────────────────────────────
+def _populate(p: Portfolio, hyp, it, fam, cer):
+    p.update(
+        hyp_id=hyp, iteration=it, decision_status="keep",
+        report=_report(cer), best_report=None,
+        harness_signature=f"sig_{fam}", harness_family_id=fam,
+    )
+
+
+def test_feasibility_empty_portfolio() -> None:
+    p = Portfolio(job_id="j")
+    f = pf.feasibility(p)
+    assert f == {"refine": False, "combine": False, "ablate": False}
+
+
+def test_feasibility_one_family_no_combine() -> None:
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.18)
+    f = pf.feasibility(p)
+    assert f["refine"] and f["ablate"] and not f["combine"]
+
+
+def test_feasibility_two_families_enables_combine() -> None:
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.18)
+    _populate(p, "j_iter_002", 2, "family_002", 0.19)
+    assert pf.feasibility(p)["combine"]
+
+
+def test_parents_refine_returns_global_best() -> None:
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.18)
+    parents = pf.parents_for_mode(p, "refine")
+    assert len(parents) == 1 and parents[0]["hyp_id"] == "j_iter_001"
+
+
+def test_parents_combine_two_distinct_families() -> None:
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.18)
+    _populate(p, "j_iter_002", 2, "family_002", 0.19)
+    parents = pf.parents_for_mode(p, "combine")
+    assert len(parents) == 2
+    assert {e["harness_family_id"] for e in parents} == {"family_001", "family_002"}
+
+
+def test_parents_explore_and_repair_empty() -> None:
+    p = Portfolio(job_id="j")
+    _populate(p, "j_iter_001", 1, "family_001", 0.18)
+    assert pf.parents_for_mode(p, "explore") == []
+    assert pf.parents_for_mode(p, "repair") == []
