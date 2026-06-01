@@ -198,6 +198,69 @@ def test_last_failure_parent_none_when_last_evaluated(tmp_path: Path) -> None:
     assert _last_failure_parent(cfg) is None
 
 
+def _sidecar(repo: Path, hyp_id: str, chosen_mode: str, parents: list[dict]) -> None:
+    (repo / "runs" / hyp_id / "scheduler_decision.json").write_text(
+        json.dumps({"chosen_mode": chosen_mode, "parents": parents}),
+        encoding="utf-8",
+    )
+
+
+def _read_line(repo: Path, job: str, idx: int) -> dict:
+    p = repo / "runs/_summary" / f"{job}_decisions.jsonl"
+    return json.loads(p.read_text(encoding="utf-8").splitlines()[idx])
+
+
+def test_derivative_mode_inherits_parent_family(tmp_path: Path) -> None:
+    """lineage-aware: refine/ablate/repair/combine 은 diff 시그니처가 부모와 전혀
+    달라도(=다른 영역 편집) 부모 family 를 상속한다 — 파생 과granular 방지."""
+    cfg = RunnerConfig(job_id="phase3_008", repo_root=tmp_path)
+    # explore founder → family_001 (시그니처 기반)
+    _iter_dir(tmp_path, "phase3_008_iter_001", diff=_DIFF_DECODE, report=_report(0.30))
+    _persist_decision(cfg, "phase3_008_iter_001", 1, "keep")
+    fam1 = _read_line(tmp_path, "phase3_008", 0)["harness_family_id"]
+
+    # refine 인데 diff 는 완전히 다른 영역(_DIFF_AUDIO) → 시그니처만으론 새 family.
+    _iter_dir(tmp_path, "phase3_008_iter_002", diff=_DIFF_AUDIO, report=_report(0.28))
+    _sidecar(
+        tmp_path, "phase3_008_iter_002", "refine",
+        [{"hyp_id": "phase3_008_iter_001", "harness_family_id": fam1}],
+    )
+    _persist_decision(cfg, "phase3_008_iter_002", 2, "reject")
+    assert _read_line(tmp_path, "phase3_008", 1)["harness_family_id"] == fam1
+
+
+def test_combine_inherits_primary_parent_family(tmp_path: Path) -> None:
+    cfg = RunnerConfig(job_id="phase3_008", repo_root=tmp_path)
+    _iter_dir(tmp_path, "phase3_008_iter_001", diff=_DIFF_DECODE, report=_report(0.30))
+    _persist_decision(cfg, "phase3_008_iter_001", 1, "keep")
+    fam_primary = _read_line(tmp_path, "phase3_008", 0)["harness_family_id"]
+
+    _iter_dir(tmp_path, "phase3_008_iter_002", diff=_DIFF_AUDIO, report=_report(0.25))
+    # combine: parents[0]=우세(primary), parents[1]=other → primary 상속
+    _sidecar(
+        tmp_path, "phase3_008_iter_002", "combine",
+        [
+            {"hyp_id": "phase3_008_iter_001", "harness_family_id": fam_primary},
+            {"hyp_id": "x", "harness_family_id": "family_099"},
+        ],
+    )
+    _persist_decision(cfg, "phase3_008_iter_002", 2, "reject")
+    assert _read_line(tmp_path, "phase3_008", 1)["harness_family_id"] == fam_primary
+
+
+def test_explore_still_mints_new_family_by_signature(tmp_path: Path) -> None:
+    """explore 는 parent 없음 → 시그니처로 신규 family 를 계속 만든다(상속 X)."""
+    cfg = RunnerConfig(job_id="phase3_008", repo_root=tmp_path)
+    _iter_dir(tmp_path, "phase3_008_iter_001", diff=_DIFF_DECODE, report=_report(0.30))
+    _persist_decision(cfg, "phase3_008_iter_001", 1, "keep")
+    fam1 = _read_line(tmp_path, "phase3_008", 0)["harness_family_id"]
+
+    _iter_dir(tmp_path, "phase3_008_iter_002", diff=_DIFF_AUDIO, report=_report(0.31))
+    _sidecar(tmp_path, "phase3_008_iter_002", "explore", [])
+    _persist_decision(cfg, "phase3_008_iter_002", 2, "reject")
+    assert _read_line(tmp_path, "phase3_008", 1)["harness_family_id"] != fam1
+
+
 def test_attempt_status_evaluated_when_report_present(tmp_path: Path) -> None:
     cfg = RunnerConfig(job_id="phase3_006", repo_root=tmp_path)
     _iter_dir(tmp_path, "phase3_006_iter_001", diff=_DIFF_DECODE, report=_report(0.18))

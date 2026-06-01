@@ -1567,6 +1567,26 @@ def _persist_decision(
                 sched_info = {}
         chosen_mode = sched_info.get("chosen_mode")
 
+        # Lineage-aware family (사용자 결정): 파생 모드는 scheduler 가 고른 parent 의
+        # family 를 조건 없이 상속한다. diff 시그니처는 "어떤 부분을 편집했나" 라,
+        # refine/ablate/repair/combine 이 best 의 다른 영역을 건드릴 때마다 새 family
+        # 로 갈라져 과granular 해진다(관측: 36 iter 에 23 family — 파생 ~10 개가 스퓨리어스).
+        # "구조적 신규성" 판정은 LLM/불안정 휴리스틱을 요구하므로 조건을 두지 않는다.
+        # explore/plateau(=신규 탐색, parent 없음)만 시그니처로 family 를 새로 만든다.
+        # combine 은 parents[0](=우세=낮은 cer) 의 family 를 상속한다.
+        # 시그니처(signature)는 dedup/cooldown 용으로 그대로 계산·기록한다.
+        if chosen_mode in ("refine", "ablate", "repair", "combine"):
+            parent_fam = next(
+                (
+                    p.get("harness_family_id")
+                    for p in (sched_info.get("parents") or [])
+                    if p.get("harness_family_id")
+                ),
+                None,
+            )
+            if parent_fam:
+                family_id = parent_fam
+
         portfolio = Portfolio.load(portfolio_path)
         portfolio.job_id = config.job_id
         best_report: dict[str, Any] | None = None

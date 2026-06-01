@@ -445,7 +445,14 @@ def test_step1_decision_trace_committed_and_survives_next_iter(tmp_path: Path) -
     assert len(decisions) == 2
     recs = [json.loads(d) for d in decisions]
     fams = [r["harness_family_id"] for r in recs]
-    assert fams[0] != fams[1]  # decode vs audio → distinct family
+    # lineage-aware family: iter2 가 파생 모드(refine/ablate/repair/combine)면 부모
+    # (iter1) family 를 상속하고, explore/plateau 면 시그니처로 신규 family 를 만든다
+    # (decode vs audio diff 라 신규가 됨). 둘 다 유효 family_id 여야 한다.
+    mode2 = recs[1]["chosen_mode"]
+    if mode2 in ("refine", "ablate", "repair", "combine"):
+        assert fams[1] == fams[0]  # 부모 family 상속
+    else:
+        assert fams[1] != fams[0]  # explore/plateau → 신규
     # scheduler 배선: chosen_mode 가 decisions.jsonl 에 채워진다(sidecar→_persist).
     assert recs[0]["chosen_mode"] is not None
     assert recs[0]["chosen_mode"] in (
