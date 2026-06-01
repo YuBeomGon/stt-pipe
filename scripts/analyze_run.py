@@ -888,6 +888,81 @@ def _reasoning_alignment(iters: list[IterRecord]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+def portfolio_evolution_section(decisions_path: Path, portfolio_path: Path) -> str:
+    """Render the Step 1 portfolio/diversity block from the harness decision
+    trace (proposal §12). Reads runs/_summary/<job>_decisions.jsonl and
+    <job>_portfolio.json. Degrades to a one-liner for pre-portfolio jobs so the
+    template placeholder always substitutes (no leftover ``{{...}}``).
+
+    diversity 지표는 harness-derived family 기준 — self-declared 가 아니다.
+    `family_count` 는 보수적 split 때문에 **상한 추정치**다(§5.3).
+    """
+    decisions = _read_jsonl(decisions_path)
+    if not decisions:
+        return "_(decision trace 없음 — portfolio 이전 잡)_"
+
+    families = [d.get("harness_family_id") for d in decisions if d.get("harness_family_id")]
+    family_count = len(set(families))
+
+    # iter_to_X — cer 가 임계 이하로 처음 내려간 평가 iter.
+    def _iter_to(thresh: float) -> str:
+        hits = [
+            d.get("iter")
+            for d in decisions
+            if isinstance(d.get("cer"), (int, float)) and d["cer"] <= thresh
+        ]
+        return str(min(hits)) if hits else "—"
+
+    # 반복 실패 family — 같은 harness family 가 2회 이상 reject.
+    reject_fams = Counter(
+        d.get("harness_family_id")
+        for d in decisions
+        if d.get("final_decision") == "reject" and d.get("harness_family_id")
+    )
+    repeated_failed = sum(1 for c in reject_fams.values() if c >= 2)
+
+    decided = Counter(d.get("final_decision") for d in decisions)
+
+    portfolio = _read_json(portfolio_path) or {}
+    fam_best = portfolio.get("family_best") or {}
+    metric_best = portfolio.get("metric_best") or {}
+    micro_bank = portfolio.get("micro_bank") or []
+
+    lines = [
+        f"- **best_cer (harness state 정본)**: 별도 표 참조",
+        f"- **family_count (harness-derived, 다양성 상한 추정치)**: {family_count}",
+        f"- **micro_bank_count**: {len(micro_bank)}",
+        f"- **repeated_failed_family_count** (≥2 reject): {repeated_failed}",
+        f"- **decision 분포**: "
+        + ", ".join(f"{k}={v}" for k, v in sorted(decided.items()) if k)
+        or "- decision 분포: n/a",
+        f"- **iter_to_0.20 / 0.18 / 0.16**: "
+        f"{_iter_to(0.20)} / {_iter_to(0.18)} / {_iter_to(0.16)}",
+        f"- **mode_distribution**: n/a (scheduler 미도입 — Step 3)",
+    ]
+
+    if fam_best:
+        lines.append("")
+        lines.append("| family | hyp_id | cer |")
+        lines.append("|---|---|---:|")
+        for fid in sorted(fam_best):
+            e = fam_best[fid]
+            cer = e.get("cer")
+            lines.append(
+                f"| {fid} | `{e.get('hyp_id', '—')}` | "
+                f"{cer:.4f} |" if isinstance(cer, (int, float)) else
+                f"| {fid} | `{e.get('hyp_id', '—')}` | — |"
+            )
+
+    if metric_best:
+        lines.append("")
+        lines.append("metric_best slots: " + ", ".join(
+            f"{slot}=`{e.get('hyp_id')}`" for slot, e in sorted(metric_best.items())
+        ))
+
+    return "\n".join(lines)
+
+
 def render_report(
     iters: list[IterRecord],
     target_cer_json: dict[str, Any],
@@ -897,6 +972,7 @@ def render_report(
     holdout: dict[str, Any] | None = None,
     state: dict[str, Any] | None = None,
     format_reject_count: int = 0,
+    portfolio_section: str = "",
 ) -> str:
     """Substitute `{{...}}` variables in ``template`` from analyzed iters.
 
@@ -1049,6 +1125,7 @@ def render_report(
         "n_aligned": str(reasoning["n_aligned"]),
         "n_misaligned": str(reasoning["n_misaligned"]),
         "mismatch_list": reasoning["mismatches"],
+        "portfolio_evolution": portfolio_section or "_(decision trace 없음)_",
     }
 
     out = template
@@ -1172,6 +1249,11 @@ def main(argv: list[str] | None = None) -> int:
         date_str = datetime.now(UTC).strftime("%Y-%m-%d")
         out_path = Path("docs/reports") / f"{job_id_display}_REPORT_{date_str}.md"
 
+    portfolio_section = portfolio_evolution_section(
+        summary_dir / f"{job_id}_decisions.jsonl",
+        summary_dir / f"{job_id}_portfolio.json",
+    ) if job_id else "_(decision trace 없음)_"
+
     report = render_report(
         iters=iters,
         target_cer_json=target,
@@ -1181,6 +1263,7 @@ def main(argv: list[str] | None = None) -> int:
         holdout=holdout,
         state=state,
         format_reject_count=format_reject_count,
+        portfolio_section=portfolio_section,
     )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

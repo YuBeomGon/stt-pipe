@@ -32,7 +32,9 @@ BANKING_ABSOLUTE_DELTA: float = 0.002
 # ── Explore / exploit schedule ───────────────────────────────────────
 # explore 비율이 iter 증가에 따라 START→FLOOR 로 지수 감쇠. 후반에도 FLOOR 보장.
 EXPLORE_RATIO_START: float = 0.9    # ~90% explore at the start
-EXPLORE_RATIO_FLOOR: float = 0.5    # guaranteed ≥50% explore even late
+# 0.5 는 phase3_005 후반에 악화 후보만 늘리고 plateau 를 못 깼다(005 회고 #3).
+# scheduler(Step 3) 도입 전 최소 변경으로 0.3 회귀. mode schedule 은 Step 3 에서 대체.
+EXPLORE_RATIO_FLOOR: float = 0.3    # guaranteed ≥30% explore even late
 EXPLORE_RATIO_DECAY: float = 18.0   # iters; ~halves gap above floor every 12-13 iters
 
 # ── Synthesis (promising rejects) ────────────────────────────────────

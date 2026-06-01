@@ -10,6 +10,15 @@
 
 ---
 
+## Portfolio Evolution (Step 1 — proposal §3/§5/§12)
+
+> harness-derived family/signature 기준. self-declared family 와 무관.
+> 정본 입력: `runs/_summary/<job>_decisions.jsonl` + `<job>_portfolio.json`.
+
+{{portfolio_evolution}}
+
+---
+
 ## A. 결과
 
 | 항목 | 값 |
