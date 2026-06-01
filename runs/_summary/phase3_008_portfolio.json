@@ -1,6 +1,6 @@
 {
   "job_id": "phase3_008",
-  "updated_at_iter": 28,
+  "updated_at_iter": 29,
   "global_best": "phase3_008_iter_006",
   "family_best": {
     "family_001": {
@@ -105,28 +105,28 @@
       }
     },
     "family_005": {
-      "hyp_id": "phase3_008_iter_009",
-      "iter": 9,
+      "hyp_id": "phase3_008_iter_029",
+      "iter": 29,
       "status": "micro_bank",
-      "cer": 0.18226652492898593,
+      "cer": 0.17312618719829914,
       "harness_signature": "sig_76480f6a",
       "harness_family_id": "family_005",
       "self_declared_family_id": null,
       "fingerprint": [
         "norepeatngram",
-        "repetition",
-        "logit",
-        "antiloop",
-        "decode"
+        "insearch",
+        "beamconstraint",
+        "repeatedtext",
+        "loop"
       ],
-      "mode": "explore",
-      "diff_path": "runs/phase3_008_iter_009/candidate.diff",
-      "runtime_s": 212.13575299800868,
+      "mode": "plateau",
+      "diff_path": "runs/phase3_008_iter_029/candidate.diff",
+      "runtime_s": 205.49419970899908,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.31967683334926855,
-        "error_breakdown.sub_ratio": 0.5683621761162635,
+        "error_breakdown.del_ratio": 0.3346419044743067,
+        "error_breakdown.sub_ratio": 0.5623836126629422,
         "hallucination_hit_rate": 0.18181818181818182,
-        "total_inference_time_s": 212.13575299800868
+        "total_inference_time_s": 205.49419970899908
       }
     },
     "family_006": {
@@ -1007,6 +1007,31 @@
         "error_breakdown.sub_ratio": 0.5310794962011116,
         "hallucination_hit_rate": 0.09090909090909091,
         "total_inference_time_s": 207.72443905699765
+      }
+    },
+    {
+      "hyp_id": "phase3_008_iter_029",
+      "iter": 29,
+      "status": "micro_bank",
+      "cer": 0.17312618719829914,
+      "harness_signature": "sig_76480f6a",
+      "harness_family_id": "family_005",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "norepeatngram",
+        "insearch",
+        "beamconstraint",
+        "repeatedtext",
+        "loop"
+      ],
+      "mode": "plateau",
+      "diff_path": "runs/phase3_008_iter_029/candidate.diff",
+      "runtime_s": 205.49419970899908,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.3346419044743067,
+        "error_breakdown.sub_ratio": 0.5623836126629422,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 205.49419970899908
       }
     }
   ],
