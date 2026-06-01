@@ -1,18 +1,20 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Long-form windowing (sequential 30s) recovers the audio past 0:30 that a single
-30s feature window would drop. But every prior iteration decoded each window in
-``<|notimestamps|>`` mode, and on dense multi-utterance audio large-v3 Whisper
-reliably emits EOT *early* in that mode — it transcribes the front of the 30s
-window and stops, so each window is only partially covered. That is the exact
-signature of the dominant failure here (length_ratio 0.65, deletion 80%).
+Timestamp-decoding (iter_004) lifted coverage to length_ratio 0.74, but that
+number is suspiciously specific: if large-v3 reliably EOTs after transcribing
+only ~22s of each 30s window, a *fixed* 30s stride skips the un-transcribed
+~8s tail of every window (22/30 ≈ 0.73). The early-EOT does not vanish in
+timestamp mode — it just becomes observable, because the decoder stamps where
+it actually stopped.
 
-This iteration surfaces the unused **timestamp-decoding** path: dropping
-``<|notimestamps|>`` from the prompt puts the decoder in the regime it was
-trained for, where it emits ``<|t|>`` segment-boundary tokens and keeps
-transcribing to the window end instead of terminating early. We strip those
-timestamp tokens back out before decoding to text. Window stride stays a fixed
-30s so the per-call count (and runtime budget) matches the kept best.
+This iteration surfaces the timestamp tokens as a **seek-feedback signal**
+(prior iters decoded their offsets only to filter padding). Instead of a fixed
+30s stride we advance the window to the END of the last emitted segment — the
+standard long-form Whisper seek. The tail the decoder never reached is then
+re-read at the head of the next window instead of being skipped, so the
+structural deletion that fixed striding bakes in is recovered. A 20s advance
+floor bounds the per-file window count (and runtime) when a window stamps an
+unusually early stop.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -26,6 +28,11 @@ from frozen.asr_backend import generate, load, to_storage_view
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 _WINDOW_SECONDS = 30
+# Floor on how far each window advances. Without it a window that stamps a very
+# early stop would advance only a few seconds and multiply the decode-call
+# count (runtime). 20s caps the worst-case window growth at 1.5x while leaving
+# the typical ~22-29s last-segment advance untouched.
+_MIN_ADVANCE_SECONDS = 20
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -34,23 +41,23 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
 
     audio = np.asarray(audio).reshape(-1)
     window = int(_WINDOW_SECONDS * sr)
-    n_windows = max(1, int(np.ceil(len(audio) / window)))
+    min_advance = int(_MIN_ADVANCE_SECONDS * sr)
+    n = len(audio)
 
     # Timestamp-decoding prompt: NO <|notimestamps|>, so the decoder emits
-    # <|t|> boundaries and transcribes the whole window instead of stopping
-    # early at the first EOT (the early-EOT collapse is the coverage loss).
+    # <|t|> boundaries; their offsets drive the adaptive stride below.
     prompt_tokens = tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
     )
-    # Every token id >= <|0.00|> is a timestamp token; strip them before the
-    # text decode so the predicted boundaries don't leak into the transcript.
+    # Every token id >= <|0.00|> is a timestamp token. offset_s = (id - begin)*0.02.
     timestamp_begin = tokenizer.convert_tokens_to_ids("<|0.00|>")
 
     texts = []
-    for i in range(n_windows):
-        chunk = audio[i * window : (i + 1) * window]
+    seek = 0
+    while seek < n:
+        chunk = audio[seek : seek + window]
         if len(chunk) == 0:
-            continue
+            break
         inputs = processor(
             chunk,
             sampling_rate=sr,
@@ -70,5 +77,19 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         token_ids = results[0].sequences_ids[0]
         text_ids = [t for t in token_ids if t < timestamp_begin]
         texts.append(tokenizer.decode(text_ids, skip_special_tokens=True))
+
+        # Final partial window: extractor padded it, nothing follows — stop.
+        if len(chunk) < window:
+            break
+
+        # Advance to the end of the last emitted segment (last timestamp token).
+        # If the window emitted no timestamp, fall back to a full-window stride.
+        ts_tokens = [t for t in token_ids if t >= timestamp_begin]
+        if ts_tokens:
+            advance = int((ts_tokens[-1] - timestamp_begin) * 0.02 * sr)
+            advance = min(max(advance, min_advance), window)
+        else:
+            advance = window
+        seek += advance
 
     return " ".join(t.strip() for t in texts if t.strip())
