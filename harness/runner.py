@@ -1960,6 +1960,17 @@ def run_job(config: RunnerConfig) -> HarnessState:
                     config, state_path, "abort", "format_reject", state.iteration
                 )
             break
+
+    # attempt cap 도달(success/abort 없이 evaluated 예산 미달로 루프 종료) — 상태를
+    # 명시 저장해 "정상 완료"와 구분(리뷰 #1). evaluated 예산을 채웠으면 정상 종료.
+    if (
+        state.status == "running"
+        and state.evaluated_count - start_evaluated < config.iterations
+    ):
+        state.status = "incomplete_attempt_cap"
+        state.save(state_path)
+        if config.commit_results:
+            commit_iteration(config, state_path, "abort", "attempt_cap", state.iteration)
     return state
 
 

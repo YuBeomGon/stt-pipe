@@ -673,8 +673,10 @@ def test_run_job_attempt_cap_bounds_unevaluated_loop(tmp_path: Path, monkeypatch
         return SimpleNamespace(format_reject=False, command_failed=False)
 
     monkeypatch.setattr("harness.runner.run_iteration", fake)
-    run_job(config)
+    state = run_job(config)
     assert calls["n"] == config.iterations * 3 + 10  # 16
+    # cap 도달 시 status 를 명시 저장해 정상 완료와 구분(#1).
+    assert state.status == "incomplete_attempt_cap"
 
 
 def test_run_job_aborts_after_4_of_5_format_rejects(

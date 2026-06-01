@@ -310,18 +310,20 @@ def test_portfolio_section_aggregates_modes(tmp_path) -> None:
     dec = tmp_path / "job_decisions.jsonl"
     rows = [
         {"iter": 1, "harness_family_id": "family_001", "chosen_mode": "explore",
-         "final_decision": "keep", "cer": 0.19, "parent_shortlist": []},
+         "final_decision": "keep", "evaluated": True, "cer": 0.19, "parent_shortlist": []},
         {"iter": 2, "harness_family_id": "family_002", "chosen_mode": "refine",
-         "final_decision": "reject", "cer": 0.20,
+         "final_decision": "reject", "evaluated": False, "cer": None,  # format reject
          "parent_shortlist": [{"hyp_id": "job_iter_001"}]},
         {"iter": 3, "harness_family_id": "family_001", "chosen_mode": "combine",
-         "final_decision": "micro_bank", "cer": 0.188,
+         "final_decision": "micro_bank", "evaluated": True, "cer": 0.188,
          "parent_shortlist": [{"hyp_id": "a"}, {"hyp_id": "b"}]},
     ]
     dec.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
     section = portfolio_evolution_section(dec, tmp_path / "job_portfolio.json")
 
-    assert "mode_distribution" in section
+    assert "mode_attempt_distribution" in section
     assert "explore=1" in section and "refine=1" in section and "combine=1" in section
-    assert "combine_success_rate" in section  # combine 1개, micro_bank → 1/1
+    # 성공률은 evaluated 만 분모 — refine(format reject, evaluated=False)은 제외.
+    assert "mode_evaluated_success_rate" in section
+    assert "combine_success_rate" in section  # evaluated combine 1개 micro_bank → 1/1
     assert "portfolio_usage" in section

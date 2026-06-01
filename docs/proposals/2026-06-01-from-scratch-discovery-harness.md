@@ -642,7 +642,17 @@ verify fail)도 기록하되 `evaluated=false` 와 `attempt_status` 로 구분�
 은 LLM 이 주장한 family/fingerprint/intent 를 저장하고, `decisions.jsonl` 은 harness 가
 실제로 사용한 mode, parent, cooldown, signature, keep/reject 판단을 저장한다.
 
-최소 schema:
+> **구현 현황(2026-06-01) — 아래 schema 는 목표(future)이고 현재 구현은 부분집합이다.**
+> 실제 기록 필드: `iter, hyp_id, policy_version, scheduled_mode, chosen_mode, override,
+> parent_shortlist(hyp_id/family), active_cooldowns, harness_signature,
+> harness_family_id, self_declared_family_id, feature_tokens, final_decision,
+> attempt_status, evaluated, decision_reason, cer, axis_metrics,
+> portfolio_slots_updated`. **미구현(후속)**: `deficits_before`,
+> `override_candidates`, parent `score/why`, `parents_chosen`, `compatible_check`.
+> `base_mode(evaluated_index, total)` 가 순수함수라 deficits/scheduled_mode 는 언제든
+> replay 검산 가능 — 그래서 저장 우선순위는 낮다.
+
+목표 schema (future):
 
 ```json
 {
