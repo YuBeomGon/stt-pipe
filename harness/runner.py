@@ -13,6 +13,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -250,6 +251,11 @@ class IterationResult:
     # budget re-invoking a CLI that will keep failing (phase3_003: 79 no-op
     # iters after the session limit was hit).
     command_failed: bool = False
+    # Set when the candidate command kept hitting a Claude session/usage limit
+    # through the entire backoff ladder (5·10·20·40·80 min). run_job aborts the
+    # job cleanly (status="aborted_rate_limit") rather than burning the budget —
+    # a transient quota error, not a misaligned profile.
+    rate_limited: bool = False
 
 
 @dataclass(frozen=True)
@@ -1061,6 +1067,34 @@ def _last_attempt_status(config: RunnerConfig) -> str | None:
     return recs[-1].get("attempt_status") if recs else None
 
 
+# Claude 세션/토큰 한도 backoff 사다리(분). 한도 신호가 계속 보이면 같은 iter 를
+# 이 간격으로 재시도한다 — 누적 5+10+20+40+80 = 155분. 소진 후에도 한도면 abort.
+_RATE_LIMIT_BACKOFF_MIN: tuple[int, ...] = (5, 10, 20, 40, 80)
+
+
+def _is_rate_limited(stdout_text: str) -> bool:
+    """`claude -p` stdout 이 세션/토큰 한도(예: "You've hit your session limit ·
+    resets 11:30pm")를 가리키는지. 일반 command 실패와 구분해 backoff 한다."""
+    s = (stdout_text or "").lower()
+    if "limit" not in s:
+        return False
+    return any(k in s for k in ("session", "usage", "resets", "hit your"))
+
+
+def _sleep_minutes(minutes: float) -> None:
+    """backoff sleep — 테스트에서 monkeypatch 로 무력화할 수 있게 분리."""
+    time.sleep(minutes * 60.0)
+
+
+def _candidate_stdout_text(out_dir: Path, candidate_result: Any) -> str:
+    p = out_dir / "claude_stdout.txt"
+    if p.is_file():
+        return p.read_text(encoding="utf-8")
+    if candidate_result is not None and getattr(candidate_result, "stdout", None):
+        return candidate_result.stdout
+    return ""
+
+
 _VERIFY_FAIL_TAIL_CHARS = 3000  # repair 후보에게 줄 stderr 꼬리 길이
 
 
@@ -1759,19 +1793,44 @@ def run_iteration(
     _cooldowns = _cd.compute_cooldowns(_decisions_records(config)).as_list()
     _write_scheduler_sidecar(out_dir, sched, parents, active_cooldowns=_cooldowns)
 
-    candidate_result: subprocess.CompletedProcess[str] | None = None
-    if candidate_func is not None:
-        candidate_result = candidate_func(prompt, out_dir)
-    elif config.candidate_cmd:
-        candidate_result = run_candidate_command(
-            config.candidate_cmd,
-            prompt,
-            out_dir,
-            repo_root,
-            config.allowed_path,
-        )
-    elif not config.manual:
-        raise ValueError("candidate_cmd가 없으면 manual=True가 필요합니다")
+    def _invoke() -> subprocess.CompletedProcess[str] | None:
+        if candidate_func is not None:
+            return candidate_func(prompt, out_dir)
+        if config.candidate_cmd:
+            return run_candidate_command(
+                config.candidate_cmd,
+                prompt,
+                out_dir,
+                repo_root,
+                config.allowed_path,
+            )
+        if not config.manual:
+            raise ValueError("candidate_cmd가 없으면 manual=True가 필요합니다")
+        return None
+
+    candidate_result: subprocess.CompletedProcess[str] | None = _invoke()
+
+    # Claude 세션/토큰 한도("You've hit your session limit · resets …")는 일시적
+    # 장애다 — 일반 command 실패로 취급해 곧장 abort 하면 밤샘 run 이 통째로 날아간다
+    # (phase3_008: iter30 한도 → iter32 abort, 27/100). 한도 신호가 보이면 같은 iter 를
+    # 5·10·20·40·80 분 backoff 로 재시도(누적 ~155분)하고, 끝까지 풀리지 않으면
+    # rate_limited 로 표시해 run_job 이 깔끔히 멈춘다.
+    rate_limited_exhausted = False
+    if candidate_result is not None:
+        for wait_min in _RATE_LIMIT_BACKOFF_MIN:
+            if not _is_rate_limited(_candidate_stdout_text(out_dir, candidate_result)):
+                break
+            print(
+                f"[rate-limit] 세션/토큰 한도 감지 — {wait_min}분 후 재시도 "
+                f"(iter {state.iteration})",
+                flush=True,
+            )
+            _sleep_minutes(wait_min)
+            candidate_result = _invoke()
+        else:
+            rate_limited_exhausted = _is_rate_limited(
+                _candidate_stdout_text(out_dir, candidate_result)
+            )
 
     if candidate_result is not None and candidate_result.returncode != 0:
         statuses = git_status(repo_root)
@@ -1781,8 +1840,13 @@ def run_iteration(
             status="reject",
             decision=None,
             verify_result=None,
-            reason="candidate command 실패",
+            reason=(
+                "세션/토큰 한도 — backoff 사다리 소진"
+                if rate_limited_exhausted
+                else "candidate command 실패"
+            ),
             command_failed=True,
+            rate_limited=rate_limited_exhausted,
         )
         append_event(
             str(state.iteration),
@@ -2027,6 +2091,19 @@ def run_job(config: RunnerConfig) -> HarnessState:
             break
         result = run_iteration(config, state, state_path)
         attempts += 1
+
+        # 세션/토큰 한도가 backoff 사다리(5·10·20·40·80분)를 다 쓰고도 안 풀림 →
+        # 일시 장애지만 더 기다려도 의미 없으니 깔끔히 멈춘다(예산/상태 보존). 다음에
+        # 같은 job-id 로 재개하면 evaluated 예산이 남아있어 이어서 돈다.
+        if result is not None and getattr(result, "rate_limited", False):
+            state.status = "aborted_rate_limit"
+            state.save(state_path)
+            if config.commit_results:
+                commit_iteration(
+                    config, state_path, "abort", "rate_limit", state.iteration
+                )
+            break
+
         if result is not None and result.format_reject:
             format_reject_count += 1
 

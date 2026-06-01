@@ -792,6 +792,111 @@ def test_command_failure_streak_resets_on_success(tmp_path: Path, monkeypatch) -
 
 
 # ----------------------------------------------------------------------- #
+# Session/token rate-limit backoff                                         #
+# ----------------------------------------------------------------------- #
+
+
+def test_is_rate_limited_detection() -> None:
+    from harness.runner import _is_rate_limited
+
+    assert _is_rate_limited(
+        "You've hit your session limit · resets 11:30pm (Asia/Seoul)"
+    )
+    assert _is_rate_limited("Usage limit reached.")
+    assert not _is_rate_limited("```yaml\nlane: x\n```")
+    assert not _is_rate_limited("some normal candidate output")
+    assert not _is_rate_limited("")
+
+
+def test_run_job_aborts_on_rate_limit_exhausted(tmp_path: Path, monkeypatch) -> None:
+    """backoff 사다리를 다 쓰고도 한도면 즉시 aborted_rate_limit — command-fail
+    streak(3회) 를 기다리지 않고 첫 발생에서 멈춘다(예산 보존)."""
+    _init_repo(tmp_path)
+    config = RunnerConfig(job_id="job", repo_root=tmp_path, iterations=25)
+
+    from harness.runner import IterationResult
+
+    def fake_iter(cfg, state, state_path):
+        state.advance()
+        return IterationResult(
+            hyp_id=f"job_iter_{state.iteration:03d}",
+            status="reject",
+            decision=None,
+            verify_result=None,
+            reason="세션/토큰 한도 — backoff 사다리 소진",
+            command_failed=True,
+            rate_limited=True,
+        )
+
+    monkeypatch.setattr("harness.runner.run_iteration", fake_iter)
+    state = run_job(config)
+
+    assert state.status == "aborted_rate_limit"
+    assert state.iteration == 1
+
+
+def test_run_iteration_backs_off_on_rate_limit_then_succeeds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """한도 신호가 2번 뜨면 5·10분 backoff 후 재시도, 3번째에 정상 후보가 나오면
+    그 iter 는 정상 진행한다(command_failed/rate_limited 아님). sleep 은 mock."""
+    _init_repo(tmp_path)
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    state = HarnessState(job_id="job")
+    state_path = tmp_path / "runs/_summary/job_state.json"
+
+    slept: list[float] = []
+    monkeypatch.setattr("harness.runner._sleep_minutes", lambda m: slept.append(m))
+
+    calls = {"n": 0}
+
+    def candidate(_prompt: str, out_dir: Path):
+        calls["n"] += 1
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if calls["n"] <= 2:  # 세션 한도 메시지 + 빈 diff + 비정상 종료
+            (out_dir / "claude_stdout.txt").write_text(
+                "You've hit your session limit · resets 11:30pm", encoding="utf-8"
+            )
+            (out_dir / "candidate.diff").write_text("", encoding="utf-8")
+            return subprocess.CompletedProcess(["claude"], 1, "", "")
+        # 3번째: 정상 후보
+        (tmp_path / "workspace/transcribe.py").write_text(
+            "def transcribe(audio, sr):\n"
+            "    results = generate(features, beam_size=5)\n    return 'ok'\n",
+            encoding="utf-8",
+        )
+        _write_valid_meta(out_dir)
+        (out_dir / "candidate.diff").write_text(
+            "@@ @@ def transcribe(audio, sr):\n"
+            "+    results = generate(features, beam_size=5)\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(["claude"], 0, _VALID_META_STDOUT, "")
+
+    def verifier(hyp_id: str) -> VerifyResult:
+        report = {
+            "corpus_cer": 0.40,
+            "total_inference_time_s": 90.0,
+            "error_breakdown": {"sub_ratio": 0.3, "del_ratio": 0.3},
+            "hallucination_hit_rate": 0.1,
+        }
+        out_dir = tmp_path / "runs" / hyp_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "score_report.json").write_text(json.dumps(report), encoding="utf-8")
+        return VerifyResult(
+            ok=True, hyp_id=hyp_id, out_dir=out_dir, report=report, per_file=[]
+        )
+
+    r = run_iteration(config, state, state_path, candidate, verifier)
+
+    assert calls["n"] == 3      # 2회 한도 + 1회 정상
+    assert slept == [5, 10]     # backoff 2회 후 풀림
+    assert not r.command_failed
+    assert not r.rate_limited
+    assert r.status in ("keep", "reject")  # 평가까지 도달
+
+
+# ----------------------------------------------------------------------- #
 # Review followup fixes (F1–F5) regression guards                          #
 # ----------------------------------------------------------------------- #
 
