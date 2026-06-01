@@ -20,24 +20,41 @@ _TASK_TOKEN = "<|transcribe|>"
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
-    inputs = processor(
-        audio,
-        sampling_rate=sr,
-        return_tensors="np",
-    )
-    features = to_storage_view(inputs.input_features)
-
     prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
     )
 
-    results = generate(
-        features,
-        [prompt_tokens],
-        beam_size=1,
-        sampling_temperature=0.0,
-    )
+    # Whisper's feature extractor pads/truncates to a single 30s window, so the
+    # stub silently drops everything past the first 30s. Window the full signal
+    # into consecutive 30s chunks so multi-minute calls are covered end to end.
+    chunk_samples = 30 * sr
+    chunks = [
+        audio[start : start + chunk_samples]
+        for start in range(0, len(audio), chunk_samples)
+    ]
+    chunks = [c for c in chunks if len(c) > 0]
+    if not chunks:
+        return ""
 
-    token_ids = results[0].sequences_ids[0]
-    text = processor.tokenizer.decode(token_ids, skip_special_tokens=True)
-    return text
+    # The previous attempt stacked ALL windows into one batched decode, which
+    # OOMs on multi-minute calls (an (N,80,3000) view all resident at once).
+    # Decode each 30s window in its own generate() call so peak GPU memory
+    # stays at single-window size regardless of file length.
+    texts = []
+    for chunk in chunks:
+        features = to_storage_view(
+            processor(chunk, sampling_rate=sr, return_tensors="np").input_features
+        )
+        results = generate(
+            features,
+            [prompt_tokens],
+            beam_size=1,
+            sampling_temperature=0.0,
+        )
+        text = processor.tokenizer.decode(
+            results[0].sequences_ids[0], skip_special_tokens=True
+        )
+        if text.strip():
+            texts.append(text.strip())
+
+    return " ".join(texts)

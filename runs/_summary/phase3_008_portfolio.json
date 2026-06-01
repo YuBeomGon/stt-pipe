@@ -1,0 +1,136 @@
+{
+  "job_id": "phase3_008",
+  "updated_at_iter": 2,
+  "global_best": "phase3_008_iter_002",
+  "family_best": {
+    "family_001": {
+      "hyp_id": "phase3_008_iter_002",
+      "iter": 2,
+      "status": "keep",
+      "cer": 0.408675043131241,
+      "harness_signature": "sig_5bcf5101",
+      "harness_family_id": "family_001",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "sequential",
+        "perwindow",
+        "oom",
+        "longform",
+        "coverage"
+      ],
+      "mode": "repair",
+      "diff_path": "runs/phase3_008_iter_002/candidate.diff",
+      "runtime_s": 103.79951326800074,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.798580017909684,
+        "error_breakdown.sub_ratio": 0.1844910664790414,
+        "hallucination_hit_rate": 0.09090909090909091,
+        "total_inference_time_s": 103.79951326800074
+      }
+    }
+  },
+  "metric_best": {
+    "best_deletion": {
+      "hyp_id": "phase3_008_iter_002",
+      "iter": 2,
+      "status": "keep",
+      "cer": 0.408675043131241,
+      "harness_signature": "sig_5bcf5101",
+      "harness_family_id": "family_001",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "sequential",
+        "perwindow",
+        "oom",
+        "longform",
+        "coverage"
+      ],
+      "mode": "repair",
+      "diff_path": "runs/phase3_008_iter_002/candidate.diff",
+      "runtime_s": 103.79951326800074,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.798580017909684,
+        "error_breakdown.sub_ratio": 0.1844910664790414,
+        "hallucination_hit_rate": 0.09090909090909091,
+        "total_inference_time_s": 103.79951326800074
+      }
+    },
+    "best_substitution": {
+      "hyp_id": "phase3_008_iter_002",
+      "iter": 2,
+      "status": "keep",
+      "cer": 0.408675043131241,
+      "harness_signature": "sig_5bcf5101",
+      "harness_family_id": "family_001",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "sequential",
+        "perwindow",
+        "oom",
+        "longform",
+        "coverage"
+      ],
+      "mode": "repair",
+      "diff_path": "runs/phase3_008_iter_002/candidate.diff",
+      "runtime_s": 103.79951326800074,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.798580017909684,
+        "error_breakdown.sub_ratio": 0.1844910664790414,
+        "hallucination_hit_rate": 0.09090909090909091,
+        "total_inference_time_s": 103.79951326800074
+      }
+    },
+    "best_low_hallucination": {
+      "hyp_id": "phase3_008_iter_002",
+      "iter": 2,
+      "status": "keep",
+      "cer": 0.408675043131241,
+      "harness_signature": "sig_5bcf5101",
+      "harness_family_id": "family_001",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "sequential",
+        "perwindow",
+        "oom",
+        "longform",
+        "coverage"
+      ],
+      "mode": "repair",
+      "diff_path": "runs/phase3_008_iter_002/candidate.diff",
+      "runtime_s": 103.79951326800074,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.798580017909684,
+        "error_breakdown.sub_ratio": 0.1844910664790414,
+        "hallucination_hit_rate": 0.09090909090909091,
+        "total_inference_time_s": 103.79951326800074
+      }
+    },
+    "fast_runtime_variant": {
+      "hyp_id": "phase3_008_iter_002",
+      "iter": 2,
+      "status": "keep",
+      "cer": 0.408675043131241,
+      "harness_signature": "sig_5bcf5101",
+      "harness_family_id": "family_001",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "sequential",
+        "perwindow",
+        "oom",
+        "longform",
+        "coverage"
+      ],
+      "mode": "repair",
+      "diff_path": "runs/phase3_008_iter_002/candidate.diff",
+      "runtime_s": 103.79951326800074,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.798580017909684,
+        "error_breakdown.sub_ratio": 0.1844910664790414,
+        "hallucination_hit_rate": 0.09090909090909091,
+        "total_inference_time_s": 103.79951326800074
+      }
+    }
+  },
+  "micro_bank": [],
+  "rejected_promising": []
+}
