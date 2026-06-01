@@ -981,10 +981,17 @@ and keep CER from regressing — a simpler pipeline at equal/better CER is a win
 
 _REPAIR_DIRECTIVE = """\
 === REPAIR MODE ===
-This is a REPAIR slot — the previous attempt failed a guard, regressed an axis,
-hallucinated, or blew the runtime budget. Start from the current best and make
-the minimal change that FIXES that specific failure mode without giving up the
-gains the best already has. Target the failure, not a new idea.
+This is a REPAIR slot — the previous attempt FAILED: it crashed the evaluator,
+failed a guard, regressed an axis, hallucinated, or blew the runtime budget.
+The failed attempt's diff (and any failure output) is shown as the REPAIR
+TARGET below. Make the MINIMAL change that fixes that specific failure:
+ - If it crashed the evaluator, the transcribe() change is buggy — fix the bug
+   (e.g. wrong tensor shape, unsupported batched call, bad indexing) or fall
+   back to a simpler form that actually runs and returns text. A candidate that
+   scores at all beats one that crashes.
+ - If a best already exists, start from it and keep its gains.
+Target the failure, not a new idea. Do NOT reinvent the same approach that just
+failed.
 === END REPAIR MODE ==="""
 
 _PLATEAU_DIRECTIVE = """\
@@ -1054,6 +1061,59 @@ def _last_attempt_status(config: RunnerConfig) -> str | None:
     return recs[-1].get("attempt_status") if recs else None
 
 
+_VERIFY_FAIL_TAIL_CHARS = 3000  # repair 후보에게 줄 stderr 꼬리 길이
+
+
+def _persist_verify_failure(
+    repo_root: Path, config: RunnerConfig, hyp_id: str, verify_result: Any
+) -> None:
+    """verify 실패 사유 + stderr 꼬리를 runs/<hyp>/verify_stderr.txt 에 남긴다.
+    다음 iter 의 repair 가 _last_failure_parent 로 읽어 후보에게 전달한다."""
+    out_dir = repo_root / config.runs_dir / hyp_id
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stderr = getattr(verify_result, "stderr", "") or ""
+        error = getattr(verify_result, "error", "") or ""
+        body = (
+            f"error: {error}\n\n--- stderr (tail) ---\n"
+            f"{stderr[-_VERIFY_FAIL_TAIL_CHARS:]}"
+        )
+        (out_dir / "verify_stderr.txt").write_text(body, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _last_failure_parent(config: RunnerConfig) -> dict[str, Any] | None:
+    """직전 iter 가 verify_fail(평가 전 실패)이면 그 candidate.diff + 사유 + stderr 로
+    repair 용 합성 parent 를 만든다. portfolio best 가 아직 없을 때(stub 에서 막 시작)
+    repair 의 parent 원천 — parents_for_mode('repair') 는 [] 라 여기서 채운다."""
+    recs = _decisions_records(config)
+    if not recs or recs[-1].get("attempt_status") != "verify_fail":
+        return None
+    last = recs[-1]
+    hyp_id = last.get("hyp_id")
+    if not hyp_id:
+        return None
+    iter_dir = config.repo_root / config.runs_dir / hyp_id
+    diff = ""
+    dp = iter_dir / "candidate.diff"
+    if dp.is_file():
+        diff = dp.read_text(encoding="utf-8")[:_PROMISING_DIFF_MAX_CHARS]
+    stderr = ""
+    sp = iter_dir / "verify_stderr.txt"
+    if sp.is_file():
+        stderr = sp.read_text(encoding="utf-8")[-_VERIFY_FAIL_TAIL_CHARS:]
+    return {
+        "hyp_id": hyp_id,
+        "harness_family_id": last.get("harness_family_id"),
+        "cer": None,
+        "diff": diff or "(diff unavailable)",
+        "failure_reason": last.get("decision_reason") or "verify 실패",
+        "failure_stderr": stderr,
+        "is_repair_target": True,
+    }
+
+
 def _scheduler_context(config: RunnerConfig, state: HarnessState, portfolio):
     from harness import portfolio as pf
     from harness.scheduler import SchedulerContext
@@ -1090,6 +1150,13 @@ def _decide_iteration(config: RunnerConfig, state: HarnessState):
                 diff_text = dp.read_text(encoding="utf-8")[:_PROMISING_DIFF_MAX_CHARS]
         entry["diff"] = diff_text or "(diff unavailable)"
         parents.append(entry)
+    # repair 인데 portfolio parent 가 없으면(=best 전 crash repair) 직전 실패 iter 를
+    # 합성 parent 로 잡는다. parents_for_mode('repair') 는 설계상 [] 이고, 실패 iter
+    # 포착은 runner 책임(portfolio.py 주석 참조).
+    if sched.chosen_mode == "repair" and not parents:
+        fail_parent = _last_failure_parent(config)
+        if fail_parent:
+            parents.append(fail_parent)
     return sched, parents
 
 
@@ -1100,6 +1167,18 @@ def _format_parents_block(parents: list[dict[str, Any]]) -> str:
         return ""
     blocks = ["Parent candidate(s) to build on (harness-selected; their diffs follow):"]
     for p in parents:
+        # repair target: 직전에 평가기를 깨뜨린 시도. axis 요약 대신 실패 사유 +
+        # stderr 꼬리를 보여줘 "이 diff 가 이래서 죽었으니 그걸 고쳐라" 로 만든다.
+        if p.get("is_repair_target"):
+            stderr = (p.get("failure_stderr") or "").strip()
+            stderr_block = f"\nObserved failure output:\n```\n{stderr}\n```" if stderr else ""
+            blocks.append(
+                f"\n- REPAIR TARGET (previous attempt {p.get('hyp_id', '?')}) — "
+                f"FAILED: {p.get('failure_reason', 'verify 실패')}. This diff did NOT "
+                f"score; fix the specific failure, do not start a new idea."
+                f"{stderr_block}\n```diff\n{p.get('diff', '')}\n```"
+            )
+            continue
         cer = p.get("cer")
         cer_s = f"{cer:.4f}" if isinstance(cer, (int, float)) else "n/a"
         # 각 parent 가 어떤 축에 강한지 보여줘 combine/refine 의 "축 보완"을 가능케
@@ -1832,6 +1911,11 @@ def run_iteration(
     noise = _read_json(repo_root / config.noise_floor_file)
 
     if not verify_result.ok or verify_result.report is None:
+        # verify 실패 사유(특히 judge.evaluate crash traceback)를 iter dir 에 남긴다.
+        # rollback 은 candidate-owned(=workspace) 만 되돌리고 runs/<hyp> 는 보존하므로,
+        # 다음 iter 의 repair 모드가 _decide_iteration 에서 이 파일을 읽어 "무엇이 왜
+        # 깨졌는지" 를 후보에게 그대로 전달할 수 있다(현재 stderr 미저장 갭 보완).
+        _persist_verify_failure(repo_root, config, hyp_id, verify_result)
         rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
         result = IterationResult(
             hyp_id=hyp_id,

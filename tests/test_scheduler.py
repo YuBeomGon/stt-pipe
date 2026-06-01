@@ -61,6 +61,21 @@ def test_repair_event_highest_priority() -> None:
     assert d.override == "repair_event"
 
 
+def test_crash_before_first_best_routes_to_repair_not_explore() -> None:
+    """stub 에서 시작한 첫 후보가 평가기를 crash(verify_fail) 시키면, best 가 없어도
+    repair 로 가야 한다. 예전엔 no_best 가 먼저 매칭돼 explore 로 빠졌고, parent/피드백
+    없는 explore 가 같은 crash 를 매 iter 재발명했다(회귀 방지)."""
+    d = sch.decide_mode(1, 50, _ctx(has_best=False, repair_event=True))
+    assert d.chosen_mode == "repair"
+    assert d.override == "repair_event"
+
+
+def test_repair_feasible_without_best_when_repair_event() -> None:
+    assert sch._feasible("repair", _ctx(has_best=False, repair_event=True)) is True
+    # 고칠 실패도 best 도 없으면 repair 불가 (그냥 explore 로).
+    assert sch._feasible("repair", _ctx(has_best=False, repair_event=False)) is False
+
+
 def test_diversity_stall_forces_explore() -> None:
     d = sch.decide_mode(5, 50, _ctx(recent_new_family_count=0))
     assert d.chosen_mode == "explore"

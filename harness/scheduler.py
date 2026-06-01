@@ -87,7 +87,10 @@ def _feasible(mode: str, ctx: SchedulerContext) -> bool:
     if mode == "explore" or mode == "plateau":
         return True
     if mode == "repair":
-        return ctx.has_best
+        # repair 는 "고칠 실패가 있는가" 가 본질 — best 유무와 무관하다. 첫 best 가
+        # 나오기 전이라도 직전 시도가 crash/guard-fail(verify_fail) 이면 그 실패가
+        # repair 대상이다. (best 가 있으면 axis 회귀/guard 실패 repair 도 포함.)
+        return ctx.has_best or ctx.repair_event
     if mode == "refine":
         return ctx.feasible_refine
     if mode == "combine":
@@ -104,12 +107,17 @@ def _fallback(ctx: SchedulerContext) -> str:
 
 def decide_mode(evaluated_index: int, total: int, ctx: SchedulerContext) -> SchedulerDecision:
     """base schedule + override precedence. 첫 매칭 우선:
-    1 no_best → explore
-    2 repair_event → repair
+    1 repair_event → repair   (best 유무와 무관 — 직전 실패를 먼저 수습)
+    2 no_best → explore
     3 diversity_stall(recent_new_family==0) → explore
     4 plateau(iters_since_best>=K) → plateau
     5 base feasible → base
     6 else → feasible fallback
+
+    repair 가 no_best 보다 앞선다: stub 에서 시작한 첫 후보가 평가기를 crash 시키면
+    (verify_fail) best 가 없어 예전엔 no_best→explore 로 빠져 매 iter 백지에서 같은
+    crash 를 재발명했다. crash 는 explore 가 아니라 repair 로 잡아야 수렴한다. repair
+    는 직전 실패 iter 의 diff+사유를 parent 로 받는다(runner `_decide_iteration`).
 
     **MVP 범위**: proposal §4.3 의 opportunity override(micro→refine, axis-complement
     →combine, complex→ablate, metric_best reuse) 와 cooldown-in-precedence 는 아직
@@ -118,10 +126,10 @@ def decide_mode(evaluated_index: int, total: int, ctx: SchedulerContext) -> Sche
     """
     scheduled = base_mode(evaluated_index, total)
 
+    if ctx.repair_event and _feasible("repair", ctx):
+        return SchedulerDecision(scheduled, "repair", "repair_event")
     if not ctx.has_best:
         return SchedulerDecision(scheduled, "explore", "no_best")
-    if ctx.repair_event:
-        return SchedulerDecision(scheduled, "repair", "repair_event")
     if ctx.recent_new_family_count == 0:
         return SchedulerDecision(scheduled, "explore", "diversity_stall")
     if ctx.iters_since_best >= PLATEAU_K:

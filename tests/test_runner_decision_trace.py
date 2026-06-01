@@ -9,7 +9,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from harness.runner import RunnerConfig, _persist_decision
+from types import SimpleNamespace
+
+from harness.runner import (
+    RunnerConfig,
+    _format_parents_block,
+    _last_failure_parent,
+    _persist_decision,
+    _persist_verify_failure,
+)
 
 
 def _iter_dir(repo: Path, hyp_id: str, *, diff: str, report: dict) -> None:
@@ -149,6 +157,45 @@ def test_judge_crash_classified_as_verify_fail(tmp_path: Path) -> None:
     )
     assert line["evaluated"] is False
     assert line["attempt_status"] == "verify_fail"
+
+
+def test_verify_failure_persisted_and_sourced_as_repair_parent(tmp_path: Path) -> None:
+    """crash 한 iter 의 stderr 가 저장되고, 다음 repair 의 합성 parent 로 잡혀
+    prompt 에 'REPAIR TARGET' + 실패 출력이 노출되는지 고정(stub crash 루프 탈출)."""
+    cfg = RunnerConfig(job_id="phase3_007", repo_root=tmp_path)
+    hyp = "phase3_007_iter_001"
+    d = tmp_path / "runs" / hyp
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "candidate.diff").write_text(
+        _DIFF_DECODE.replace("beam_size=5", "windows=batch(audio)"), encoding="utf-8"
+    )
+    vr = SimpleNamespace(
+        stderr="Traceback (most recent call last):\nRuntimeError: shape mismatch\n",
+        error="judge.evaluate 종료 코드 비정상",
+    )
+    _persist_verify_failure(tmp_path, cfg, hyp, vr)
+    assert (d / "verify_stderr.txt").is_file()
+
+    _persist_decision(cfg, hyp, 1, "reject", reason="judge.evaluate 종료 코드 비정상")
+
+    parent = _last_failure_parent(cfg)
+    assert parent is not None
+    assert parent["is_repair_target"] is True
+    assert parent["cer"] is None
+    assert "shape mismatch" in parent["failure_stderr"]
+    assert "windows=batch" in parent["diff"]
+
+    block = _format_parents_block([parent])
+    assert "REPAIR TARGET" in block
+    assert "shape mismatch" in block
+    assert "did NOT" in block  # "did NOT score" — explore 가 아니라 fix 지시
+
+
+def test_last_failure_parent_none_when_last_evaluated(tmp_path: Path) -> None:
+    cfg = RunnerConfig(job_id="phase3_007", repo_root=tmp_path)
+    _iter_dir(tmp_path, "phase3_007_iter_001", diff=_DIFF_DECODE, report=_report(0.18))
+    _persist_decision(cfg, "phase3_007_iter_001", 1, "keep")
+    assert _last_failure_parent(cfg) is None
 
 
 def test_attempt_status_evaluated_when_report_present(tmp_path: Path) -> None:
