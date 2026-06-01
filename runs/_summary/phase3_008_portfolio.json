@@ -1,7 +1,7 @@
 {
   "job_id": "phase3_008",
-  "updated_at_iter": 5,
-  "global_best": "phase3_008_iter_004",
+  "updated_at_iter": 6,
+  "global_best": "phase3_008_iter_006",
   "family_best": {
     "family_001": {
       "hyp_id": "phase3_008_iter_003",
@@ -52,32 +52,57 @@
         "hallucination_hit_rate": 0.18181818181818182,
         "total_inference_time_s": 130.3584913179875
       }
+    },
+    "family_003": {
+      "hyp_id": "phase3_008_iter_006",
+      "iter": 6,
+      "status": "keep",
+      "cer": 0.16515344265723297,
+      "harness_signature": "sig_2a0aeac8",
+      "harness_family_id": "family_003",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "timestamps",
+        "seek",
+        "segment",
+        "boundary",
+        "longform"
+      ],
+      "mode": "explore",
+      "diff_path": "runs/phase3_008_iter_006/candidate.diff",
+      "runtime_s": 215.93417426199449,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.3333860926453519,
+        "error_breakdown.sub_ratio": 0.5644718792866941,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 215.93417426199449
+      }
     }
   },
   "metric_best": {
     "best_deletion": {
-      "hyp_id": "phase3_008_iter_002",
-      "iter": 2,
+      "hyp_id": "phase3_008_iter_006",
+      "iter": 6,
       "status": "keep",
-      "cer": 0.408675043131241,
-      "harness_signature": "sig_5bcf5101",
-      "harness_family_id": "family_001",
+      "cer": 0.16515344265723297,
+      "harness_signature": "sig_2a0aeac8",
+      "harness_family_id": "family_003",
       "self_declared_family_id": null,
       "fingerprint": [
-        "sequential",
-        "perwindow",
-        "oom",
-        "longform",
-        "coverage"
+        "timestamps",
+        "seek",
+        "segment",
+        "boundary",
+        "longform"
       ],
-      "mode": "repair",
-      "diff_path": "runs/phase3_008_iter_002/candidate.diff",
-      "runtime_s": 103.79951326800074,
+      "mode": "explore",
+      "diff_path": "runs/phase3_008_iter_006/candidate.diff",
+      "runtime_s": 215.93417426199449,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.798580017909684,
-        "error_breakdown.sub_ratio": 0.1844910664790414,
-        "hallucination_hit_rate": 0.09090909090909091,
-        "total_inference_time_s": 103.79951326800074
+        "error_breakdown.del_ratio": 0.3333860926453519,
+        "error_breakdown.sub_ratio": 0.5644718792866941,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 215.93417426199449
       }
     },
     "best_substitution": {
