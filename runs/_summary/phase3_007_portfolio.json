@@ -1,6 +1,6 @@
 {
   "job_id": "phase3_007",
-  "updated_at_iter": 26,
+  "updated_at_iter": 27,
   "global_best": "phase3_007_iter_018",
   "family_best": {
     "family_001": {
@@ -104,28 +104,28 @@
       }
     },
     "family_006": {
-      "hyp_id": "phase3_007_iter_008",
-      "iter": 8,
+      "hyp_id": "phase3_007_iter_027",
+      "iter": 27,
       "status": "micro_bank",
-      "cer": 0.285249986929927,
-      "harness_signature": "sig_e87aeb2c",
+      "cer": 0.23428541554118815,
+      "harness_signature": "sig_da675da5",
       "harness_family_id": "family_006",
       "self_declared_family_id": null,
       "fingerprint": [
         "startofprev",
         "prev-text-conditioning",
-        "prompt-prefix",
-        "long-form-carryover",
+        "context-prefix",
+        "prior",
         "substitution"
       ],
-      "mode": "explore",
-      "diff_path": "runs/phase3_007_iter_008/candidate.diff",
-      "runtime_s": 154.42849362499328,
+      "mode": "plateau",
+      "diff_path": "runs/phase3_007_iter_027/candidate.diff",
+      "runtime_s": 213.21237275900785,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.29000824754864524,
-        "error_breakdown.sub_ratio": 0.5999633442282433,
-        "hallucination_hit_rate": 0.0,
-        "total_inference_time_s": 154.42849362499328
+        "error_breakdown.del_ratio": 0.34513537637607855,
+        "error_breakdown.sub_ratio": 0.4873177625706635,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 213.21237275900785
       }
     },
     "family_007": {
@@ -947,6 +947,31 @@
         "error_breakdown.sub_ratio": 0.48997662711254947,
         "hallucination_hit_rate": 0.18181818181818182,
         "total_inference_time_s": 241.68369088699546
+      }
+    },
+    {
+      "hyp_id": "phase3_007_iter_027",
+      "iter": 27,
+      "status": "micro_bank",
+      "cer": 0.23428541554118815,
+      "harness_signature": "sig_da675da5",
+      "harness_family_id": "family_006",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "startofprev",
+        "prev-text-conditioning",
+        "context-prefix",
+        "prior",
+        "substitution"
+      ],
+      "mode": "plateau",
+      "diff_path": "runs/phase3_007_iter_027/candidate.diff",
+      "runtime_s": 213.21237275900785,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.34513537637607855,
+        "error_breakdown.sub_ratio": 0.4873177625706635,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 213.21237275900785
       }
     }
   ],
