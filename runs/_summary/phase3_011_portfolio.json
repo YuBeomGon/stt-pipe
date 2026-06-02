@@ -1,7 +1,7 @@
 {
   "job_id": "phase3_011",
-  "updated_at_iter": 8,
-  "global_best": "phase3_011_iter_008",
+  "updated_at_iter": 9,
+  "global_best": "phase3_011_iter_009",
   "family_best": {
     "family_001": {
       "hyp_id": "phase3_011_iter_003",
@@ -28,55 +28,53 @@
       }
     },
     "family_003": {
-      "hyp_id": "phase3_011_iter_008",
-      "iter": 8,
+      "hyp_id": "phase3_011_iter_009",
+      "iter": 9,
       "status": "keep",
-      "cer": 0.30907237335099247,
-      "harness_signature": "sig_f05ffab2",
+      "cer": 0.3045239879406793,
+      "harness_signature": "sig_9f68bf4e",
       "harness_family_id": "family_003",
       "self_declared_family_id": null,
       "fingerprint": [
-        "overlap-windows",
-        "stride",
-        "dedup",
-        "boundary-coverage",
-        "combine"
+        "ablate",
+        "no-repeat-ngram",
+        "decode-kwargs",
+        "repetition-guard"
       ],
-      "mode": "combine",
-      "diff_path": "runs/phase3_011_iter_008/candidate.diff",
-      "runtime_s": 246.58601731900126,
+      "mode": "ablate",
+      "diff_path": "runs/phase3_011_iter_009/candidate.diff",
+      "runtime_s": 171.54163941199658,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.657579431084548,
-        "error_breakdown.sub_ratio": 0.2715175777395619,
+        "error_breakdown.del_ratio": 0.6375575839079802,
+        "error_breakdown.sub_ratio": 0.31045237345846804,
         "hallucination_hit_rate": 0.18181818181818182,
-        "total_inference_time_s": 246.58601731900126
+        "total_inference_time_s": 171.54163941199658
       }
     }
   },
   "metric_best": {
     "best_deletion": {
-      "hyp_id": "phase3_011_iter_008",
-      "iter": 8,
+      "hyp_id": "phase3_011_iter_009",
+      "iter": 9,
       "status": "keep",
-      "cer": 0.30907237335099247,
-      "harness_signature": "sig_f05ffab2",
+      "cer": 0.3045239879406793,
+      "harness_signature": "sig_9f68bf4e",
       "harness_family_id": "family_003",
       "self_declared_family_id": null,
       "fingerprint": [
-        "overlap-windows",
-        "stride",
-        "dedup",
-        "boundary-coverage",
-        "combine"
+        "ablate",
+        "no-repeat-ngram",
+        "decode-kwargs",
+        "repetition-guard"
       ],
-      "mode": "combine",
-      "diff_path": "runs/phase3_011_iter_008/candidate.diff",
-      "runtime_s": 246.58601731900126,
+      "mode": "ablate",
+      "diff_path": "runs/phase3_011_iter_009/candidate.diff",
+      "runtime_s": 171.54163941199658,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.657579431084548,
-        "error_breakdown.sub_ratio": 0.2715175777395619,
+        "error_breakdown.del_ratio": 0.6375575839079802,
+        "error_breakdown.sub_ratio": 0.31045237345846804,
         "hallucination_hit_rate": 0.18181818181818182,
-        "total_inference_time_s": 246.58601731900126
+        "total_inference_time_s": 171.54163941199658
       }
     },
     "best_substitution": {
@@ -155,6 +153,30 @@
   "micro_bank": [],
   "rejected_promising": [],
   "near_best": [
+    {
+      "hyp_id": "phase3_011_iter_009",
+      "iter": 9,
+      "status": "keep",
+      "cer": 0.3045239879406793,
+      "harness_signature": "sig_9f68bf4e",
+      "harness_family_id": "family_003",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "ablate",
+        "no-repeat-ngram",
+        "decode-kwargs",
+        "repetition-guard"
+      ],
+      "mode": "ablate",
+      "diff_path": "runs/phase3_011_iter_009/candidate.diff",
+      "runtime_s": 171.54163941199658,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.6375575839079802,
+        "error_breakdown.sub_ratio": 0.31045237345846804,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 171.54163941199658
+      }
+    },
     {
       "hyp_id": "phase3_011_iter_008",
       "iter": 8,
