@@ -101,7 +101,7 @@ def _dedup_extend(acc_words: list[str], new_words: list[str]) -> None:
     acc_words.extend(new_words)
 
 
-def _decode_window(processor, features, prompt) -> list[int]:
+def _decode_window(processor, features, prompt) -> tuple[list[int], bool]:
     """Decode one window with the reference Whisper temperature fallback.
 
     Step T=0 first (beam search — the strongest deterministic decode). If the
@@ -109,7 +109,11 @@ def _decode_window(processor, features, prompt) -> list[int]:
     temperature ladder with sampling (beam_size=1, sampling_topk=0 = sample from
     the full temperature-scaled distribution) to break the repetition loop. Keep
     the first decode that passes the gate; if none does, keep the one with the
-    lowest compression ratio (least repetitive)."""
+    lowest compression ratio (least repetitive).
+
+    Returns (token_ids, passed). ``passed`` is True only when a decode cleared
+    the quality gate — the caller uses it to decide whether this window's text
+    is trustworthy enough to seed the prev-text LM prior (family_004 guard)."""
     best_ids: list[int] = []
     best_ratio = float("inf")
     for temperature in _TEMPERATURE_LADDER:
@@ -146,9 +150,9 @@ def _decode_window(processor, features, prompt) -> list[int]:
         if ratio <= _COMPRESSION_RATIO_THRESHOLD and (
             avg_logprob is None or avg_logprob >= _LOGPROB_THRESHOLD
         ):
-            return token_ids
+            return token_ids, True
 
-    return best_ids
+    return best_ids, False
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -187,7 +191,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         else:
             prompt = sot_suffix
 
-        token_ids = _decode_window(processor, features, prompt)
+        token_ids, passed = _decode_window(processor, features, prompt)
 
         # Last emitted segment-end timestamp = how far the decoder reliably got
         # into this window. Everything after it is re-seeked, not deleted.
@@ -196,8 +200,16 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             if t >= ts_begin_id:
                 last_ts_seconds = (t - ts_begin_id) * _TIMESTAMP_RESOLUTION
 
+        # family_004 guard: only a gate-passing (confident, in-domain) window
+        # seeds the prev-text LM prior. A low-confidence window still emits its
+        # text for coverage but must NOT overwrite the prefix — the previous
+        # confident prefix carries forward. The parent paired this guard with a
+        # widened 128-token prefix and regressed (0.1899); the REFINE tune keeps
+        # the guard but pulls the width back to the known-good 64 so the prior
+        # is quality-conditioned WITHOUT the long-prefix over-poisoning that
+        # drives substitution on phone-band audio (the dominant axis).
         text_tokens = [t for t in token_ids if t < eot_id]
-        if text_tokens:
+        if text_tokens and passed:
             prev_tokens = text_tokens[-_PREV_CONTEXT_TOKENS:]
 
         piece = processor.tokenizer.decode(token_ids, skip_special_tokens=True).strip()
