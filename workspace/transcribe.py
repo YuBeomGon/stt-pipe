@@ -6,24 +6,34 @@ Long-form windowing: Whisper's feature extractor pins every clip to a fixed
 deletion source. We split the audio into windows and decode them in order,
 stitching the transcripts back together.
 
-COMBINE: this pipeline grafts the two parent families. From family_003 it keeps
-single-window prev-text conditioning (<|startofprev|> + recent token ids before
-the SOT sequence), which drove hallucination down (0.27 -> 0.18); from
-family_001 it keeps the full beam-search surface (beam_size, patience,
-length_penalty, no_repeat_ngram). Both parents stalled on the SAME axis —
-deletion 0.76, length_ratio 0.71 — so we add a deletion guard on that axis: the
-windows OVERLAP. A hard non-overlapping 30s cut lands in the middle of a word
-or segment, and Whisper drops the speech straddling the seam (the window that
-ends mid-word truncates it; the window that starts mid-word mis-decodes the
-fragment). Stepping by less than the window length means every seam is covered
-twice, so no boundary span is lost. The duplicated overlap text is removed by a
-word-level suffix/prefix dedup at stitch time so the recovered coverage does not
-turn into insertions/hallucination (the axis family_001 regressed).
+TIMESTAMP-DRIVEN SEEKING (new mechanism). The deletion/coverage axis is stuck
+(del 64%, length_ratio 0.80) under every fixed-hop scheme tried — a hard 30s
+stride (iter_007) and a 4s overlap stride (iter_008) both leave the same span
+on the floor. The reason is that the decoder does not transcribe the full 30s
+of every window: on long calls it routinely emits <|endoftext|> partway through
+the mel (early termination), so a fixed hop that assumes the whole window was
+covered steps *past* speech the decoder never committed to — that un-decoded
+tail is the residual deletion.
 
-Memory: peak decoder VRAM ~ windows-per-call x beam x seq_len. We decode exactly
-one window per ``generate`` call (concurrency 1 x beam over a short prev prefix —
-the smallest footprint used), so the overlap only adds ~15% more single-window
-calls; runtime stays well inside budget.
+iter_004 established that omitting <|notimestamps|> from the SOT prompt makes
+the decoder interleave <|t.tt|> segment-timestamp tokens (id >= the <|0.00|>
+token id, each encoding time = (id - ts_begin) * 0.02 s relative to the window
+start) into sequences_ids. We now USE that output for the first time: instead
+of a fixed stride we advance the next window's start to the LAST emitted
+segment-end timestamp. The decoder itself tells us how far it reliably got;
+everything past that boundary is re-seeked by the next window rather than
+deleted. This is the reference Whisper long-form algorithm, reachable through
+the frozen surface with no new import.
+
+We keep family_003's prev-text conditioning (<|startofprev|> + recent token ids
+before the SOT sequence — held hallucination at 0.18) and family_001's beam
+surface. The re-decoded tail overlap is removed by the same word-level dedup as
+iter_008 so recovered coverage does not turn into insertions.
+
+Memory/runtime: still exactly one window per ``generate`` call ([1,128,3000],
+concurrency 1 x beam — the smallest footprint used). A floor on the per-window
+advance (``_MIN_ADVANCE_SECONDS``) bounds the window count when a timestamp is
+degenerate or missing, keeping runtime inside the 719s budget.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -37,15 +47,16 @@ from frozen.asr_backend import generate, load, to_storage_view
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 _WINDOW_SECONDS = 30
-_OVERLAP_SECONDS = 4
+_TIMESTAMP_RESOLUTION = 0.02
+_MIN_ADVANCE_SECONDS = 15.0
 _PREV_CONTEXT_TOKENS = 64
 _MAX_OVERLAP_WORDS = 24
 
 
 def _dedup_extend(acc_words: list[str], new_words: list[str]) -> None:
     """Append new_words to acc_words, dropping the largest leading run of
-    new_words that exactly re-states the trailing run of acc_words (the doubly
-    covered overlap region)."""
+    new_words that exactly re-states the trailing run of acc_words (the
+    re-seeked tail region that both windows decode)."""
     max_k = min(len(acc_words), len(new_words), _MAX_OVERLAP_WORDS)
     for k in range(max_k, 0, -1):
         if acc_words[-k:] == new_words[:k]:
@@ -60,32 +71,30 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     window_samples = int(sr * _WINDOW_SECONDS)
     if window_samples <= 0:
         window_samples = len(audio) or 1
-    step_samples = int(sr * (_WINDOW_SECONDS - _OVERLAP_SECONDS))
-    if step_samples <= 0:
-        step_samples = window_samples
+    min_advance_samples = max(int(sr * _MIN_ADVANCE_SECONDS), 1)
 
-    starts = list(range(0, max(len(audio), 1), step_samples))
+    # SOT WITHOUT <|notimestamps|> — we want the decoder to emit segment
+    # timestamps so we can read where each window's decode reliably ended.
+    sot_suffix = processor.tokenizer.convert_tokens_to_ids(
+        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
+    )
+    startofprev_id = processor.tokenizer.convert_tokens_to_ids("<|startofprev|>")
+    eot_id = processor.tokenizer.convert_tokens_to_ids("<|endoftext|>")
+    ts_begin_id = processor.tokenizer.convert_tokens_to_ids("<|0.00|>")
 
-    feature_list = []
-    for start in starts:
-        chunk = audio[start : start + window_samples]
+    acc_words: list[str] = []
+    prev_tokens: list[int] = []
+
+    n = max(len(audio), 1)
+    cur = 0
+    while cur < n:
+        chunk = audio[cur : cur + window_samples]
         inputs = processor(
             chunk,
             sampling_rate=sr,
             return_tensors="np",
         )
-        feature_list.append(np.asarray(inputs.input_features))
-
-    sot_suffix = processor.tokenizer.convert_tokens_to_ids(
-        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
-    )
-    startofprev_id = processor.tokenizer.convert_tokens_to_ids("<|startofprev|>")
-    eot_id = processor.tokenizer.convert_tokens_to_ids("<|endoftext|>")
-
-    acc_words: list[str] = []
-    prev_tokens: list[int] = []
-    for window in feature_list:
-        features = to_storage_view(window)
+        features = to_storage_view(np.asarray(inputs.input_features))
 
         if prev_tokens:
             prompt = [startofprev_id] + prev_tokens[-_PREV_CONTEXT_TOKENS:] + sot_suffix
@@ -102,6 +111,14 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
 
         token_ids = results[0].sequences_ids[0]
+
+        # Last emitted segment-end timestamp = how far the decoder reliably got
+        # into this window. Everything after it is re-seeked, not deleted.
+        last_ts_seconds = None
+        for t in token_ids:
+            if t >= ts_begin_id:
+                last_ts_seconds = (t - ts_begin_id) * _TIMESTAMP_RESOLUTION
+
         text_tokens = [t for t in token_ids if t < eot_id]
         if text_tokens:
             prev_tokens = text_tokens[-_PREV_CONTEXT_TOKENS:]
@@ -109,5 +126,13 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         piece = processor.tokenizer.decode(token_ids, skip_special_tokens=True).strip()
         if piece:
             _dedup_extend(acc_words, piece.split())
+
+        if last_ts_seconds is not None and last_ts_seconds * sr >= min_advance_samples:
+            advance = int(last_ts_seconds * sr)
+        else:
+            # Degenerate/absent timestamp: take the full window hop so a single
+            # bad window cannot stall the seek or explode the window count.
+            advance = window_samples
+        cur += max(advance, min_advance_samples)
 
     return " ".join(acc_words)
