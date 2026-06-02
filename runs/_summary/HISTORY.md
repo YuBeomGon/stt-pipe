@@ -2315,3 +2315,14 @@ meaningful improvement: Δcer 0.002143 >= 0.002000
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 19 · phase3_011_iter_019 · cer=0.183303 (Δ-0.000444) · reject
+
+### 관찰
+corpus_cer=0.183303, total_inference_time_s=293.4
+
+### 분석
+not enough improvement: Δcer -0.000444 < 0.002000
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
