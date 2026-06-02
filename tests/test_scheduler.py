@@ -100,6 +100,23 @@ def test_plateau_is_periodic_burst_not_permanent() -> None:
     assert modes.count("plateau") == 2     # 2주기 동안 정확히 2번
 
 
+def test_exploit_modes_survive_after_plateau_onset() -> None:
+    """phase3_008 회귀 가드: best 가 고정된 채 evaluated_index 와 iters_since_best 가
+    함께 진행해도, plateau 시작 이후 refine/combine/ablate 가 다시 나타나야 한다
+    (영구 plateau 면 후반이 전부 plateau 로 붕괴했었다)."""
+    modes = []
+    for ev_idx in range(7, 40):       # best=6 고정 시나리오
+        isb = ev_idx - 6
+        modes.append(
+            sch.decide_mode(ev_idx, 100, _ctx(iters_since_best=isb)).chosen_mode
+        )
+    late = modes[sch.PLATEAU_K:]      # plateau 가 발동하기 시작한 구간
+    assert "plateau" in late
+    # exploit/discovery 모드가 plateau 에 독점당하지 않고 살아남아야 한다.
+    assert {"refine", "explore"} & set(late)
+    assert any(m != "plateau" for m in late)
+
+
 def test_mode_directives_match_scheduler_modes() -> None:
     """drift 가드: candidate 가 받는 mode 블록(_MODE_DIRECTIVES)이 scheduler 가 낼
     수 있는 mode 집합과 정확히 일치해야 한다. 한쪽만 늘면 런타임 프롬프트가 짜깁기

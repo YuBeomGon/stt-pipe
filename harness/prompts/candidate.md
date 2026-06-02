@@ -155,8 +155,9 @@ field, or a fingerprint outside 1–6 tokens causes the iteration to be
   harness needs to see for diagnosis. (A genuine, hypothesis-driven fallback
   *policy* is fine — silent error-swallowing is not.)
 - **Reading forbidden files**: reading `baseline/`, `judge/` internals,
-  `assets/audio_profile/`, or the holdout is a violation. Reading
-  `frozen/asr_backend.py` is encouraged.
+  `assets/audio_profile/`, `frozen/`, or the holdout is a violation (the sandbox
+  denies them). Study the **inlined** backend surface in the runtime prompt
+  ("Your backend surface") instead — that copy is what you reason from.
 - **Comments as harness communication**: code intent goes in the response body
   and the YAML block, not into docstring or comment prose.
 

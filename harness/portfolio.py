@@ -177,8 +177,9 @@ def parents_for_mode(
     - refine: 근방 풀에서 **회전 선택**(evaluated_index 로 결정적). 늘 global_best
       만 다듬지 않고 서로 다른 family 의 근방 후보를 돌아가며 튜닝해 다양성을 준다.
     - ablate: global_best 1개(복잡도 제거는 챔피언 기준이 의미 있음).
-    - combine: 근방 풀의 서로 다른 family 2개.
-    - explore/plateau/repair: portfolio parent 없음(repair 는 runner 가 실패 iter 에서 잡는다).
+    - combine: 근방 풀의 서로 다른 family 2개(최강 고정).
+    - plateau: combine 과 동일하게 서로 다른 family 2개를 받되 evaluated_index 로 페어 회전.
+    - explore/repair: portfolio parent 없음(repair 는 runner 가 실패 iter 에서 잡는다).
 
     풀(`_ranked_pool`)은 family_best/metric_best/micro_bank/near_best 합집합이라
     best 를 못 깬 근방 후보(global best × {factor})도 재료로 포함된다.
