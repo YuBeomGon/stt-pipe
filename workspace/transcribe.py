@@ -73,13 +73,21 @@ _MIN_ADVANCE_SECONDS = 15.0
 _PREV_CONTEXT_TOKENS = 64
 _MAX_OVERLAP_WORDS = 24
 
-# Reference Whisper quality-fallback thresholds. A window whose decoded text
-# compresses past _COMPRESSION_RATIO_THRESHOLD (repeated n-grams) or whose
-# beam score falls below _LOGPROB_THRESHOLD is treated as degenerate and
-# re-decoded down the temperature ladder.
-_TEMPERATURE_LADDER = (0.0, 0.4, 0.8)
+# Reference Whisper quality-fallback threshold. A window whose decoded text
+# compresses past _COMPRESSION_RATIO_THRESHOLD (repeated n-grams) is treated as
+# degenerate (a beam repetition loop) and re-decoded down the temperature
+# ladder. ABLATION (parent family_004): the avg-log-prob floor is removed —
+# iter_017/_020 established its only live trigger on this batch was healthy
+# low-logprob phone-band windows, where the sampled re-decode swaps the strong
+# beam for a noisier one and pushes substitution (the dominant axis).
+# REFINE: the ladder's upper rungs are pulled in from (0.4, 0.8) to (0.2, 0.4).
+# The ladder only fires to break a degenerate beam loop on the one repeated_text
+# focus file; T=0.8 sampling perturbs far past the acoustic evidence so the
+# re-decode it commits is itself substitution-noisy. A gentler 0.2/0.4 ladder
+# still injects enough stochasticity to escape the deterministic cycle while
+# staying closer to the audio, so the recovered window carries fewer subs.
+_TEMPERATURE_LADDER = (0.0, 0.2, 0.4)
 _COMPRESSION_RATIO_THRESHOLD = 2.4
-_LOGPROB_THRESHOLD = -1.0
 
 
 def _compression_ratio(text: str) -> float:
@@ -105,7 +113,7 @@ def _decode_window(processor, features, prompt) -> tuple[list[int], bool]:
     """Decode one window with the reference Whisper temperature fallback.
 
     Step T=0 first (beam search — the strongest deterministic decode). If the
-    result is degenerate by the compression-ratio / avg-log-prob gate, step the
+    result is degenerate by the compression-ratio (repetition) gate, step the
     temperature ladder with sampling (beam_size=1, sampling_topk=0 = sample from
     the full temperature-scaled distribution) to break the repetition loop. Keep
     the first decode that passes the gate; if none does, keep the one with the
@@ -125,7 +133,6 @@ def _decode_window(processor, features, prompt) -> tuple[list[int], bool]:
                 patience=2.0,
                 length_penalty=1.0,
                 sampling_temperature=0.0,
-                return_scores=True,
             )
         else:
             results = generate(
@@ -134,22 +141,16 @@ def _decode_window(processor, features, prompt) -> tuple[list[int], bool]:
                 beam_size=1,
                 sampling_topk=0,
                 sampling_temperature=temperature,
-                return_scores=True,
             )
         result = results[0]
         token_ids = result.sequences_ids[0]
         text = processor.tokenizer.decode(token_ids, skip_special_tokens=True)
         ratio = _compression_ratio(text)
 
-        scores = getattr(result, "scores", None)
-        avg_logprob = scores[0] if scores else None
-
         if ratio < best_ratio:
             best_ids, best_ratio = token_ids, ratio
 
-        if ratio <= _COMPRESSION_RATIO_THRESHOLD and (
-            avg_logprob is None or avg_logprob >= _LOGPROB_THRESHOLD
-        ):
+        if ratio <= _COMPRESSION_RATIO_THRESHOLD:
             return token_ids, True
 
     return best_ids, False
