@@ -106,7 +106,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             [prompt],
             beam_size=5,
             patience=2.0,
-            length_penalty=1.1,
+            length_penalty=1.0,
             sampling_temperature=0.0,
         )
 
