@@ -60,7 +60,10 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         results = generate(
             features,
             prompts,
-            beam_size=1,
+            beam_size=5,
+            patience=2.0,
+            length_penalty=1.1,
+            no_repeat_ngram_size=3,
             sampling_temperature=0.0,
         )
 

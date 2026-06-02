@@ -2139,3 +2139,14 @@ first valid candidate
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 3 · phase3_011_iter_003 · cer=0.355218 (Δ+0.053971) · keep
+
+### 관찰
+corpus_cer=0.355218, total_inference_time_s=172.5
+
+### 분석
+meaningful improvement: Δcer 0.053971 >= 0.002000
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
