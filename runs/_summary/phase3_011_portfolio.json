@@ -1,6 +1,6 @@
 {
   "job_id": "phase3_011",
-  "updated_at_iter": 22,
+  "updated_at_iter": 23,
   "global_best": "phase3_011_iter_021",
   "family_best": {
     "family_001": {
@@ -440,6 +440,30 @@
         "hallucination_hit_rate": 0.0,
         "total_inference_time_s": 295.11235277004016
       }
+    },
+    {
+      "hyp_id": "phase3_011_iter_023",
+      "iter": 23,
+      "status": "micro_bank",
+      "cer": 0.18354739208476378,
+      "harness_signature": "sig_53edfe4b",
+      "harness_family_id": "family_004",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "patience",
+        "beam-search",
+        "t0-decode",
+        "substitution"
+      ],
+      "mode": "refine",
+      "diff_path": "runs/phase3_011_iter_023/candidate.diff",
+      "runtime_s": 533.1811491660046,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.41305483028720624,
+        "error_breakdown.sub_ratio": 0.5077142178969856,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 533.1811491660046
+      }
     }
   ],
   "rejected_promising": [],
@@ -539,6 +563,30 @@
         "error_breakdown.sub_ratio": 0.49650615582069685,
         "hallucination_hit_rate": 0.0,
         "total_inference_time_s": 293.44465354198474
+      }
+    },
+    {
+      "hyp_id": "phase3_011_iter_023",
+      "iter": 23,
+      "status": "micro_bank",
+      "cer": 0.18354739208476378,
+      "harness_signature": "sig_53edfe4b",
+      "harness_family_id": "family_004",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "patience",
+        "beam-search",
+        "t0-decode",
+        "substitution"
+      ],
+      "mode": "refine",
+      "diff_path": "runs/phase3_011_iter_023/candidate.diff",
+      "runtime_s": 533.1811491660046,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.41305483028720624,
+        "error_breakdown.sub_ratio": 0.5077142178969856,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 533.1811491660046
       }
     },
     {
