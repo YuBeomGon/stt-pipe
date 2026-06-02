@@ -1,10 +1,10 @@
 {
   "job_id": "phase3_011",
-  "iteration": 7,
-  "best_cer": 0.3468100308453723,
-  "best_hyp_id": "phase3_011_iter_007",
+  "iteration": 8,
+  "best_cer": 0.30907237335099247,
+  "best_hyp_id": "phase3_011_iter_008",
   "status": "running",
   "iters_since_best_update": 0,
-  "evaluated_count": 3,
+  "evaluated_count": 4,
   "evaluated_since_best_update": 0
 }
