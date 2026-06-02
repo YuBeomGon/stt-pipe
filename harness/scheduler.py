@@ -33,6 +33,10 @@ _PHASES: tuple[tuple[float, dict[str, float]], ...] = (
 
 # no-improvement 이 이 횟수(evaluated 기준) 이상이면 plateau (proposal §4.3).
 PLATEAU_K: int = 8
+# plateau 는 영구 모드가 아니라 *주기적 burst* 다: 임계를 넘은 뒤 이 간격마다 한 번만
+# plateau 로 가고, 나머지 iter 는 base schedule(refine/combine/ablate/explore)을 통과
+# 시킨다. best 가 안 갱신돼도 exploit 모드가 계속 죽지 않게 한다(phase3_008 회귀 방지).
+PLATEAU_EVERY: int = 3
 
 
 @dataclass(frozen=True)
@@ -110,7 +114,7 @@ def decide_mode(evaluated_index: int, total: int, ctx: SchedulerContext) -> Sche
     1 repair_event → repair   (best 유무와 무관 — 직전 실패를 먼저 수습)
     2 no_best → explore
     3 diversity_stall(recent_new_family==0) → explore
-    4 plateau(iters_since_best>=K) → plateau
+    4 plateau(iters_since_best>=K, PLATEAU_EVERY 주기) → plateau (영구 아님; 사이 iter 는 base 통과)
     5 base feasible → base
     6 else → feasible fallback
 
@@ -132,7 +136,9 @@ def decide_mode(evaluated_index: int, total: int, ctx: SchedulerContext) -> Sche
         return SchedulerDecision(scheduled, "explore", "no_best")
     if ctx.recent_new_family_count == 0:
         return SchedulerDecision(scheduled, "explore", "diversity_stall")
-    if ctx.iters_since_best >= PLATEAU_K:
+    if ctx.iters_since_best >= PLATEAU_K and (
+        (ctx.iters_since_best - PLATEAU_K) % PLATEAU_EVERY == 0
+    ):
         return SchedulerDecision(scheduled, "plateau", "plateau")
     if _feasible(scheduled, ctx):
         return SchedulerDecision(scheduled, scheduled, "scheduled")

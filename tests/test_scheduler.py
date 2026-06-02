@@ -88,6 +88,28 @@ def test_plateau_after_k_no_improvement() -> None:
     assert d.override == "plateau"
 
 
+def test_plateau_is_periodic_burst_not_permanent() -> None:
+    # 임계를 넘어도 매 iter plateau 가 아니라 PLATEAU_EVERY 주기로만 plateau.
+    # 사이 iter 는 base schedule(scheduled mode)이 통과해야 한다(phase3_008 회귀 방지).
+    modes = [
+        sch.decide_mode(20, 50, _ctx(iters_since_best=k)).chosen_mode
+        for k in range(sch.PLATEAU_K, sch.PLATEAU_K + sch.PLATEAU_EVERY * 2)
+    ]
+    assert "plateau" in modes              # 여전히 발동은 함
+    assert any(m != "plateau" for m in modes)  # 영구 독점은 아님
+    assert modes.count("plateau") == 2     # 2주기 동안 정확히 2번
+
+
+def test_mode_directives_match_scheduler_modes() -> None:
+    """drift 가드: candidate 가 받는 mode 블록(_MODE_DIRECTIVES)이 scheduler 가 낼
+    수 있는 mode 집합과 정확히 일치해야 한다. 한쪽만 늘면 런타임 프롬프트가 짜깁기
+    된다(2026-06-01 회귀: harness 6-mode 인데 프롬프트 2-mode)."""
+    from harness.runner import _MODE_DIRECTIVES
+
+    emittable = set(sch._SCHEDULED_MODES) | {"repair", "plateau"}
+    assert set(_MODE_DIRECTIVES) == emittable
+
+
 def test_plateau_uses_evaluated_not_attempt_count() -> None:
     # iters_since_best 는 evaluated 기준 값이 들어와야 한다(#2). 7 < K → plateau 아님.
     d = sch.decide_mode(20, 50, _ctx(iters_since_best=sch.PLATEAU_K - 1))

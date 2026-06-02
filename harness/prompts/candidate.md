@@ -79,17 +79,19 @@ Before you edit, do reconnaissance and be able to state it:
 4. **Runtime**: Will the change fit the runtime budget in the prompt header?
 
 Form a hypothesis from what you discovered, implement it, and let the harness
-measure it. The runtime prompt declares a **mode** for each iteration:
+measure it. The harness picks a **mode** for each iteration and injects a
+dedicated mode block (`=== … MODE ===`) into the runtime prompt below — that
+block is authoritative for this slot. Read it and do exactly what it asks:
+either *discover* a backend mechanism not yet used (a new value of an
+already-tried knob is never discovery), or *exploit* material already found —
+tune / combine / simplify the **parent candidate diff(s)** the block hands you,
+or *repair* the previous attempt's specific failure. Do not re-derive a given
+parent from prose; build on its code.
 
-- **EXPLORE** — surface a backend mechanism not yet in the fingerprint/ledger
-  history. A new value of an already-tried knob is not exploration. The
-  "one focused change" rule is relaxed when a structurally new mechanism
-  justifies it.
-- **EXPLOIT** — extract value from what you already found, two plays: (A)
-  *synthesis* — combine prior attempts that each improved a different error axis
-  (their diffs are given to you under "Promising prior attempts to SYNTHESIZE");
-  or (B) *parameter tuning* — a focused decode-parameter tune on the mature
-  pipeline. Exploiting beats inventing something new in this slot.
+The harness groups candidates into **families** (lineages of related pipelines)
+behind the scenes; a parent is labelled with its `family_…` id only so you can
+see when two parents come from genuinely different lineages. You do not manage
+families — just build on the diffs you are given.
 
 The job is explore-heavy early and keeps a guaranteed floor of exploration
 throughout, so you will be asked to keep finding new mechanisms even late.
