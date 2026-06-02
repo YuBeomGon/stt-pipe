@@ -2414,3 +2414,14 @@ judge.evaluate 종료 코드 비정상
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 5 · phase3_012_iter_005 · cer=NA (ΔNA) · reject
+
+### 관찰
+score_report 없음
+
+### 분석
+static runtime-purity: /data/MyProject/side/evolve/aig/workspace/transcribe.py 에 금지된 I/O/동적실행 표면 검출 ('glob(') — 평가 중 파일/네트워크 접근 차단
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
