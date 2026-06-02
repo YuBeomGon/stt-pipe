@@ -803,3 +803,25 @@ REPORT 에는 `evaluated_iter_count` 와 `llm_call_count` 를 둘 다 기록한�
 - signature: diff keyword MVP
 - portfolio prompt 주입: 1~3개
 - holdout: job-end 기본, 중간 결과는 operator-only shadow 로만 허용
+
+---
+
+## Revision 2026-06-02 — discovery-pressure 재조정 (phase3_011 회귀 대응)
+
+**관찰**: 새 portfolio 하네스(phase3_011)는 ~0.185 에서 조기 수렴. discovery 30% /
+exploit 70% 로 돌아, run50(phase3_004, 100% discovery)이 찾은 우월한 timestamp-seek
+동적 윈도우 구조(0.157)를 못 찾았다. 같은 게이트(compression/fallback/temperature)는
+011 도 찾았으나, exploit 모드(refine/combine/ablate)가 mediocre 구조를 부모로 다듬기만
+해 구조 발견이 희석됐다.
+
+**원인**: STT 의 이득은 구조 발견(exploration)에서 나오는데, 모드를 늘릴수록 exploit
+예산이 커져 → 나쁜 구조에 조기 수렴. base schedule 의 explore floor 가 후반 20% 까지
+떨어져 탐색 압력이 시간이 갈수록 약해진 것도 역방향.
+
+**변경** (`harness/scheduler.py`):
+- `DISCOVERY_FLOOR_FRAC=0.40` — 첫 40% 예산은 exploit 금지, explore-only override
+  (repair 이벤트만 예외). run50 의 "초반 100% discovery" 모방.
+- `_PHASES` explore floor 상향: 0.60/0.35/0.20 → 0.75/0.50/0.40, combine/ablate 후행.
+
+**검증**: scheduler 단위테스트(discovery_phase 강제 / repair 우선 / floor 밖 동작) +
+phase3-family-lineage vs run50(strict discovery) A/B 실행으로 대조.

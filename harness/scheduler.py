@@ -24,12 +24,20 @@ _SCHEDULED_MODES: tuple[str, ...] = ("explore", "refine", "combine", "ablate")
 _TIE_ORDER: tuple[str, ...] = ("explore", "refine", "combine", "ablate")
 
 # 구간별 가중치(progress = evaluated_index/total 의 상한). proposal §4.2.
-# 첫 MVP run 은 combine ≤15%(초반 10%). repair 는 quota 가 아니라 이벤트.
+# **discovery-pressure 재조정 (2026-06-02)**: phase3_011 회귀 분석 — 새 하네스가
+# discovery 30% / exploit 70% 로 돌아 mediocre 구조(~0.185)에 조기 수렴했고, run50
+# (100% discovery)이 찾은 우월한 timestamp-seek 구조(0.157)를 못 찾았다. STT 의 이득은
+# 구조 발견(exploration)에서 나오므로 explore floor 를 전 구간에서 크게 올리고
+# combine/ablate 를 뒤로 민다. 추가로 DISCOVERY_FLOOR_FRAC 까지는 explore-only override.
 _PHASES: tuple[tuple[float, dict[str, float]], ...] = (
-    (0.20, {"explore": 0.60, "refine": 0.20, "combine": 0.10, "ablate": 0.10}),
-    (0.70, {"explore": 0.35, "refine": 0.35, "combine": 0.15, "ablate": 0.15}),
-    (1.01, {"explore": 0.20, "refine": 0.40, "combine": 0.15, "ablate": 0.25}),
+    (0.40, {"explore": 0.75, "refine": 0.25, "combine": 0.00, "ablate": 0.00}),
+    (0.75, {"explore": 0.50, "refine": 0.25, "combine": 0.13, "ablate": 0.12}),
+    (1.01, {"explore": 0.40, "refine": 0.28, "combine": 0.20, "ablate": 0.12}),
 )
+
+# 첫 이만큼(예산 비율)은 exploit 을 아예 막고 구조 탐색만 한다(run50 교훈: 초반
+# 100% discovery 가 0.157 구조를 찾았다). repair 이벤트만 예외(crash 는 먼저 수습).
+DISCOVERY_FLOOR_FRAC: float = 0.40
 
 # no-improvement 이 이 횟수(evaluated 기준) 이상이면 plateau (proposal §4.3).
 PLATEAU_K: int = 8
@@ -113,10 +121,11 @@ def decide_mode(evaluated_index: int, total: int, ctx: SchedulerContext) -> Sche
     """base schedule + override precedence. 첫 매칭 우선:
     1 repair_event → repair   (best 유무와 무관 — 직전 실패를 먼저 수습)
     2 no_best → explore
-    3 diversity_stall(recent_new_family==0) → explore
-    4 plateau(iters_since_best>=K, PLATEAU_EVERY 주기) → plateau (영구 아님; 사이 iter 는 base 통과)
-    5 base feasible → base
-    6 else → feasible fallback
+    3 discovery_phase(progress < DISCOVERY_FLOOR_FRAC) → explore (초반 exploit 금지)
+    4 diversity_stall(recent_new_family==0) → explore
+    5 plateau(iters_since_best>=K, PLATEAU_EVERY 주기) → plateau (영구 아님; 사이 iter 는 base 통과)
+    6 base feasible → base
+    7 else → feasible fallback
 
     repair 가 no_best 보다 앞선다: stub 에서 시작한 첫 후보가 평가기를 crash 시키면
     (verify_fail) best 가 없어 예전엔 no_best→explore 로 빠져 매 iter 백지에서 같은
@@ -134,6 +143,10 @@ def decide_mode(evaluated_index: int, total: int, ctx: SchedulerContext) -> Sche
         return SchedulerDecision(scheduled, "repair", "repair_event")
     if not ctx.has_best:
         return SchedulerDecision(scheduled, "explore", "no_best")
+    # discovery floor: 첫 DISCOVERY_FLOOR_FRAC 예산은 exploit 금지, 구조 탐색만
+    # (phase3_011 조기수렴 방지). repair 만 위에서 먼저 잡고, 나머지는 explore 로.
+    if evaluated_index / max(1, total) < DISCOVERY_FLOOR_FRAC:
+        return SchedulerDecision(scheduled, "explore", "discovery_phase")
     if ctx.recent_new_family_count == 0:
         return SchedulerDecision(scheduled, "explore", "diversity_stall")
     if ctx.iters_since_best >= PLATEAU_K and (

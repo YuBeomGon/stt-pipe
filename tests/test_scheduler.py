@@ -76,8 +76,29 @@ def test_repair_feasible_without_best_when_repair_event() -> None:
     assert sch._feasible("repair", _ctx(has_best=False, repair_event=False)) is False
 
 
+def test_discovery_phase_forces_explore_early() -> None:
+    # 첫 DISCOVERY_FLOOR_FRAC 예산은 best 가 있어도 exploit 금지 → explore.
+    d = sch.decide_mode(4, 50, _ctx())  # progress 0.08 < 0.40
+    assert d.chosen_mode == "explore"
+    assert d.override == "discovery_phase"
+
+
+def test_discovery_phase_releases_after_floor() -> None:
+    # floor 를 지나면 base/exploit 가 다시 통과한다.
+    d = sch.decide_mode(30, 50, _ctx())  # progress 0.60 > 0.40
+    assert d.override != "discovery_phase"
+
+
+def test_repair_beats_discovery_phase() -> None:
+    # 초반이라도 crash(repair_event)는 discovery 보다 먼저 수습.
+    d = sch.decide_mode(2, 50, _ctx(repair_event=True))
+    assert d.chosen_mode == "repair"
+    assert d.override == "repair_event"
+
+
 def test_diversity_stall_forces_explore() -> None:
-    d = sch.decide_mode(5, 50, _ctx(recent_new_family_count=0))
+    # floor(0.40) 밖이어야 discovery_phase 가 아니라 diversity_stall 로 잡힌다.
+    d = sch.decide_mode(30, 50, _ctx(recent_new_family_count=0))
     assert d.chosen_mode == "explore"
     assert d.override == "diversity_stall"
 
@@ -104,13 +125,14 @@ def test_exploit_modes_survive_after_plateau_onset() -> None:
     """phase3_008 회귀 가드: best 가 고정된 채 evaluated_index 와 iters_since_best 가
     함께 진행해도, plateau 시작 이후 refine/combine/ablate 가 다시 나타나야 한다
     (영구 plateau 면 후반이 전부 plateau 로 붕괴했었다)."""
+    # floor(0.40) 밖 구간에서: best 고정으로 iters_since_best 가 계속 큰 상태.
     modes = []
-    for ev_idx in range(7, 40):       # best=6 고정 시나리오
-        isb = ev_idx - 6
+    for ev_idx in range(25, 46):       # progress 0.50~0.90 (discovery floor 밖)
+        isb = ev_idx - 6               # best=6 고정 → 항상 PLATEAU_K 초과
         modes.append(
-            sch.decide_mode(ev_idx, 100, _ctx(iters_since_best=isb)).chosen_mode
+            sch.decide_mode(ev_idx, 50, _ctx(iters_since_best=isb)).chosen_mode
         )
-    late = modes[sch.PLATEAU_K:]      # plateau 가 발동하기 시작한 구간
+    late = modes
     assert "plateau" in late
     # exploit/discovery 모드가 plateau 에 독점당하지 않고 살아남아야 한다.
     assert {"refine", "explore"} & set(late)
