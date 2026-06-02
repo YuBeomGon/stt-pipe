@@ -3041,3 +3041,15 @@ judge.evaluate 종료 코드 비정상
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 62 · phase3_012_iter_062 · cer=NA (ΔNA) · reject
+
+### 관찰
+score_report 없음
+candidate command exit=1
+
+### 분석
+세션/토큰 한도 — backoff 사다리 소진
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
