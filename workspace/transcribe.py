@@ -30,6 +30,25 @@ before the SOT sequence — held hallucination at 0.18) and family_001's beam
 surface. The re-decoded tail overlap is removed by the same word-level dedup as
 iter_008 so recovered coverage does not turn into insertions.
 
+QUALITY FALLBACK (new mechanism, this iter). Corpus-wide the dominant axis is
+substitution, but the worst-CER files — the harness focus_files — are not
+substitution-bound: they carry ``repeated_text=True`` and length_ratio ~0.81.
+Their failure is a beam-search repetition loop: at temperature 0 the decoder
+locks onto a degenerate cycle for a window and we currently commit that loop
+verbatim, and it also poisons the prev-text prompt of every later window. The
+backend exposes a signal we have never read: ``return_scores=True`` populates
+``result.scores`` with the per-hypothesis length-normalized average log-prob.
+Combined with the gzip compression ratio of the decoded text (the standard
+Whisper repetition signal — high ratio = repeated n-grams), this gives a
+per-window quality gate. When a window is degenerate (compression ratio too
+high OR avg log-prob too low) we re-decode it down a temperature ladder with
+sampling, which breaks the deterministic beam loop, and keep the first
+acceptable decode (else the least-repetitive of the ladder). This is the
+reference Whisper temperature-fallback loop, reachable through the frozen
+surface with no new import. Most windows pass the gate on the first (beam,
+T=0) decode, so the extra cost is confined to the degenerate windows on the
+repeated_text files — well inside the 719s budget.
+
 Memory/runtime: still exactly one window per ``generate`` call ([1,128,3000],
 concurrency 1 x beam — the smallest footprint used). A floor on the per-window
 advance (``_MIN_ADVANCE_SECONDS``) bounds the window count when a timestamp is
@@ -39,6 +58,8 @@ Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
+
+import zlib
 
 import numpy as np
 
@@ -52,6 +73,21 @@ _MIN_ADVANCE_SECONDS = 15.0
 _PREV_CONTEXT_TOKENS = 64
 _MAX_OVERLAP_WORDS = 24
 
+# Reference Whisper quality-fallback thresholds. A window whose decoded text
+# compresses past _COMPRESSION_RATIO_THRESHOLD (repeated n-grams) or whose
+# beam score falls below _LOGPROB_THRESHOLD is treated as degenerate and
+# re-decoded down the temperature ladder.
+_TEMPERATURE_LADDER = (0.0, 0.4, 0.8)
+_COMPRESSION_RATIO_THRESHOLD = 2.4
+_LOGPROB_THRESHOLD = -1.0
+
+
+def _compression_ratio(text: str) -> float:
+    data = text.encode("utf-8")
+    if not data:
+        return 0.0
+    return len(data) / len(zlib.compress(data))
+
 
 def _dedup_extend(acc_words: list[str], new_words: list[str]) -> None:
     """Append new_words to acc_words, dropping the largest leading run of
@@ -63,6 +99,56 @@ def _dedup_extend(acc_words: list[str], new_words: list[str]) -> None:
             acc_words.extend(new_words[k:])
             return
     acc_words.extend(new_words)
+
+
+def _decode_window(processor, features, prompt) -> list[int]:
+    """Decode one window with the reference Whisper temperature fallback.
+
+    Step T=0 first (beam search — the strongest deterministic decode). If the
+    result is degenerate by the compression-ratio / avg-log-prob gate, step the
+    temperature ladder with sampling (beam_size=1, sampling_topk=0 = sample from
+    the full temperature-scaled distribution) to break the repetition loop. Keep
+    the first decode that passes the gate; if none does, keep the one with the
+    lowest compression ratio (least repetitive)."""
+    best_ids: list[int] = []
+    best_ratio = float("inf")
+    for temperature in _TEMPERATURE_LADDER:
+        if temperature == 0.0:
+            results = generate(
+                features,
+                [prompt],
+                beam_size=5,
+                patience=2.0,
+                length_penalty=1.0,
+                sampling_temperature=0.0,
+                return_scores=True,
+            )
+        else:
+            results = generate(
+                features,
+                [prompt],
+                beam_size=1,
+                sampling_topk=0,
+                sampling_temperature=temperature,
+                return_scores=True,
+            )
+        result = results[0]
+        token_ids = result.sequences_ids[0]
+        text = processor.tokenizer.decode(token_ids, skip_special_tokens=True)
+        ratio = _compression_ratio(text)
+
+        scores = getattr(result, "scores", None)
+        avg_logprob = scores[0] if scores else None
+
+        if ratio < best_ratio:
+            best_ids, best_ratio = token_ids, ratio
+
+        if ratio <= _COMPRESSION_RATIO_THRESHOLD and (
+            avg_logprob is None or avg_logprob >= _LOGPROB_THRESHOLD
+        ):
+            return token_ids
+
+    return best_ids
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -101,16 +187,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         else:
             prompt = sot_suffix
 
-        results = generate(
-            features,
-            [prompt],
-            beam_size=5,
-            patience=2.0,
-            length_penalty=1.0,
-            sampling_temperature=0.0,
-        )
-
-        token_ids = results[0].sequences_ids[0]
+        token_ids = _decode_window(processor, features, prompt)
 
         # Last emitted segment-end timestamp = how far the decoder reliably got
         # into this window. Everything after it is re-seeked, not deleted.
