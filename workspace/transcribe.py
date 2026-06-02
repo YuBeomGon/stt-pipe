@@ -6,11 +6,17 @@ Long-form windowing: Whisper's feature extractor pins every clip to a fixed
 deletion source. We split the audio into 30-second windows and decode them in
 order, stitching the transcripts back together.
 
-The previous attempt concatenated *every* window into one ``[N,128,3000]``
-batch and handed it to ``generate`` in a single call; on minutes-long calls
-that batch is large enough to exhaust CUDA memory (RuntimeError: out of
-memory). We keep the windowing but cap how many windows decode per
-``generate`` call so peak memory stays bounded regardless of clip length.
+Each window is conditioned on the tail of the previous window's text
+(<|startofprev|> + recent token ids before the SOT sequence) so decoding does
+not restart cold at every 30s hop.
+
+Memory: peak decoder VRAM scales with (windows-per-call x beam x seq_len). The
+prev-text variants OOM'd twice — iter_005 at batch=4, iter_006 at batch=2 —
+because the longer prompt enlarges every beam's KV-cache and halving the window
+batch alone did not get under the ceiling. We attack *both* memory axes: decode
+exactly one window per ``generate`` call (the natural form, since each prev
+prefix depends on the prior window's output) and cap the prev-context block, so
+peak concurrency is 1 x beam over a short prefix — the smallest footprint used.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -24,7 +30,7 @@ from frozen.asr_backend import generate, load, to_storage_view
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 _WINDOW_SECONDS = 30
-_BATCH_WINDOWS = 4
+_PREV_CONTEXT_TOKENS = 64
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -46,20 +52,25 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         feature_list.append(np.asarray(inputs.input_features))
 
-    prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
+    sot_suffix = processor.tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
     )
+    startofprev_id = processor.tokenizer.convert_tokens_to_ids("<|startofprev|>")
+    eot_id = processor.tokenizer.convert_tokens_to_ids("<|endoftext|>")
 
     pieces = []
-    for batch_start in range(0, len(feature_list), _BATCH_WINDOWS):
-        batch = feature_list[batch_start : batch_start + _BATCH_WINDOWS]
-        batched = np.concatenate(batch, axis=0)
-        features = to_storage_view(batched)
-        prompts = [prompt_tokens] * batched.shape[0]
+    prev_tokens: list[int] = []
+    for window in feature_list:
+        features = to_storage_view(window)
+
+        if prev_tokens:
+            prompt = [startofprev_id] + prev_tokens[-_PREV_CONTEXT_TOKENS:] + sot_suffix
+        else:
+            prompt = sot_suffix
 
         results = generate(
             features,
-            prompts,
+            [prompt],
             beam_size=5,
             patience=2.0,
             length_penalty=1.1,
@@ -67,11 +78,13 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             sampling_temperature=0.0,
         )
 
-        for result in results:
-            token_ids = result.sequences_ids[0]
-            piece = processor.tokenizer.decode(token_ids, skip_special_tokens=True)
-            piece = piece.strip()
-            if piece:
-                pieces.append(piece)
+        token_ids = results[0].sequences_ids[0]
+        text_tokens = [t for t in token_ids if t < eot_id]
+        if text_tokens:
+            prev_tokens = text_tokens[-_PREV_CONTEXT_TOKENS:]
+
+        piece = processor.tokenizer.decode(token_ids, skip_special_tokens=True).strip()
+        if piece:
+            pieces.append(piece)
 
     return " ".join(pieces)
