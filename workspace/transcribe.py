@@ -50,6 +50,13 @@ _COMPRESSION_RATIO_THRESHOLD = 2.4
 # local-commit, the dominant axis. Sampling fallbacks stay beam_size=1.
 _BEAM_SIZE = 5
 _PATIENCE = 1.0
+# cond-B adoption margin (avg log-prob, nats). cond B (glossary prior) only runs
+# on windows where cond A failed the gate — the substitution-risk windows. The
+# score channel is LM-biased toward the fluent-but-wrong spelling (ledger
+# iter_040/041), so the glossary fix usually scores slightly BELOW cond A and a
+# strict ">" comparison never adopts it. A small margin lets the domain prior win
+# exactly where it was designed to, while bounding error-propagation risk.
+_GLOSSARY_LOGPROB_MARGIN = 0.1
 
 # Fixed correctly-spelled domain glossary (iter_012 static-prior idea, error-
 # propagation-free by construction). Placed behind <|startofprev|> to bias the
@@ -139,7 +146,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
                         sampling_temperature=0.0,
                         return_scores=True,
                     )[0]
-                    if float(res_b.scores[0]) > lp_a:
+                    if float(res_b.scores[0]) >= lp_a - _GLOSSARY_LOGPROB_MARGIN:
                         res = res_b
             else:
                 # sampling_topk=0 => sample from the full distribution so the
