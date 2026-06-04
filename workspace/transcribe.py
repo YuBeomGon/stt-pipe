@@ -137,6 +137,19 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     # timestamp ids (at/above it) we must strip before carrying context forward.
     startofprev = tokenizer.convert_tokens_to_ids("<|startofprev|>")
     eot = tokenizer.convert_tokens_to_ids("<|endoftext|>")
+    # Timestamp-mode toggle (the unused half of iter_004). iter_004 established
+    # that *removing* <|notimestamps|> globally puts the decoder in
+    # timestamp-emitting mode (the seek channel). The never-used reverse is
+    # re-adding it *per window*: a prompt ending in <|notimestamps|> suppresses
+    # timestamp tokens entirely, so the 4-layer decoder spends none of its beam
+    # capacity placing 0.02 s position tokens and emits its clean-text
+    # transcription — the mode Whisper is trained to transcribe in. We only
+    # need the timestamp channel on a dense full window (to drive the
+    # last-timestamp rewind); when the seam is acoustic (silence_cut) or this
+    # is the final chunk the seek is already fixed, so those windows can decode
+    # in clean-text mode and shed the timestamp tax on the substitution axis.
+    notimestamps = tokenizer.convert_tokens_to_ids("<|notimestamps|>")
+    sot_prompt_nots = [*sot_prompt, notimestamps]
 
     texts = []
     context_ids: list[int] = []
@@ -167,12 +180,19 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
+        # Need the timestamp channel only on a dense full window whose seek
+        # depends on the last-timestamp rewind. silence_cut windows seek to the
+        # acoustic cut; the final chunk (cut == n) ends the loop — neither needs
+        # timestamps, so they decode in clean-text mode (<|notimestamps|>).
+        use_timestamps = (not silence_cut) and (cut < n)
+        active_sot = sot_prompt if use_timestamps else sot_prompt_nots
+
         # Carry the prior confident window's text as decoder context (native
         # long-form conditioning); cold-start prompt when there is none.
         if context_ids:
-            window_prompt = [startofprev, *context_ids[-_MAX_CONTEXT_TOKENS:], *sot_prompt]
+            window_prompt = [startofprev, *context_ids[-_MAX_CONTEXT_TOKENS:], *active_sot]
         else:
-            window_prompt = list(sot_prompt)
+            window_prompt = list(active_sot)
 
         best_token_ids: list[int] = []
         best_logprob = float("-inf")
