@@ -3625,3 +3625,14 @@ not enough improvement: Δcer -0.177465 < 0.000100
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 6 · phase3_014_iter_006 · cer=NA (ΔNA) · reject
+
+### 관찰
+corpus_cer=0.166992, total_inference_time_s=274.5
+
+### 분석
+verify 중 scope 위반: docs/SSOT.md, docs/PHASE3-HARNESS-MECHANICS.md
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
