@@ -1,32 +1,32 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Discovery (iter 9, explore): the decode loop has two accept/quality channels
-wired — scores[0] (avg log-prob, iter_005) and no_speech_prob — but neither
-sees *degeneracy*. A repetition loop is high-confidence: the decoder is sure of
-each repeated token, so scores[0] is large and the iter_005 gate accepts the
-window. That is why the two focus files (00003092151…, 02_4038…) trip the
-repeated_text guard while their windows pass the log-prob gate, and why
-iter_008's global no_repeat_ngram ban — which fired on every window, healthy or
-not — lost ground (cer 0.19).
+Discovery (iter 10, explore): the dominant error axis is substitution (56% ≫
+del/ins, length_ratio 0.94 healthy), so the headroom is in *what* gets
+mis-recognized — domain-term consistency — not coverage. Each window currently
+decodes lexically blind: the prompt is a constant [SOT, ko, transcribe] prefix,
+so the same insurance term decoded correctly in one window can be substituted
+differently in the next, with no memory between them.
 
-The orthogonal signal is the decoded *text* itself, a return channel only ever
-used for the final string: a degenerate window's text is highly repetitive, so
-its gzip compression ratio is large. This is Whisper's own native third
-robustness trigger (compression_ratio_threshold), and the pipeline omitted it —
-iter_005 implemented the temperature-fallback loop with only the log-prob and
-no-speech gates.
+The unused capability is Whisper's native long-form anti-drift: the flat prompt
+list (probed iter_003) accepts [<|startofprev|>, *prev_text_ids, *sot] to carry
+the previous window's decoded text forward as decoder context. iter_003 fed
+that channel blindly and compounded its own substitutions window-to-window (cer
+0.49); iter_007's static glossary could not carry *real* decoded context. The
+missing piece both lacked is a GATE: the scores[0] log-prob channel and the
+gzip-degeneracy signal (both already wired here) decide whether a window's text
+is trustworthy enough to condition the next one on.
 
-Mechanism: inside the existing per-window temperature-fallback loop, decode the
-candidate text and compute its compression ratio. A window only counts as
-"good enough to stop" when it is BOTH confident (or silence) AND non-degenerate
-(ratio <= 2.4). A confident-but-looping window is therefore rejected and the
-loop climbs temperature; sampling_topk=0 sampling at temp>0 breaks the greedy
-loop the way Whisper intends. Among candidates we prefer any non-degenerate
-decode over a degenerate one, then break ties by log-prob — so a healthy window
-still stops at greedy on the first rung and pays nothing extra. The re-roll is
-surgical (only degenerate windows climb), unlike iter_008's blanket constraint.
+Mechanism: maintain a rolling `context_ids` of the prior window's decoded text
+tokens (timestamps/specials stripped, capped to the last 200 — Whisper's own
+half-context limit). Prepend [<|startofprev|>, *context_ids, *sot] when context
+exists. After each window, carry its text forward ONLY if it cleared the -1.0
+log-prob gate AND was non-degenerate; otherwise reset context to empty. The gate
+is exactly what iter_003 omitted — a low-confidence or looping decode can no
+longer poison its successors, while confident windows propagate consistent
+domain spellings. No extra decode passes, so the runtime budget is unchanged.
 
-iter_006's silence-aware RMS windowing is retained verbatim.
+iter_006's silence-aware RMS windowing and iter_009's temperature/degeneracy
+fallback loop are retained verbatim.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -63,6 +63,10 @@ _NO_SPEECH_THRESHOLD = 0.6
 # Whisper's native degeneracy gate: text whose gzip ratio exceeds this is
 # repetitive enough to be treated as a failed decode and re-rolled.
 _COMPRESSION_RATIO_THRESHOLD = 2.4
+# Max prior-window text tokens carried as <|startofprev|> context. Whisper caps
+# its own long-form context at half the 448-token window; mirror that bound so
+# the prompt cannot grow without limit and crowd out the new audio.
+_MAX_CONTEXT_TOKENS = 200
 
 
 def _compression_ratio(text: str) -> float:
@@ -100,12 +104,18 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
 
     # No <|notimestamps|>: keep the decoder in timestamp-emitting mode (the
     # dense-speech fallback still needs the last-timestamp seek).
-    prompt_tokens = tokenizer.convert_tokens_to_ids(
+    sot_prompt = tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
     )
     timestamp_begin = tokenizer.convert_tokens_to_ids("<|0.00|>")
+    # Long-form context channel: <|startofprev|> prefixes prior text; <|endoftext|>
+    # marks the boundary between natural-text ids (below it) and the special/
+    # timestamp ids (at/above it) we must strip before carrying context forward.
+    startofprev = tokenizer.convert_tokens_to_ids("<|startofprev|>")
+    eot = tokenizer.convert_tokens_to_ids("<|endoftext|>")
 
     texts = []
+    context_ids: list[int] = []
     seek = 0
     while seek < n:
         hard_end = min(seek + window, n)
@@ -133,6 +143,13 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
+        # Carry the prior confident window's text as decoder context (native
+        # long-form conditioning); cold-start prompt when there is none.
+        if context_ids:
+            window_prompt = [startofprev, *context_ids[-_MAX_CONTEXT_TOKENS:], *sot_prompt]
+        else:
+            window_prompt = list(sot_prompt)
+
         # Temperature fallback with a degeneracy gate. A window stops the climb
         # only when it is confident (or silence) AND non-repetitive; a
         # high-logprob loop is rejected so the next, higher temperature can
@@ -156,7 +173,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             else:
                 kwargs["sampling_temperature"] = 0.0
 
-            result = generate(features, [prompt_tokens], **kwargs)[0]
+            result = generate(features, [window_prompt], **kwargs)[0]
             avg_logprob = result.scores[0]
             token_ids = result.sequences_ids[0]
             text = tokenizer.decode(token_ids, skip_special_tokens=True).strip()
@@ -188,6 +205,16 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         text = tokenizer.decode(token_ids, skip_special_tokens=True).strip()
         if text:
             texts.append(text)
+
+        # Gate the long-form carry: only a confident, non-degenerate window
+        # seeds the next window's context. This is the check iter_003 lacked —
+        # a low-confidence or looping decode resets context instead of
+        # propagating its substitutions forward. Strip timestamp/special ids,
+        # keeping only natural text tokens (id < <|endoftext|>).
+        if best_logprob >= _LOGPROB_THRESHOLD and not best_degenerate:
+            context_ids = [t for t in token_ids if t < eot]
+        else:
+            context_ids = []
 
         if silence_cut:
             # Clean seam: the window already ends in a pause, advance to it.

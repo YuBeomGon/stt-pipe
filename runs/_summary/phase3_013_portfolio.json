@@ -1,7 +1,7 @@
 {
   "job_id": "phase3_013",
-  "updated_at_iter": 9,
-  "global_best": "phase3_013_iter_009",
+  "updated_at_iter": 10,
+  "global_best": "phase3_013_iter_010",
   "family_best": {
     "family_001": {
       "hyp_id": "phase3_013_iter_002",
@@ -175,6 +175,31 @@
         "error_breakdown.sub_ratio": 0.5620888367586312,
         "hallucination_hit_rate": 0.0,
         "total_inference_time_s": 162.77458798984298
+      }
+    },
+    "family_008": {
+      "hyp_id": "phase3_013_iter_010",
+      "iter": 10,
+      "status": "keep",
+      "cer": 0.16547583779168046,
+      "harness_signature": "sig_63129874",
+      "harness_family_id": "family_008",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "startofprev",
+        "prev-text-context",
+        "confidence-gated",
+        "long-form",
+        "anti-drift"
+      ],
+      "mode": "explore",
+      "diff_path": "runs/phase3_013_iter_010/candidate.diff",
+      "runtime_s": 161.33187696099048,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.35953872887157073,
+        "error_breakdown.sub_ratio": 0.5744299931546522,
+        "hallucination_hit_rate": 0.0,
+        "total_inference_time_s": 161.33187696099048
       }
     }
   },
@@ -357,6 +382,31 @@
   ],
   "rejected_promising": [],
   "near_best": [
+    {
+      "hyp_id": "phase3_013_iter_010",
+      "iter": 10,
+      "status": "keep",
+      "cer": 0.16547583779168046,
+      "harness_signature": "sig_63129874",
+      "harness_family_id": "family_008",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "startofprev",
+        "prev-text-context",
+        "confidence-gated",
+        "long-form",
+        "anti-drift"
+      ],
+      "mode": "explore",
+      "diff_path": "runs/phase3_013_iter_010/candidate.diff",
+      "runtime_s": 161.33187696099048,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.35953872887157073,
+        "error_breakdown.sub_ratio": 0.5744299931546522,
+        "hallucination_hit_rate": 0.0,
+        "total_inference_time_s": 161.33187696099048
+      }
+    },
     {
       "hyp_id": "phase3_013_iter_009",
       "iter": 9,
