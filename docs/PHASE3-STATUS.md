@@ -92,10 +92,11 @@
 
 - [ ] [`proposals/2026-05-29-skills-and-prompt-eval.md`](proposals/2026-05-29-skills-and-prompt-eval.md) — 내부 skill/agent + prompt-eval. 본문은 phase3_002 결과 후 채움
 
-## 9. Candidate 루프 진화 — discovery-first → explore/exploit
+## 9. Candidate 루프 진화 — discovery-first → explore/exploit → 6-mode portfolio
 
 A' (§6) 의 5-lane round-robin · `lane`/`diff_fingerprint`/`why_different_from_last_5`
-스키마는 이후 두 단계로 대체됨. 운영 정본은 PHASE3-PLAN §4/§5 + `candidate.md`.
+스키마는 이후 단계들로 대체됨. 운영 정본은 PHASE3-PLAN §4/§5 + `candidate.md`.
+**현재 브랜치는 `phase3-family-lineage`** (아래 마지막 단계).
 
 - [x] **discovery-first 재작성** (proposal `2026-05-29-prompt-diversification` 흡수):
   스키마 → `capability_investigated`/`what_i_learned`/`hypothesis`/`fingerprint`
@@ -107,5 +108,15 @@ A' (§6) 의 5-lane round-robin · `lane`/`diff_fingerprint`/`why_different_from
 - [x] **explore/exploit 스케줄 + synthesis** (회고 §2/§3): iteration 기반 감쇠
   비율로 explore↔exploit 결정 (초반 explore 우세, floor 보장). exploit 시 한 축
   개선한 유망 reject diff 주입 + 디코딩 파라미터 재방문 허용.
-- [x] 회귀 테스트 전부 통과 (`tests/test_harness_runner.py`).
+- [x] **6-mode portfolio + family lineage** (proposal `2026-06-01-from-scratch-
+  discovery-harness` 흡수, branch `phase3-family-lineage`): explore/refine/combine/
+  ablate(+repair/plateau) `harness/scheduler.py`, 후보 bank + parent 선택
+  `harness/portfolio.py`(near_best 1.20 포함), diff→family `harness/signature.py`,
+  soft cooldown `harness/cooldown.py`. **단 proposal §4.3/§4.4/§4.5 의
+  novelty/pair_score/opportunity-override/compatible-parent 는 deferred(미구현)** —
+  정합성 감사 `reviews/2026-06-04-doc-code-consistency-audit.md`.
+- [x] 회귀 테스트 전부 통과 (`tests/test_harness_runner.py`, `tests/test_scheduler.py`).
+- [ ] **정체(plateau) 구조 개편 검토** — `reviews/2026-06-04-evolve-design-review.md`
+  (greedy 단일 스칼라 + 앵커 → 국소최적). Phase 1(best monotone / explore 비앵커 /
+  dead-end 기억) 적용 후 효과 판정 예정.
 - [ ] 새 잡 실행 후 효과 판정 (analyze_run D 축 + holdout).

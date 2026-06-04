@@ -44,7 +44,7 @@
 
 | 영역 | 책임 |
 |------|------|
-| `harness/` | Phase 3 controller 로직: guard, policy, state, history, runner |
+| `harness/` | Phase 3 controller 로직: guards(수치 가드), verify(judge 실행+guard), policy(keep/reject/micro_bank), **scheduler**(mode 결정), **portfolio**(후보 bank + parent 선택), **signature**(diff→family), **cooldown**(반복실패 soft 경고), **config**(threshold 상수), state, history, runner |
 | `harness/prompts/candidate.md` | candidate runtime profile — runner 가 매 iter inline |
 | `scripts/` | 사람이 실행하는 thin CLI 또는 일회성 운영 명령 (`evolve.py`, `analyze_run.py`, `evaluate_holdout.py`, `audit_candidate_context.py` 등) |
 | `judge/` | 평가 산출: score, per-file, diagnosis |
@@ -52,7 +52,7 @@
 | `workspace/` | 후보 파이프라인 표면 (`transcribe(audio, sr) -> str`) |
 | `baseline/` | 봉인된 target/baseline/noise floor |
 | `runs/<hyp_id>/` | iteration별 평가 산출물 + `candidate_meta.json` / `.err` |
-| `runs/_summary/` | harness 전용 누적 — `<job_id>_state.json`, `HISTORY.md` (현재 잡 한정), `JOB_DONE.lock` |
+| `runs/_summary/` | harness 전용 누적 — `<job_id>_state.json`, `<job_id>_portfolio.json`, `<job_id>_decisions.jsonl`, `<job_id>_candidate_meta.jsonl`, `HISTORY.md` (현재 잡 한정), `JOB_DONE.lock` |
 | `docs/reports/` | analyze_run / evaluate_holdout 의 잡별 산출물 |
 | `docs/proposals/` | harness 변경 RFC (채택 후 정본 갱신 + historical) |
 | `docs/history-archive/` | 잡 종료 후 `runs/_summary/HISTORY.md` 를 `HISTORY.<job_id>.md` 로 이동 → 다음 잡은 빈 HISTORY 부터 시작 (잡 단위 ablation 보호) |

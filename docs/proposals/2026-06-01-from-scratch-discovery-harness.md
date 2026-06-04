@@ -15,6 +15,37 @@
 
 ---
 
+## 구현 현황 (2026-06-04 기준)
+
+> 정합성 감사([`../reviews/2026-06-04-doc-code-consistency-audit.md`](../reviews/2026-06-04-doc-code-consistency-audit.md))
+> 결과를 반영한 단일 출처. 본 proposal 의 일부만 코드에 들어갔다 — 아래 표가 정본이며,
+> 본문은 *목표 설계* 다. "구조 발견 정체" 분석은
+> [`../reviews/2026-06-04-evolve-design-review.md`](../reviews/2026-06-04-evolve-design-review.md).
+
+| 영역 | 상태 | 비고 |
+|---|---|---|
+| §3 bank 5종(global/family/metric/micro/rejected) + **near_best**(코드 추가) | 구현 | near_best factor 1.20/cap 24 는 proposal 에 없던 6번째 bank (`portfolio.py`) |
+| §3.1 metric_best `best_coverage` | **DRIFT** | 코드는 `best_deletion` (composite coverage 유예) |
+| §4.1 6-mode(explore/refine/combine/ablate/repair/plateau) | 구현 | `scheduler.py` + runner `_MODE_DIRECTIVES` |
+| §4.2 base schedule 가중치 | **Revision 으로 대체** | 원 §4.2 표 아닌 Revision 2026-06-02 가중치 사용 |
+| §4.3 override precedence(순서·infeasible 위치) | **DRIFT** | no_best/discovery_phase 가 코드 전용 추가, infeasible 은 최후 fallback |
+| §4.3 opportunity override(micro→refine, axis-complement→combine, …) | **deferred** | `scheduler.py` MVP 주석 |
+| §4.3 cooldown-in-precedence | **deferred** | cooldown 은 soft 경고만, decide_mode 에 안 들어감 |
+| §4.4 `candidate_score`(novelty/axis/penalty) | **deferred** | parent 선택은 순수 CER 정렬 MVP |
+| §4.4 combine `pair_score` | **deferred** | 최저-CER distinct-family 2개만 |
+| §4.5 compatible-parent 휴리스틱 | **deferred** | `feasibility()` 는 distinct_family≥2 만 |
+| §6.2/6.3 2-call(Ideate+Plan→Implement) | **deferred** | single-call MVP (§6 자체 명시) |
+| §9 cooldown hard reject/mode 변경 | **DRIFT(soft-only)** | family5/sig2 → 프롬프트 경고만. axis개선 reject 는 micro_bank 로 재분류돼 카운트서 빠짐 |
+| **family lineage 상속**(derived mode 가 parent family 상속) | 구현(코드 추가) | proposal §5.3 엔 없는 예외 (`runner.py`) |
+| **plateau 주기 burst**(PLATEAU_EVERY=3) + 2-parent 회전 | 구현(코드 추가) | proposal 엔 없음 (phase3_008 회귀 대응) |
+| §8 keep threshold 유지 권고 | **DRIFT** | 0.01→0.002 하향 (`config.py`) |
+
+> deferred 항목은 "안 만든 것" 이지 폐기 아님. 단, 설계 검토 결론상 이 중 다양성 보존
+> 절반(novelty/pair_score/compatible-parent)이 정체의 구조적 원인과 직결 — 구현 여부는
+> Phase 1(best monotone / explore 비앵커 / dead-end 기억) 검증 후 재결정.
+
+---
+
 ## 0. 목표
 
 이번 목표는 순수한 "from scratch discovery 능력 평가" 하나가 아니다. 목표는 두 개다.

@@ -72,10 +72,15 @@ aig/
 ├── harness/
 │   ├── guards.py                # Phase 3 수치 가드 (산술/catastrophic/runtime/quality)
 │   ├── history.py               # HISTORY.md append
-│   ├── policy.py                # keep/reject/success 판정
+│   ├── policy.py                # keep/reject/success + micro_bank 판정
+│   ├── scheduler.py             # iteration mode 결정 (explore/refine/combine/ablate/repair/plateau) — base schedule + override precedence + discovery floor
+│   ├── portfolio.py             # 후보 bank (global_best/family_best/metric_best/near_best/micro_bank/rejected_promising) + parents_for_mode
+│   ├── signature.py             # diff feature 추출 → harness_signature + family(Jaccard) 군집
+│   ├── cooldown.py              # 반복 실패 family/signature soft 경고 (현재 reject-only soft MVP)
+│   ├── config.py               # keep/banking threshold 등 상수
 │   ├── state.py                 # best/iteration 상태
 │   ├── verify.py                # judge 실행 + guard 적용
-│   └── runner.py                # loop orchestration
+│   └── runner.py                # loop orchestration + prompt 빌드 + mode/parent 주입
 ├── scripts/
 │   ├── evolve.py                # harness.runner thin CLI
 │   ├── verify.sh                # 사람이 실행하는 현재 후보 평가 entrypoint

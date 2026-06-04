@@ -181,10 +181,23 @@ historical 문서로 보존한다.
      over-generation). 후보가 병목을 scalar cer 가 아니라 측정으로 본다
    - 최근 5 iter 표 `(fingerprint, cer, sub/del/ins, len, hal)` — 각 시도가
      *어떻게* 실패했는지 (dedup + 진단)
-   - **explore/exploit 모드 directive** — iteration 기반 감쇠 스케줄
-     (`_iteration_mode`): 초반 explore 우세 → floor 보장 explore 유지, 그 외
-     exploit. exploit 시 한 축을 개선한 유망 reject 2–3 개의 실제 diff 주입
+   - **mode directive (6-mode)** — `harness/scheduler.py` 의 `decide_mode` 가
+     explore/refine/combine/ablate(+repair/plateau) 중 하나를 정하고 runner 가
+     `_MODE_DIRECTIVES` 의 해당 블록을 주입 (`=== … MODE ===`). mode 는
+     base schedule(evaluated index 의 순수함수, error-diffusion 가중치
+     `scheduler._PHASES`) + override precedence(repair_event > no_best >
+     discovery_phase > diversity_stall > plateau > base)로 결정. 초반
+     `DISCOVERY_FLOOR_FRAC`(0.40) 까지는 explore 강제. derivative mode 는
+     `harness/portfolio.py` 의 `parents_for_mode` 가 고른 parent 후보(global_best
+     /family_best/near_best/micro_bank pool)의 실제 diff 를 주입.
+     candidate.md 는 mode-agnostic — mode 정의는 runner 가 단일 출처.
    - findings ledger — 잡 전체 누적 발견 (rollback 돼도 보존)
+
+   > **구현 현황 주의**: proposal `2026-06-01-from-scratch-discovery-harness.md`
+   > §4.4 candidate_score/novelty, §4.3 opportunity override + cooldown-in-
+   > precedence, §4.5 compatible-parent 휴리스틱은 **deferred(미구현)** — 현재
+   > parent 선택은 CER 정렬 MVP. 정합성 감사:
+   > [`reviews/2026-06-04-doc-code-consistency-audit.md`](reviews/2026-06-04-doc-code-consistency-audit.md).
 2. 후보 변경 생성 (`claude -p` 를 candidate worker 로 사용)
 3. **format 게이트** (discovery-first schema) — candidate stdout 의 마지막
    ```yaml fenced block 을 `yaml.safe_load` 로 파싱해 `capability_investigated` /
