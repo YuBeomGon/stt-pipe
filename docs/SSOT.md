@@ -80,6 +80,8 @@
 | Draft | [`proposals/2026-05-29-skills-and-prompt-eval.md`](proposals/2026-05-29-skills-and-prompt-eval.md) — 내부 skill/agent + prompt-eval | 채택 시 .claude/skills/aig/, runner.py default cmd, README workflow. 본문은 phase3_002 결과 후 |
 | Draft | [`proposals/2026-06-01-from-scratch-discovery-harness.md`](proposals/2026-06-01-from-scratch-discovery-harness.md) — portfolio evolution harness | 채택 시 portfolio, mode scheduler, prompt steps, micro-bank, cooldown, evolution metrics 를 PHASE3-PLAN, harness/runner, harness/state, harness/prompts, analyze_run 으로 흡수. **Revision 2026-06-02**: phase3_011 조기수렴 회귀 → discovery floor(첫 40% explore-only) + explore-heavy 스케줄 재조정 (proposal Revision 절, harness/scheduler.py) |
 | 흡수/대체 | [`proposals/2026-05-29-prompt-diversification.md`](proposals/2026-05-29-prompt-diversification.md) — Cold-restart wildcard / HISTORY 망각 / metric reframe | discovery-first 재작성으로 흡수 (cold-restart → 이후 explore/exploit 감쇠 스케줄로 대체). 운영 정본: PHASE3-PLAN §4/§5 + candidate.md. 진화 이력: PHASE3-STATUS §9 |
+| Accepted (구현 완료) | 2026-06-04 Phase 1 trio (best monotone / discovery-floor count-cap / dead-end 기억) | reviews/2026-06-04-evolve-design-review.md 의 R-A/R-B/R-C. harness/policy·config·scheduler·cooldown·signature (commit 2d1ee5c). phase3_013 에서 0.177 정체 돌파(0.1539) |
+| Draft (합의·구현 대기) | [`proposals/2026-06-04-explore-block-speciation.md`](proposals/2026-06-04-explore-block-speciation.md) — explore 비앵커 + 보호 육성 블록 + 2-phase | 채택 시 PHASE3-PLAN §4(block/2-phase), config knob, candidate.md(explore 비앵커), harness/scheduler·runner·state·portfolio 흡수. F2 앵커링 해소 — explore 를 stub 발산으로 분리, 갓난 구조 1-shot 폐기 방지 |
 
 proposal 은 *결정 이력* 이지 운영 정본이 아니다. 운영 정본은 §2 표 (특히
 PHASE3-PLAN, CANDIDATE-CONTEXT, `harness/prompts/candidate.md`) 에만 둔다.
