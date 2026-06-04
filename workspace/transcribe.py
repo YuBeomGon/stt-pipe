@@ -1,15 +1,23 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Long-form windowing: Whisper's feature extractor pads/truncates every input
-to a fixed 30-second mel window, so the stub transcribed only the first 30s of
-each call and deleted the entire tail. We split the call into 30s windows and
-decode them, then concatenate the segment transcripts.
+Long-form windowing recovers the call tail (the stub decoded only the first
+30s), and per-window sequential decode bounds GPU memory. But coverage stayed
+low (length_ratio ≈ 0.65, deletion ≈ 80%) even though every second of audio is
+fed to the model — so the loss is *inside* the windows, not at the chunker.
+These call-center recordings have long low-RMS / noisy spans; on those a single
+greedy 30s decode collapses into a repetition loop or stops early
+(repeated_text flagged on 5/12 files), and the dropped real content shows up as
+deletion.
 
-The first windowing attempt fed *every* window of a call into one batched
-``generate`` call; long calls have tens of windows, so the parallel decode
-exhausted GPU memory (CUDA out of memory). We instead decode one window at a
-time — the tail is still recovered, but peak memory is bounded to a single
-30s window regardless of call length.
+This iteration conditions on a decode-result signal we previously discarded.
+``generate`` returns per-sequence ``scores`` and a ``no_speech_prob`` *only*
+when asked via ``return_scores`` / ``return_no_speech_prob`` — flags the
+pipeline never set, so those quality signals were thrown away. We greedy-decode
+each window, then for any window whose output is empty, low-confidence, or
+visibly repetitive — yet whose ``no_speech_prob`` says speech is present — we
+re-decode once with beam search + ``no_repeat_ngram_size`` to break the loop
+and recover the dropped span. This is a genuine fallback policy, not a silent
+error swallow: windows that decode cleanly are untouched.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -23,6 +31,18 @@ from frozen.asr_backend import generate, load, to_storage_view
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 _WINDOW_SECONDS = 30
+# faster-whisper defaults: avg log-prob below this == low confidence; a window
+# with no_speech_prob above this is genuine silence and not worth a retry.
+_LOW_SCORE = -1.0
+_NO_SPEECH = 0.6
+
+
+def _is_repetitive(token_ids) -> bool:
+    """A collapsed greedy decode cycles a few tokens, so the unique-token
+    fraction drops sharply. Cheap proxy for the repeated_text failure."""
+    if len(token_ids) >= 12:
+        return len(set(token_ids)) / len(token_ids) < 0.45
+    return False
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -46,14 +66,32 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
-        results = generate(
+        result = generate(
             features,
             [prompt_tokens],
             beam_size=1,
             sampling_temperature=0.0,
-        )
+            return_scores=True,
+            return_no_speech_prob=True,
+        )[0]
+        token_ids = result.sequences_ids[0]
+        score = result.scores[0] if result.scores else 0.0
+        no_speech_prob = result.no_speech_prob
 
-        token_ids = results[0].sequences_ids[0]
+        collapsed = not token_ids or score < _LOW_SCORE or _is_repetitive(token_ids)
+        if collapsed and no_speech_prob < _NO_SPEECH:
+            retry = generate(
+                features,
+                [prompt_tokens],
+                beam_size=5,
+                no_repeat_ngram_size=3,
+                length_penalty=1.0,
+                return_scores=True,
+            )[0]
+            retry_ids = retry.sequences_ids[0]
+            if retry_ids and not _is_repetitive(retry_ids):
+                token_ids = retry_ids
+
         segments.append(
             processor.tokenizer.decode(token_ids, skip_special_tokens=True).strip()
         )
