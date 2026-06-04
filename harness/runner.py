@@ -1246,6 +1246,29 @@ def _format_parents_block(parents: list[dict[str, Any]]) -> str:
     return "\n".join(blocks)
 
 
+def _format_iter_plan(
+    iteration: int, sched, parents: list[dict[str, Any]]
+) -> str:
+    """iter 시작 시 터미널 한 줄: 무슨 mode 로, 어떤 parent 를 재료로 시도하는지.
+    verify_check 출력만으로는 mode/parent 가 안 보여(사이드카·decisions.jsonl 에만
+    기록) 운영자가 흐름을 못 따라가던 문제 보완."""
+    mode = sched.chosen_mode
+    over = "" if sched.override in (None, "scheduled") else f" (override={sched.override})"
+    if parents:
+        bits = []
+        for p in parents:
+            tag = "repair-target" if p.get("is_repair_target") else (
+                p.get("harness_family_id") or "?"
+            )
+            cer = p.get("cer")
+            cer_s = f" cer={cer:.4f}" if isinstance(cer, (int, float)) else ""
+            bits.append(f"{p.get('hyp_id', '?')}[{tag}]{cer_s}")
+        parent_s = "parent=" + ", ".join(bits)
+    else:
+        parent_s = "parent=none"
+    return f"[iter {iteration}] mode={mode}{over} · {parent_s}"
+
+
 def _write_scheduler_sidecar(
     out_dir: Path,
     sched,
@@ -1809,6 +1832,7 @@ def run_iteration(
 
     _cooldowns = _cd.compute_cooldowns(_decisions_records(config)).as_list()
     _write_scheduler_sidecar(out_dir, sched, parents, active_cooldowns=_cooldowns)
+    print(_format_iter_plan(state.iteration, sched, parents), flush=True)
 
     def _invoke() -> subprocess.CompletedProcess[str] | None:
         if candidate_func is not None:

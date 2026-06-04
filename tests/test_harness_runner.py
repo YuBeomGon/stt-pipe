@@ -901,6 +901,35 @@ def test_run_iteration_backs_off_on_rate_limit_then_succeeds(
 # ----------------------------------------------------------------------- #
 
 
+def test_format_iter_plan_shows_mode_and_parent() -> None:
+    """터미널 iter 라인에 mode·override·parent(hyp/family/cer)가 보여야 한다
+    (verify_check 만으로는 안 보이던 흐름 가시화)."""
+    from harness.runner import _format_iter_plan
+    from harness.scheduler import SchedulerDecision
+
+    line = _format_iter_plan(
+        12,
+        SchedulerDecision("refine", "refine", "discovery_phase"),
+        [{"hyp_id": "job_iter_011", "harness_family_id": "family_004", "cer": 0.1775}],
+    )
+    assert "mode=refine" in line
+    assert "override=discovery_phase" in line
+    assert "job_iter_011" in line and "family_004" in line and "0.1775" in line
+
+    # parent 없으면 parent=none, override=scheduled 는 표기 생략
+    plain = _format_iter_plan(5, SchedulerDecision("explore", "explore", "scheduled"), [])
+    assert "mode=explore" in plain and "parent=none" in plain
+    assert "override" not in plain
+
+    # repair-target 은 라벨로 구분
+    rep = _format_iter_plan(
+        8,
+        SchedulerDecision("explore", "repair", "repair_event"),
+        [{"hyp_id": "job_iter_007", "is_repair_target": True}],
+    )
+    assert "mode=repair" in rep and "repair-target" in rep
+
+
 def test_recent_iters_skips_empty_dirs(tmp_path: Path) -> None:
     """F1: a directory that exists but has no candidate_meta / score_report
     (e.g. the current iter's freshly-created out_dir, or an aborted-job
