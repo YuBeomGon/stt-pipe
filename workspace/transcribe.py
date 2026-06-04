@@ -1,31 +1,39 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Discovery (iter 6, explore): the pipeline has only ever conditioned windowing
-on token-side signals (fixed +30 s, then iter_004's last-timestamp seek). It
-has never read the *raw-waveform energy envelope* — an input that is sitting in
-the ``audio`` argument itself. The dominant axis is coverage/deletion
-(del 66%, length_ratio 0.83): a fixed/timestamp cut slices windows blind to
-where speech actually pauses, so a window can end mid-utterance and the decoder
-restarts cold inside a word, dropping span at the seam.
+Discovery (iter 9, explore): the decode loop has two accept/quality channels
+wired — scores[0] (avg log-prob, iter_005) and no_speech_prob — but neither
+sees *degeneracy*. A repetition loop is high-confidence: the decoder is sure of
+each repeated token, so scores[0] is large and the iter_005 gate accepts the
+window. That is why the two focus files (00003092151…, 02_4038…) trip the
+repeated_text guard while their windows pass the log-prob gate, and why
+iter_008's global no_repeat_ngram ban — which fired on every window, healthy or
+not — lost ground (cer 0.19).
 
-Mechanism: frame the whole call into 20 ms RMS frames once and derive a global
-silence floor (a low percentile of frame energy). For each window, search the
-last 10 s of its 30 s span for the quietest frame; if that frame falls below
-the silence floor it is a genuine pause, so cut the window there and advance to
-exactly that point — windows now begin and end in silence, eliminating the
-mid-word seam. When the search region is all above the floor (dense continuous
-speech — the worst file, silence_ratio 0.065, 181 s speech runs), no trough
-exists, so fall back to iter_005's last-timestamp rewind unchanged. The change
-is therefore strictly additive: silence-bearing windows get clean seams, dense
-windows behave exactly as before.
+The orthogonal signal is the decoded *text* itself, a return channel only ever
+used for the final string: a degenerate window's text is highly repetitive, so
+its gzip compression ratio is large. This is Whisper's own native third
+robustness trigger (compression_ratio_threshold), and the pipeline omitted it —
+iter_005 implemented the temperature-fallback loop with only the log-prob and
+no-speech gates.
 
-iter_005's temperature-fallback decode (scores[0] / no_speech_prob gated
-re-roll) is retained verbatim for per-window robustness.
+Mechanism: inside the existing per-window temperature-fallback loop, decode the
+candidate text and compute its compression ratio. A window only counts as
+"good enough to stop" when it is BOTH confident (or silence) AND non-degenerate
+(ratio <= 2.4). A confident-but-looping window is therefore rejected and the
+loop climbs temperature; sampling_topk=0 sampling at temp>0 breaks the greedy
+loop the way Whisper intends. Among candidates we prefer any non-degenerate
+decode over a degenerate one, then break ties by log-prob — so a healthy window
+still stops at greedy on the first rung and pays nothing extra. The re-roll is
+surgical (only degenerate windows climb), unlike iter_008's blanket constraint.
+
+iter_006's silence-aware RMS windowing is retained verbatim.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
+
+import gzip
 
 import numpy as np
 
@@ -52,6 +60,21 @@ _TEMPERATURES = (0.0, 0.2, 0.4, 0.6)
 _LOGPROB_THRESHOLD = -1.0
 # A window the model is this confident is silence is not worth re-rolling.
 _NO_SPEECH_THRESHOLD = 0.6
+# Whisper's native degeneracy gate: text whose gzip ratio exceeds this is
+# repetitive enough to be treated as a failed decode and re-rolled.
+_COMPRESSION_RATIO_THRESHOLD = 2.4
+
+
+def _compression_ratio(text: str) -> float:
+    """gzip compression ratio of the decoded text (Whisper's degeneracy proxy).
+
+    A looping decode compresses far better than natural speech, so a high ratio
+    flags repetition that the log-prob gate cannot see.
+    """
+    payload = text.encode("utf-8")
+    if not payload:
+        return 0.0
+    return len(payload) / len(gzip.compress(payload))
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -110,11 +133,15 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
-        # Temperature fallback: keep the highest avg-log-prob decode, stopping
-        # as soon as one clears the confidence gate (or the window reads as
-        # silence). scores[0] and no_speech_prob are the unused return channels.
+        # Temperature fallback with a degeneracy gate. A window stops the climb
+        # only when it is confident (or silence) AND non-repetitive; a
+        # high-logprob loop is rejected so the next, higher temperature can
+        # break it. scores[0], no_speech_prob and the decoded text are the
+        # three signals consulted.
         best = None
         best_logprob = float("-inf")
+        best_degenerate = True
+        best_token_ids = []
         for temp in _TEMPERATURES:
             kwargs = {
                 "beam_size": 1,
@@ -131,15 +158,31 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
 
             result = generate(features, [prompt_tokens], **kwargs)[0]
             avg_logprob = result.scores[0]
-            if avg_logprob > best_logprob:
-                best, best_logprob = result, avg_logprob
-            if (
+            token_ids = result.sequences_ids[0]
+            text = tokenizer.decode(token_ids, skip_special_tokens=True).strip()
+            degenerate = _compression_ratio(text) > _COMPRESSION_RATIO_THRESHOLD
+
+            # Prefer any non-degenerate decode over a degenerate one; break ties
+            # within a class by log-prob.
+            better = (
+                best is None
+                or (best_degenerate and not degenerate)
+                or (best_degenerate == degenerate and avg_logprob > best_logprob)
+            )
+            if better:
+                best = result
+                best_logprob = avg_logprob
+                best_degenerate = degenerate
+                best_token_ids = token_ids
+
+            confident = (
                 avg_logprob >= _LOGPROB_THRESHOLD
                 or result.no_speech_prob >= _NO_SPEECH_THRESHOLD
-            ):
+            )
+            if confident and not degenerate:
                 break
 
-        token_ids = best.sequences_ids[0]
+        token_ids = best_token_ids
 
         # skip_special_tokens strips the emitted timestamp tokens from the text.
         text = tokenizer.decode(token_ids, skip_special_tokens=True).strip()
