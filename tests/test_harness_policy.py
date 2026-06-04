@@ -14,13 +14,15 @@ from harness.policy import PolicyConfig, decide_candidate, improvement_threshold
 from harness.state import HarnessState
 
 
-def test_provisional_sigma_uses_absolute_fallback() -> None:
+def test_provisional_sigma_uses_keep_eps() -> None:
+    # 2026-06-04 R-A/F1: provisional σ(결정적 eval) 의 keep 임계는 banking floor 가
+    # 아니라 keep_delta_eps(monotone). banking floor(absolute_delta_fallback)와 분리.
     threshold = improvement_threshold(
         sigma=0.0,
         is_provisional=True,
-        config=PolicyConfig(absolute_delta_fallback=0.01),
+        config=PolicyConfig(absolute_delta_fallback=0.01, keep_delta_eps=0.0001),
     )
-    assert threshold == 0.01
+    assert threshold == 0.0001
 
 
 def test_valid_sigma_uses_two_sigma() -> None:
@@ -42,45 +44,41 @@ def test_decide_success_when_target_and_runtime_met() -> None:
     assert decision.status == "success"
 
 
-def test_decide_reject_when_improvement_below_threshold() -> None:
-    # Δ=0.001 is below the banking floor (0.002 default) → reject.
+def test_decide_reject_only_below_keep_eps() -> None:
+    # 2026-06-04 R-A/F1: keep 임계가 keep_delta_eps(0.0001)로 내려가, float-noise
+    # 수준 Δ(0.00005)만 reject 된다.
     decision = decide_candidate(
-        report={"corpus_cer": 0.399, "total_inference_time_s": 90.0},
+        report={"corpus_cer": 0.39995, "total_inference_time_s": 90.0},
         baseline={"target_cer": 0.10, "total_inference_time_s": 100.0},
-        best_cer=0.400,
+        best_cer=0.40000,
         sigma=0.0,
         sigma_is_provisional=True,
     )
     assert decision.status == "reject"
-    assert decision.threshold == 0.002
+    assert decision.threshold == 0.0001
 
 
-def test_default_fallback_banks_sub_one_percent_improvement() -> None:
-    """Review F2 banking: with the default (provisional σ) config, a genuine
-    sub-0.01 improvement (0.169 → 0.161, Δ=0.008) must now be KEPT, not
-    rejected by the old 0.01 floor. Guards the 0.002 default."""
+def test_monotone_best_keeps_sub_banking_improvement() -> None:
+    """R-A/F1 핵심: banking floor(0.002) 미만이지만 *진짜* 개선(0.17746→0.17705,
+    Δ0.00042)은 이제 KEEP 돼 best 가 전진한다. 예전엔 0.002 에 묶여 버려졌고(정체가
+    일부 측정 artifact), 이 케이스가 phase3_012 정체의 원인이었다."""
     decision = decide_candidate(
-        report={"corpus_cer": 0.161, "total_inference_time_s": 90.0},
+        report={"corpus_cer": 0.17705, "total_inference_time_s": 90.0},
         baseline={"target_cer": 0.10, "total_inference_time_s": 100.0},
-        best_cer=0.169,
+        best_cer=0.17746,
         sigma=0.0,
         sigma_is_provisional=True,
     )
     assert decision.status == "keep"
-    assert decision.threshold == 0.002
+    assert decision.threshold == 0.0001
 
 
-def test_default_fallback_still_rejects_rounding_churn() -> None:
-    """Banking floor is 0.002, not 0 — a rounding-level Δ (0.001) is still
-    rejected so the loop doesn't churn on noise-free-but-trivial moves."""
-    decision = decide_candidate(
-        report={"corpus_cer": 0.1680, "total_inference_time_s": 90.0},
-        baseline={"target_cer": 0.10, "total_inference_time_s": 100.0},
-        best_cer=0.1690,
-        sigma=0.0,
-        sigma_is_provisional=True,
-    )
-    assert decision.status == "reject"
+def test_keep_eps_separated_from_banking_floor() -> None:
+    """keep 임계(keep_delta_eps)와 banking floor(absolute_delta_fallback)는 별개 knob.
+    keep 는 작게(monotone), banking 은 0.002 유지(micro_bank 경계, is_micro_bank 사용)."""
+    cfg = PolicyConfig()
+    assert cfg.keep_delta_eps < cfg.absolute_delta_fallback
+    assert cfg.absolute_delta_fallback == 0.002
 
 
 def test_decide_rejects_non_finite_corpus_cer() -> None:

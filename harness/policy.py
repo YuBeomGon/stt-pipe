@@ -16,14 +16,17 @@ DecisionStatus = Literal["keep", "reject", "success"]
 
 @dataclass(frozen=True)
 class PolicyConfig:
-    # Keep/bank threshold used while σ is provisional (review F2 → 0.002).
+    # Banking floor (micro_bank "유망 reject" 경계) used while σ is provisional.
     # The eval is deterministic (beam search, temperature=0), so there is no
-    # run-to-run noise and σ is legitimately ~0/provisional — this fallback is
-    # therefore not a noise guard but a "is it worth banking" floor. Lowered
-    # from 0.01 to 0.002 so genuine sub-0.01 improvements (e.g. 0.169→0.161)
-    # are kept and compounded instead of discarded. Trade-off: greedier descent
-    # on the 11-file eval can overfit — watched via the job-end holdout check.
+    # run-to-run noise and σ is legitimately ~0/provisional. NOTE: this is NOT
+    # the keep threshold — see keep_delta_eps. is_micro_bank (runner) uses this
+    # to decide whether a non-keep candidate is worth banking as parent material.
     absolute_delta_fallback: float = cfg.BANKING_ABSOLUTE_DELTA
+    # best 포인터 전진(keep) 임계 — banking floor 와 분리(2026-06-04 R-A/F1).
+    # 결정적 eval 이라 이 값 이상의 strict 개선이면 best 를 전진시킨다(monotone).
+    # 0.002 로 묶여 있던 탓에 Δ0.0004 같은 실제 개선이 버려져 정체가 일부 artifact
+    # 였다. micro_bank 경계(0.002)는 그대로 두고 keep 만 낮춘다.
+    keep_delta_eps: float = cfg.KEEP_DELTA_EPS
     success_runtime_multiplier: float = 1.0
 
 
@@ -42,8 +45,11 @@ def improvement_threshold(
     is_provisional: bool,
     config: PolicyConfig,
 ) -> float:
+    """best 를 전진(keep)시키는 최소 개선 폭. σ 가 잠정/0(결정적 eval)이면
+    `keep_delta_eps`(monotone) — banking floor(0.002)와 분리(2026-06-04 R-A/F1).
+    σ 가 실측이면 2σ noise guard."""
     if sigma is None or sigma <= 0.0 or is_provisional:
-        return config.absolute_delta_fallback
+        return config.keep_delta_eps
     return 2.0 * sigma
 
 

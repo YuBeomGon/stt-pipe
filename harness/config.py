@@ -25,9 +25,17 @@ RUNTIME_HARD_MULTIPLIER: float = 7.0
 VERIFY_TIMEOUT_LOAD_MARGIN_S: float = 180.0
 
 # ── Keep / banking ───────────────────────────────────────────────────
-# σ가 잠정(deterministic eval, σ~0)일 때 best 대비 개선 폭이 이 값 이상이면
-# bank (review F2). genuine sub-0.01 개선도 누적되도록 0.01→0.002.
+# σ가 잠정(deterministic eval, σ~0)일 때 micro_bank("유망 reject") 경계.
+# genuine sub-0.01 개선도 누적되도록 0.01→0.002.
 BANKING_ABSOLUTE_DELTA: float = 0.002
+
+# best 포인터 전진(keep) 임계. **micro_bank 경계(0.002)와 분리** (2026-06-04 설계
+# 검토 R-A/F1): eval 이 결정적이라 σ~0 이므로 0.002 는 noise guard 가 아니라 과도한
+# "기록할 가치" 게이트였고, 실제 개선(예: 0.17746→0.17705, Δ0.00042)을 버려 정체가
+# 일부 측정 artifact 였다. 이 값 이상의 *진짜* 개선이면 best 를 전진시킨다(monotone).
+# 0 이 아닌 작은 값 — float tie/잡음 수준 변화는 제외, 의미 있는 개선만. 과적합은
+# 잡 종료 holdout 으로 감시(11파일 greedy descent 위험은 기존과 동일).
+KEEP_DELTA_EPS: float = 0.0001
 
 # ── Explore / exploit schedule ───────────────────────────────────────
 # explore 비율이 iter 증가에 따라 START→FLOOR 로 지수 감쇠. 후반에도 FLOOR 보장.

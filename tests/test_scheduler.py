@@ -89,6 +89,23 @@ def test_discovery_phase_releases_after_floor() -> None:
     assert d.override != "discovery_phase"
 
 
+def test_discovery_floor_is_count_capped_for_large_budget() -> None:
+    # R-B/F3: 큰 budget 에서 floor 가 fraction 이 아니라 count(min(ABS_CAP, frac×total))
+    # 로 캡돼야 한다. total=100 이면 frac×total=40 이지만 ABS_CAP=8 이라 idx 20 은
+    # 이미 floor 밖 → discovery_phase 아님 (exploit 기계가 돌 수 있어야 함).
+    d = sch.decide_mode(20, 100, _ctx())
+    assert d.override != "discovery_phase"
+    # floor 안(idx ≤ 8)은 여전히 explore 강제.
+    assert sch.decide_mode(5, 100, _ctx()).override == "discovery_phase"
+
+
+def test_plateau_preempts_discovery_floor() -> None:
+    # R-B/F3: floor 안이라도 이미 정체(iters_since_best ≥ PLATEAU_K)면 discovery 를
+    # 풀어 plateau/exploit 가 끼어든다.
+    d = sch.decide_mode(4, 100, _ctx(iters_since_best=sch.PLATEAU_K))
+    assert d.override != "discovery_phase"
+
+
 def test_repair_beats_discovery_phase() -> None:
     # 초반이라도 crash(repair_event)는 discovery 보다 먼저 수습.
     d = sch.decide_mode(2, 50, _ctx(repair_event=True))

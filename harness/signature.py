@@ -44,6 +44,10 @@ _API_VOCAB: tuple[str, ...] = (
     "regex", "punctuation", "spacing", "normalize",
 )
 
+# Public alias — backend-surface vocab. cooldown.py 가 dead-end 의 "거친 키"로 쓴다
+# (private `_API_VOCAB` 직접 import 결합 제거).
+API_VOCAB: tuple[str, ...] = _API_VOCAB
+
 # keyword substring → pipeline stage token. 첫 매칭 stage 를 부여(다중 가능).
 _STAGE_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("audio_frontend", ("preemphasis", "channel_eq", "compand", "cmn", "cmvn",
