@@ -1,7 +1,7 @@
 {
   "job_id": "phase3_014",
-  "updated_at_iter": 13,
-  "global_best": "phase3_014_iter_008",
+  "updated_at_iter": 14,
+  "global_best": "phase3_014_iter_014",
   "family_best": {
     "family_001": {
       "hyp_id": "phase3_014_iter_002",
@@ -100,28 +100,28 @@
       }
     },
     "family_005": {
-      "hyp_id": "phase3_014_iter_008",
-      "iter": 8,
+      "hyp_id": "phase3_014_iter_014",
+      "iter": 14,
       "status": "keep",
-      "cer": 0.16583308645417633,
-      "harness_signature": "sig_cfe33a27",
+      "cer": 0.15914120906888798,
+      "harness_signature": "sig_8d806024",
       "harness_family_id": "family_005",
       "self_declared_family_id": null,
       "fingerprint": [
-        "temperature-fallback",
-        "redecode-ladder",
-        "compression-ratio",
-        "logprob-gate",
-        "sampling-topk"
+        "beam-size",
+        "patience",
+        "first-pass",
+        "global-logprob",
+        "deterministic-search"
       ],
-      "mode": "explore",
-      "diff_path": "runs/phase3_014_iter_008/candidate.diff",
-      "runtime_s": 172.70688315102598,
+      "mode": "refine",
+      "diff_path": "runs/phase3_014_iter_014/candidate.diff",
+      "runtime_s": 225.10724294907413,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.36706599411517443,
-        "error_breakdown.sub_ratio": 0.5722992854140395,
-        "hallucination_hit_rate": 0.0,
-        "total_inference_time_s": 172.70688315102598
+        "error_breakdown.del_ratio": 0.35238720981165134,
+        "error_breakdown.sub_ratio": 0.5843188786684187,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 225.10724294907413
       }
     },
     "family_006": {
@@ -401,6 +401,31 @@
   ],
   "rejected_promising": [],
   "near_best": [
+    {
+      "hyp_id": "phase3_014_iter_014",
+      "iter": 14,
+      "status": "keep",
+      "cer": 0.15914120906888798,
+      "harness_signature": "sig_8d806024",
+      "harness_family_id": "family_005",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "beam-size",
+        "patience",
+        "first-pass",
+        "global-logprob",
+        "deterministic-search"
+      ],
+      "mode": "refine",
+      "diff_path": "runs/phase3_014_iter_014/candidate.diff",
+      "runtime_s": 225.10724294907413,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.35238720981165134,
+        "error_breakdown.sub_ratio": 0.5843188786684187,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 225.10724294907413
+      }
+    },
     {
       "hyp_id": "phase3_014_iter_008",
       "iter": 8,

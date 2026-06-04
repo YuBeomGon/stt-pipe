@@ -45,6 +45,11 @@ _MIN_ADVANCE_SECONDS = 1.0  # below this the last-timestamp boundary is untrustw
 _TEMPERATURES = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
 _LOGPROB_THRESHOLD = -1.0
 _COMPRESSION_RATIO_THRESHOLD = 2.4
+# Deterministic first pass uses real beam search (selects by GLOBAL cumulative
+# log-prob) instead of greedy — the direct lever for substitution-from-bad-
+# local-commit, the dominant axis. Sampling fallbacks stay beam_size=1.
+_BEAM_SIZE = 5
+_PATIENCE = 1.0
 
 
 def _compression_ratio(text: str) -> float:
@@ -89,7 +94,8 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
                 results = generate(
                     features,
                     [prompt_tokens],
-                    beam_size=1,
+                    beam_size=_BEAM_SIZE,
+                    patience=_PATIENCE,
                     sampling_temperature=0.0,
                     return_scores=True,
                 )
