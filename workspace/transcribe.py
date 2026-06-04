@@ -29,6 +29,16 @@ of the best, we keep the one reaching furthest into the window, so beam search
 attacks substitution while the completeness tie-break guards coverage without
 rewarding hallucinated length.
 
+iter11 (repair): iter10 tried to rerank the score-margin N-best by acoustic
+confidence from ``model.align()`` — a real lever (align's ``text_token_probs``
+is a per-token acoustic posterior the beam's LM-blended ``scores`` cannot
+isolate, the substitution axis) but it crashed: ``align()`` requires
+``features.batch == len(text_tokens)`` and iter10 passed one 30s window against
+an N-hypothesis text batch (``MatMul: batch dimension ... should match``). The
+fix is to call ``align()`` once per hypothesis (batch 1, the faster-whisper
+contract) instead of one batched call. We keep the completeness tie-break as the
+fallback when fewer than two hypotheses carry alignable text.
+
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
@@ -53,8 +63,13 @@ _MIN_ADVANCE = 5.0
 _BEAM_SIZE = 5
 _NUM_HYPOTHESES = 5
 # Hypotheses whose avg log-prob is within this margin of the best are treated as
-# confidence-equivalent; the completeness tie-break then decides between them.
+# confidence-equivalent; an acoustic-confidence rerank then decides between them
+# (completeness is the fallback when alignment isn't applicable).
 _SCORE_MARGIN = 0.05
+# Whisper's encoder emits ~50 output frames per second (1500 for a 30s window);
+# align() needs the valid (non-padded) frame count for the chunk.
+_FRAMES_PER_SEC = 50
+_MAX_FRAMES = _WINDOW_SECONDS * _FRAMES_PER_SEC
 
 
 def _last_ts(token_ids, ts_begin):
@@ -63,6 +78,15 @@ def _last_ts(token_ids, ts_begin):
         if tid >= ts_begin:
             return (tid - ts_begin) * _TS_STEP
     return None
+
+
+def _text_ids(token_ids, eot_id):
+    """Text (BPE) token ids only — drop timestamp/special/eos tokens.
+
+    Whisper text tokens occupy ids below <|endoftext|>; sot/lang/task/timestamp
+    tokens all sit at or above it. align() conditions on text tokens only.
+    """
+    return [t for t in token_ids if t < eot_id]
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -79,6 +103,9 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     # Any token id >= this is a timestamp token (<|0.00|> .. <|30.00|>);
     # everything below (text, eos, control) is not.
     ts_begin = processor.tokenizer.convert_tokens_to_ids("<|0.00|>")
+    # <|endoftext|> bounds the text-token id range: BPE text tokens are below it,
+    # all special/timestamp tokens at or above. Used to feed align() text only.
+    eot_id = processor.tokenizer.convert_tokens_to_ids("<|endoftext|>")
 
     segments = []
     pos = 0
@@ -101,18 +128,50 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             no_repeat_ngram_size=3,
         )[0]
 
-        # generate() now returns a ranked N-best list (sequences_ids / scores
-        # are parallel). Among hypotheses within _SCORE_MARGIN of the top
-        # score, keep the one reaching furthest into the window — beam search
-        # reduces substitution; the completeness tie-break recovers the
-        # residual deletion without rewarding a hallucinated longer hypothesis.
+        # generate() returns a ranked N-best list (sequences_ids / scores are
+        # parallel). Restrict to hypotheses within _SCORE_MARGIN of the top
+        # score, then rerank those by mean ACOUSTIC confidence from align():
+        # the beam score blends acoustic likelihood with the LM prior, so a
+        # fluent-but-wrong hypothesis can outrank the acoustically-faithful one,
+        # which is exactly how substitutions survive beam search.
         hyps = result.sequences_ids
         scores = result.scores or [0.0] * len(hyps)
         best_score = max(scores)
-        token_ids = max(
-            (h for h, s in zip(hyps, scores) if s >= best_score - _SCORE_MARGIN),
-            key=lambda h: (_last_ts(h, ts_begin) or 0.0),
-        )
+        contenders = [
+            h for h, s in zip(hyps, scores) if s >= best_score - _SCORE_MARGIN
+        ]
+
+        if len(contenders) >= 2:
+            # align() requires features.batch == len(text_tokens); iter10 crashed
+            # passing one window against an N-hypothesis text batch. Call it once
+            # per hypothesis (batch 1) and rerank by mean acoustic posterior.
+            num_frames = max(
+                1, min(_MAX_FRAMES, int(round(len(chunk) / sr * _FRAMES_PER_SEC)))
+            )
+            scored = []
+            for h in contenders:
+                text_only = _text_ids(h, eot_id)
+                if not text_only:
+                    continue
+                aligned = model.align(
+                    features,
+                    prompt_tokens,
+                    [text_only + [eot_id]],
+                    num_frames,
+                )[0]
+                probs = aligned.text_token_probs
+                if probs:
+                    scored.append((sum(probs) / len(probs), h))
+
+            if len(scored) >= 2:
+                token_ids = max(scored, key=lambda x: x[0])[1]
+            else:
+                # Fallback: completeness tie-break — furthest-reaching hypothesis.
+                token_ids = max(
+                    contenders, key=lambda h: (_last_ts(h, ts_begin) or 0.0)
+                )
+        else:
+            token_ids = contenders[0]
 
         text = processor.tokenizer.decode(
             token_ids, skip_special_tokens=True
