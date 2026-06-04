@@ -1,6 +1,6 @@
 {
   "job_id": "phase3_014",
-  "updated_at_iter": 77,
+  "updated_at_iter": 78,
   "global_best": "phase3_014_iter_046",
   "family_best": {
     "family_001": {
@@ -1993,6 +1993,31 @@
       }
     },
     {
+      "hyp_id": "phase3_014_iter_078",
+      "iter": 78,
+      "status": "reject",
+      "cer": 0.16023038182039978,
+      "harness_signature": "sig_12f767b7",
+      "harness_family_id": "family_003",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "notimestamps",
+        "retranscribe",
+        "length-band",
+        "hallucination-guard",
+        "compose"
+      ],
+      "mode": "plateau",
+      "diff_path": "runs/phase3_014_iter_078/candidate.diff",
+      "runtime_s": 395.0793431979837,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.36108543150796674,
+        "error_breakdown.sub_ratio": 0.5826853009951601,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 395.0793431979837
+      }
+    },
+    {
       "hyp_id": "phase3_014_iter_066",
       "iter": 66,
       "status": "micro_bank",
@@ -2316,31 +2341,6 @@
         "error_breakdown.sub_ratio": 0.5878491094010655,
         "hallucination_hit_rate": 0.18181818181818182,
         "total_inference_time_s": 219.95073655515444
-      }
-    },
-    {
-      "hyp_id": "phase3_014_iter_042",
-      "iter": 42,
-      "status": "micro_bank",
-      "cer": 0.1619556314587944,
-      "harness_signature": "sig_c77b1297",
-      "harness_family_id": "family_006",
-      "self_declared_family_id": null,
-      "fingerprint": [
-        "mel-warp",
-        "vtlp",
-        "formant-shift",
-        "two-witness",
-        "replace-consensus"
-      ],
-      "mode": "explore",
-      "diff_path": "runs/phase3_014_iter_042/candidate.diff",
-      "runtime_s": 222.0579317099182,
-      "axis_metric": {
-        "error_breakdown.del_ratio": 0.35444127616075755,
-        "error_breakdown.sub_ratio": 0.5875073976435142,
-        "hallucination_hit_rate": 0.18181818181818182,
-        "total_inference_time_s": 222.0579317099182
       }
     }
   ]
