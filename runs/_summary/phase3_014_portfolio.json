@@ -1,7 +1,7 @@
 {
   "job_id": "phase3_014",
-  "updated_at_iter": 37,
-  "global_best": "phase3_014_iter_014",
+  "updated_at_iter": 39,
+  "global_best": "phase3_014_iter_039",
   "family_best": {
     "family_001": {
       "hyp_id": "phase3_014_iter_002",
@@ -125,28 +125,28 @@
       }
     },
     "family_006": {
-      "hyp_id": "phase3_014_iter_018",
-      "iter": 18,
-      "status": "micro_bank",
-      "cer": 0.16179879058257673,
-      "harness_signature": "sig_e4c3d6a6",
+      "hyp_id": "phase3_014_iter_039",
+      "iter": 39,
+      "status": "keep",
+      "cer": 0.15903664848474286,
+      "harness_signature": "sig_6ce37b47",
       "harness_family_id": "family_006",
       "self_declared_family_id": null,
       "fingerprint": [
-        "no-speech-prob",
-        "nospeech-gate",
-        "hallucination-suppression",
-        "single-beam-pass",
-        "return-channel"
+        "glossary-prefix",
+        "startofprev",
+        "sequential-generate",
+        "logprob-select",
+        "gate-gated"
       ],
-      "mode": "explore",
-      "diff_path": "runs/phase3_014_iter_018/candidate.diff",
-      "runtime_s": 222.60754739504773,
+      "mode": "repair",
+      "diff_path": "runs/phase3_014_iter_039/candidate.diff",
+      "runtime_s": 227.3797009208938,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.3541386181269858,
-        "error_breakdown.sub_ratio": 0.5878076363832193,
+        "error_breakdown.del_ratio": 0.3576594345825115,
+        "error_breakdown.sub_ratio": 0.5801555993863686,
         "hallucination_hit_rate": 0.18181818181818182,
-        "total_inference_time_s": 222.60754739504773
+        "total_inference_time_s": 227.3797009208938
       }
     }
   },
@@ -853,6 +853,31 @@
   "rejected_promising": [],
   "near_best": [
     {
+      "hyp_id": "phase3_014_iter_039",
+      "iter": 39,
+      "status": "keep",
+      "cer": 0.15903664848474286,
+      "harness_signature": "sig_6ce37b47",
+      "harness_family_id": "family_006",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "glossary-prefix",
+        "startofprev",
+        "sequential-generate",
+        "logprob-select",
+        "gate-gated"
+      ],
+      "mode": "repair",
+      "diff_path": "runs/phase3_014_iter_039/candidate.diff",
+      "runtime_s": 227.3797009208938,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.3576594345825115,
+        "error_breakdown.sub_ratio": 0.5801555993863686,
+        "hallucination_hit_rate": 0.18181818181818182,
+        "total_inference_time_s": 227.3797009208938
+      }
+    },
+    {
       "hyp_id": "phase3_014_iter_014",
       "iter": 14,
       "status": "keep",
@@ -1422,31 +1447,6 @@
         "error_breakdown.sub_ratio": 0.5512307091228755,
         "hallucination_hit_rate": 0.18181818181818182,
         "total_inference_time_s": 371.8911715239519
-      }
-    },
-    {
-      "hyp_id": "phase3_014_iter_036",
-      "iter": 36,
-      "status": "micro_bank",
-      "cer": 0.18670163637314188,
-      "harness_signature": "sig_2399ec50",
-      "harness_family_id": "family_006",
-      "self_declared_family_id": null,
-      "fingerprint": [
-        "input-features",
-        "mel-axis",
-        "spectral-sharpen",
-        "unsharp-mask",
-        "envelope-contrast"
-      ],
-      "mode": "explore",
-      "diff_path": "runs/phase3_014_iter_036/candidate.diff",
-      "runtime_s": 220.04444261017488,
-      "axis_metric": {
-        "error_breakdown.del_ratio": 0.3847482148690904,
-        "error_breakdown.sub_ratio": 0.5538339478228403,
-        "hallucination_hit_rate": 0.18181818181818182,
-        "total_inference_time_s": 220.04444261017488
       }
     }
   ]
