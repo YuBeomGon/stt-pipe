@@ -1,0 +1,10 @@
+{
+  "job_id": "phase3_012",
+  "iteration": 1,
+  "best_cer": null,
+  "best_hyp_id": null,
+  "status": "running",
+  "iters_since_best_update": 1,
+  "evaluated_count": 0,
+  "evaluated_since_best_update": 0
+}
