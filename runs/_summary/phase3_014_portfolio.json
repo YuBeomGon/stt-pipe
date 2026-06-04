@@ -1,6 +1,6 @@
 {
   "job_id": "phase3_014",
-  "updated_at_iter": 31,
+  "updated_at_iter": 32,
   "global_best": "phase3_014_iter_014",
   "family_best": {
     "family_001": {
@@ -177,28 +177,28 @@
       }
     },
     "best_substitution": {
-      "hyp_id": "phase3_014_iter_016",
-      "iter": 16,
+      "hyp_id": "phase3_014_iter_032",
+      "iter": 32,
       "status": "micro_bank",
-      "cer": 0.37366467420664656,
-      "harness_signature": "sig_48a8c56c",
+      "cer": 0.5966139797501002,
+      "harness_signature": "sig_9d1df086",
       "harness_family_id": "family_006",
       "self_declared_family_id": null,
       "fingerprint": [
         "overlap-window",
-        "left-context-warmup",
-        "absolute-time-dedup",
-        "segment-gate",
-        "stride-overlap"
+        "edge-defer",
+        "interior-commit",
+        "absclock-dedup",
+        "content-seek"
       ],
       "mode": "explore",
-      "diff_path": "runs/phase3_014_iter_016/candidate.diff",
-      "runtime_s": 251.11113562597893,
+      "diff_path": "runs/phase3_014_iter_032/candidate.diff",
+      "runtime_s": 235.04316810303135,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.8061281596865963,
-        "error_breakdown.sub_ratio": 0.17873799085906167,
-        "hallucination_hit_rate": 0.18181818181818182,
-        "total_inference_time_s": 251.11113562597893
+        "error_breakdown.del_ratio": 0.9173664763184414,
+        "error_breakdown.sub_ratio": 0.07749266112660834,
+        "hallucination_hit_rate": 0.2727272727272727,
+        "total_inference_time_s": 235.04316810303135
       }
     },
     "best_low_hallucination": {
@@ -698,6 +698,31 @@
         "error_breakdown.sub_ratio": 0.5575130042202375,
         "hallucination_hit_rate": 0.09090909090909091,
         "total_inference_time_s": 218.769934185897
+      }
+    },
+    {
+      "hyp_id": "phase3_014_iter_032",
+      "iter": 32,
+      "status": "micro_bank",
+      "cer": 0.5966139797501002,
+      "harness_signature": "sig_9d1df086",
+      "harness_family_id": "family_006",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "overlap-window",
+        "edge-defer",
+        "interior-commit",
+        "absclock-dedup",
+        "content-seek"
+      ],
+      "mode": "explore",
+      "diff_path": "runs/phase3_014_iter_032/candidate.diff",
+      "runtime_s": 235.04316810303135,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.9173664763184414,
+        "error_breakdown.sub_ratio": 0.07749266112660834,
+        "hallucination_hit_rate": 0.2727272727272727,
+        "total_inference_time_s": 235.04316810303135
       }
     }
   ],
