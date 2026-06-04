@@ -1,23 +1,19 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Long-form windowing recovers the call tail (the stub decoded only the first
-30s), and per-window sequential decode bounds GPU memory. But coverage stayed
-low (length_ratio ≈ 0.65, deletion ≈ 80%) even though every second of audio is
-fed to the model — so the loss is *inside* the windows, not at the chunker.
-These call-center recordings have long low-RMS / noisy spans; on those a single
-greedy 30s decode collapses into a repetition loop or stops early
-(repeated_text flagged on 5/12 files), and the dropped real content shows up as
-deletion.
+Coverage stayed low (length_ratio ≈ 0.66, deletion ≈ 82%) even though every
+second of audio is fed to the model — iter3 localized the loss to *inside* the
+30s windows: each window decodes but stops part-way through, so the tail of the
+window is silently dropped as deletion.
 
-This iteration conditions on a decode-result signal we previously discarded.
-``generate`` returns per-sequence ``scores`` and a ``no_speech_prob`` *only*
-when asked via ``return_scores`` / ``return_no_speech_prob`` — flags the
-pipeline never set, so those quality signals were thrown away. We greedy-decode
-each window, then for any window whose output is empty, low-confidence, or
-visibly repetitive — yet whose ``no_speech_prob`` says speech is present — we
-re-decode once with beam search + ``no_repeat_ngram_size`` to break the loop
-and recover the dropped span. This is a genuine fallback policy, not a silent
-error swallow: windows that decode cleanly are untouched.
+Every iteration so far hard-coded ``<|notimestamps|>`` into the decoder prompt,
+so the decode has NEVER run in Whisper's timestamped regime. notimestamps
+decode is prone to early-EOS on long dense segments; the timestamp-trained
+decode is built to walk segment-by-segment to the window end, which directly
+attacks the in-window deletion. Timestamps also tell us *where* the model
+stopped, so instead of a blind 30s hop we advance the cursor to the last
+emitted timestamp — a window that truncated early gets its dropped tail
+re-decoded with fresh context rather than lost. This is the standard sequential
+long-form algorithm, only possible once timestamps are enabled.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -31,18 +27,12 @@ from frozen.asr_backend import generate, load, to_storage_view
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 _WINDOW_SECONDS = 30
-# faster-whisper defaults: avg log-prob below this == low confidence; a window
-# with no_speech_prob above this is genuine silence and not worth a retry.
-_LOW_SCORE = -1.0
-_NO_SPEECH = 0.6
-
-
-def _is_repetitive(token_ids) -> bool:
-    """A collapsed greedy decode cycles a few tokens, so the unique-token
-    fraction drops sharply. Cheap proxy for the repeated_text failure."""
-    if len(token_ids) >= 12:
-        return len(set(token_ids)) / len(token_ids) < 0.45
-    return False
+# Whisper timestamp tokens are spaced 0.02s apart starting at <|0.00|>.
+_TS_STEP = 0.02
+# If the last timestamp lands before this, treat the window as having no usable
+# continuation point and hop a full window — bounds total window count and
+# guarantees the cursor always advances (loop termination).
+_MIN_ADVANCE = 5.0
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -50,15 +40,20 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
 
     audio = np.asarray(audio, dtype=np.float32).reshape(-1)
     window = _WINDOW_SECONDS * sr
-    n_windows = max(1, int(np.ceil(len(audio) / window)))
-    chunks = [audio[i * window : (i + 1) * window] for i in range(n_windows)]
+    n = len(audio)
 
+    # Prompt WITHOUT <|notimestamps|> -> the decoder emits timestamp tokens.
     prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
-        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
+        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
     )
+    # Any token id >= this is a timestamp token (<|0.00|> .. <|30.00|>);
+    # everything below (text, eos, control) is not.
+    ts_begin = processor.tokenizer.convert_tokens_to_ids("<|0.00|>")
 
     segments = []
-    for chunk in chunks:
+    pos = 0
+    while pos < n:
+        chunk = audio[pos : pos + window]
         inputs = processor(
             chunk,
             sampling_rate=sr,
@@ -71,29 +66,28 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             [prompt_tokens],
             beam_size=1,
             sampling_temperature=0.0,
-            return_scores=True,
-            return_no_speech_prob=True,
+            no_repeat_ngram_size=3,
         )[0]
         token_ids = result.sequences_ids[0]
-        score = result.scores[0] if result.scores else 0.0
-        no_speech_prob = result.no_speech_prob
 
-        collapsed = not token_ids or score < _LOW_SCORE or _is_repetitive(token_ids)
-        if collapsed and no_speech_prob < _NO_SPEECH:
-            retry = generate(
-                features,
-                [prompt_tokens],
-                beam_size=5,
-                no_repeat_ngram_size=3,
-                length_penalty=1.0,
-                return_scores=True,
-            )[0]
-            retry_ids = retry.sequences_ids[0]
-            if retry_ids and not _is_repetitive(retry_ids):
-                token_ids = retry_ids
+        text = processor.tokenizer.decode(
+            token_ids, skip_special_tokens=True
+        ).strip()
+        if text:
+            segments.append(text)
 
-        segments.append(
-            processor.tokenizer.decode(token_ids, skip_special_tokens=True).strip()
-        )
+        # Advance the cursor to the last timestamp the model actually reached,
+        # so an early-truncated window re-decodes its dropped tail next pass.
+        last_ts = None
+        for tid in reversed(token_ids):
+            if tid >= ts_begin:
+                last_ts = (tid - ts_begin) * _TS_STEP
+                break
 
-    return " ".join(s for s in segments if s)
+        if last_ts is not None and last_ts >= _MIN_ADVANCE:
+            advance = min(last_ts, _WINDOW_SECONDS)
+        else:
+            advance = _WINDOW_SECONDS
+        pos += int(advance * sr)
+
+    return " ".join(segments)
