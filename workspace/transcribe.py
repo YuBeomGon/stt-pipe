@@ -27,6 +27,17 @@ beam fails the confidence/degeneracy gate. iter_006's silence-aware RMS
 windowing and iter_010's confidence-gated <|startofprev|> long-form context
 are retained verbatim.
 
+Refinement (iter 16, refine of family_010/iter_014): iter_014 added model.align()
+— a per-token posterior channel — to drop a repetition loop's trailing sub-floor
+run, but fired it ONLY on windows the gzip gate already flagged degenerate. The
+two repeated_text focus files are the case that escapes: a long clean head
+followed by a short loop tail keeps the whole-window gzip ratio under 2.4, so the
+window-level gate never flags it and the tail survives. The fix is to also fire
+align() when the OTHER window-level distress signal trips — best_logprob below the
+-1.0 confidence gate — which is broader and catches loop tails the whole-text
+gzip proxy misses. _ALIGN_MIN_RUN keeps a merely-quiet final word from being
+clipped, so broadening the trigger only reaches genuine sustained tails.
+
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
@@ -78,6 +89,17 @@ _COMPRESSION_RATIO_THRESHOLD = 2.4
 # its own long-form context at half the 448-token window; mirror that bound so
 # the prompt cannot grow without limit and crowd out the new audio.
 _MAX_CONTEXT_TOKENS = 200
+
+# --- align()-based repetition trim (iter_014, refined iter_016) --------------
+# model.align() returns text_token_probs (a per-token posterior). A token whose
+# aligned posterior is below this floor contributed essentially no acoustic
+# evidence — a hallmark of loop-tail tokens emitted past the real audio.
+_ALIGN_PROB_FLOOR = 0.3
+# Only trim when the trailing sub-floor run is at least this long, so a single
+# quiet/uncertain final word is never clipped — only a sustained loop tail is.
+# This guard is what makes the broadened (low-logprob) trigger safe: a clean
+# but merely low-confidence window has no sustained sub-floor tail to trim.
+_ALIGN_MIN_RUN = 8
 
 
 def _compression_ratio(text: str) -> float:
@@ -259,6 +281,35 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
                 )
                 if rung_confident and not degenerate:
                     break
+
+        # --- align()-based loop trim (iter_014, refined iter_016) -----------
+        # Beam + temperature climb failed to find a clean decode, so the window
+        # is in distress. iter_014 ran align() only when the gzip gate flagged
+        # the WHOLE window degenerate; a loop tail behind a long clean head
+        # keeps the whole-window ratio under threshold and slips through. Fire
+        # also on the other window-level distress signal — best_logprob below
+        # the confidence gate. align() teacher-forces the decoded text against
+        # the audio and returns text_token_probs; the loop tail aligns to no
+        # fresh audio so its posterior collapses. Drop the longest trailing
+        # sub-floor run (>= _ALIGN_MIN_RUN tokens) and keep the clean head.
+        if (best_degenerate or best_logprob < _LOGPROB_THRESHOLD) and best_token_ids:
+            text_ids = [t for t in best_token_ids if t < eot]
+            if text_ids:
+                num_frames = int(inputs.input_features.shape[-1])
+                align_res = model.align(
+                    features, list(active_sot), [text_ids], num_frames
+                )[0]
+                probs = align_res.text_token_probs
+                cut_idx = len(text_ids)
+                run = 0
+                for i in range(min(len(probs), len(text_ids)) - 1, -1, -1):
+                    if probs[i] < _ALIGN_PROB_FLOOR:
+                        run += 1
+                        cut_idx = i
+                    else:
+                        break
+                if run >= _ALIGN_MIN_RUN:
+                    best_token_ids = text_ids[:cut_idx]
 
         token_ids = best_token_ids
 
