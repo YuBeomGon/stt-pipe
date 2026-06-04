@@ -38,6 +38,19 @@ align() when the OTHER window-level distress signal trips — best_logprob below
 gzip proxy misses. _ALIGN_MIN_RUN keeps a merely-quiet final word from being
 clipped, so broadening the trigger only reaches genuine sustained tails.
 
+Discovery (iter 22, explore): every prior iteration hardcoded <|ko|> as the
+language token. model.detect_language() — a third method on the CT2 Whisper
+object besides generate()/align(), never called before — returns a per-window
+language posterior (a list of (lang_token, prob) pairs) from one encoder pass.
+On a code-switched window (English insurance / product terms) a forced <|ko|>
+makes the decoder transliterate the English into Hangul, which is a guaranteed
+substitution — the dominant axis (59%). So detect each window's language and
+override Korean only when the detector is confidently (>= _LANG_OVERRIDE_PROB)
+another language, leaving every ambiguous ko window on the Korean path. turbo's
+32-layer encoder is the per-window cost driver, so this adds one encoder pass
+per window; the parent ran beam_size=5 in ~203 s against the 719.9 s budget, so
+the extra pass stays well inside the ceiling.
+
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
@@ -51,6 +64,10 @@ from frozen.asr_backend import generate, load, to_storage_view
 
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
+# detect_language() override gate: only replace the default Korean language
+# token with the detector's top choice when it is at least this confident, so
+# an ambiguous Korean window is never pushed onto a wrong-language decode.
+_LANG_OVERRIDE_PROB = 0.7
 _WINDOW_SECONDS = 30
 # CT2 emits a timestamp token every 0.02 s of audio (Whisper's frame stride);
 # reuse the same stride to frame the waveform for the RMS envelope.
@@ -148,11 +165,13 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         frame_rms = np.zeros(0)
         silence_floor = 0.0
 
-    # No <|notimestamps|>: keep the decoder in timestamp-emitting mode (the
-    # dense-speech fallback still needs the last-timestamp seek).
-    sot_prompt = tokenizer.convert_tokens_to_ids(
-        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
-    )
+    # SOT prefix is now assembled per window from its component ids: the
+    # language slot is chosen per window from detect_language() instead of a
+    # fixed <|ko|>. No <|notimestamps|> on the base prefix keeps the decoder in
+    # timestamp-emitting mode (the dense-speech fallback needs the seek).
+    sot_head = tokenizer.convert_tokens_to_ids("<|startoftranscript|>")
+    task_id = tokenizer.convert_tokens_to_ids(_TASK_TOKEN)
+    ko_id = tokenizer.convert_tokens_to_ids(_LANGUAGE_TOKEN)
     timestamp_begin = tokenizer.convert_tokens_to_ids("<|0.00|>")
     # Long-form context channel: <|startofprev|> prefixes prior text; <|endoftext|>
     # marks the boundary between natural-text ids (below it) and the special/
@@ -171,7 +190,6 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     # is the final chunk the seek is already fixed, so those windows can decode
     # in clean-text mode and shed the timestamp tax on the substitution axis.
     notimestamps = tokenizer.convert_tokens_to_ids("<|notimestamps|>")
-    sot_prompt_nots = [*sot_prompt, notimestamps]
 
     texts = []
     context_ids: list[int] = []
@@ -202,12 +220,29 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
+        # detect_language(): a per-window encoder-grounded language posterior
+        # (the third Whisper-object method, never called before — generate and
+        # align were the only entry points used). detect_language(features)
+        # returns one list of (lang_token, prob) per input, sorted desc. Every
+        # prior iter forced <|ko|>; on a code-switched span (English insurance /
+        # product terms) that forces a Hangul transliteration — a substitution.
+        # Override Korean only on a confident non-Korean detection so ambiguous
+        # ko windows stay on the Korean path; reuse the features already built
+        # for this window so it costs only the single extra encoder pass.
+        detected = model.detect_language(features)[0]
+        det_token, det_prob = detected[0]
+        if det_token != _LANGUAGE_TOKEN and det_prob >= _LANG_OVERRIDE_PROB:
+            lang_id = tokenizer.convert_tokens_to_ids(det_token)
+        else:
+            lang_id = ko_id
+        base_sot = [sot_head, lang_id, task_id]
+
         # Need the timestamp channel only on a dense full window whose seek
         # depends on the last-timestamp rewind. silence_cut windows seek to the
         # acoustic cut; the final chunk (cut == n) ends the loop — neither needs
         # timestamps, so they decode in clean-text mode (<|notimestamps|>).
         use_timestamps = (not silence_cut) and (cut < n)
-        active_sot = sot_prompt if use_timestamps else sot_prompt_nots
+        active_sot = base_sot if use_timestamps else [*base_sot, notimestamps]
 
         # Carry the prior confident window's text as decoder context (native
         # long-form conditioning); cold-start prompt when there is none.
