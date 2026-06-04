@@ -4208,3 +4208,14 @@ not enough improvement: Δcer -0.003320 < 0.000100
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 59 · phase3_014_iter_059 · cer=NA (ΔNA) · reject
+
+### 관찰
+score_report 없음
+
+### 분석
+judge.evaluate 종료 코드 비정상
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
