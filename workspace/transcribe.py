@@ -1,25 +1,26 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Discovery (iter 5, explore): generate() exposes two return-value channels the
-pipeline has never read — ``results[0].scores`` (the length-normalized average
-log-prob of the decode, surfaced only when ``return_scores=True``) and
-``results[0].no_speech_prob`` (surfaced by ``return_no_speech_prob=True``).
-iter_004 accepts every greedy decode unconditionally, so a window where the
-decoder collapses (early EOS, drift, repetition) is kept as-is and its dropped
-span becomes pure deletion — the dominant axis (del 67%, length_ratio 0.82).
+Discovery (iter 6, explore): the pipeline has only ever conditioned windowing
+on token-side signals (fixed +30 s, then iter_004's last-timestamp seek). It
+has never read the *raw-waveform energy envelope* — an input that is sitting in
+the ``audio`` argument itself. The dominant axis is coverage/deletion
+(del 66%, length_ratio 0.83): a fixed/timestamp cut slices windows blind to
+where speech actually pauses, so a window can end mid-utterance and the decoder
+restarts cold inside a word, dropping span at the seam.
 
-Mechanism: Whisper's native robustness loop is *temperature fallback*. Decode
-greedy first and read ``scores[0]`` as the decode's average log-prob; if it
-falls below the standard ``-1.0`` confidence gate the greedy pass is judged
-failed, so re-decode the *same* window at rising sampling temperatures (CT2
-samples from the full distribution when ``sampling_topk=0``) and keep the
-highest-confidence candidate. A collapsed greedy pass that dropped half its
-window is then replaced by a sampled pass that covers it, recovering deleted
-span. ``no_speech_prob`` guards the loop: a window the model flags as silence
-(>= 0.6) is accepted immediately rather than re-rolled at high temperature,
-which on non-speech would only invite hallucination.
+Mechanism: frame the whole call into 20 ms RMS frames once and derive a global
+silence floor (a low percentile of frame energy). For each window, search the
+last 10 s of its 30 s span for the quietest frame; if that frame falls below
+the silence floor it is a genuine pause, so cut the window there and advance to
+exactly that point — windows now begin and end in silence, eliminating the
+mid-word seam. When the search region is all above the floor (dense continuous
+speech — the worst file, silence_ratio 0.065, 181 s speech runs), no trough
+exists, so fall back to iter_005's last-timestamp rewind unchanged. The change
+is therefore strictly additive: silence-bearing windows get clean seams, dense
+windows behave exactly as before.
 
-The timestamp-driven seek from iter_004 is retained for window advancement.
+iter_005's temperature-fallback decode (scores[0] / no_speech_prob gated
+re-roll) is retained verbatim for per-window robustness.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -33,11 +34,15 @@ from frozen.asr_backend import generate, load, to_storage_view
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 _WINDOW_SECONDS = 30
-# CT2 emits a timestamp token every 0.02 s of audio (Whisper's frame stride).
+# CT2 emits a timestamp token every 0.02 s of audio (Whisper's frame stride);
+# reuse the same stride to frame the waveform for the RMS envelope.
 _TIMESTAMP_RESOLUTION = 0.02
-# Only trust a last-timestamp advance inside this range; outside it (early
-# collapse, or no timestamp) we consume the whole window.
+# Only trust a last-timestamp advance (dense-speech fallback) inside this range;
+# this also marks the start of the silence-search region (the window's tail).
 _MIN_ADVANCE_SECONDS = 20.0
+# A frame this far below the call's median energy is treated as a real pause.
+# Expressed as a low percentile of the whole-call frame-RMS distribution.
+_SILENCE_PERCENTILE = 20.0
 
 # Temperature-fallback schedule (Whisper's native robustness loop). Greedy
 # first; climb only when a decode is judged failed. Capped at 4 rungs so the
@@ -55,8 +60,23 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
 
     audio = np.asarray(audio).reshape(-1)
     window = _WINDOW_SECONDS * sr
+    n = len(audio)
 
-    # No <|notimestamps|>: keep the decoder in timestamp-emitting mode.
+    # Whole-call RMS envelope (the never-used raw-audio input). Non-overlapping
+    # 20 ms frames; the silence floor is a low percentile of frame energy, so it
+    # adapts to each call's own noise level rather than a fixed dB.
+    hop = max(int(_TIMESTAMP_RESOLUTION * sr), 1)
+    n_frames = n // hop
+    if n_frames > 0:
+        frames = audio[: n_frames * hop].astype(np.float64).reshape(n_frames, hop)
+        frame_rms = np.sqrt(np.mean(frames * frames, axis=1) + 1e-12)
+        silence_floor = float(np.percentile(frame_rms, _SILENCE_PERCENTILE))
+    else:
+        frame_rms = np.zeros(0)
+        silence_floor = 0.0
+
+    # No <|notimestamps|>: keep the decoder in timestamp-emitting mode (the
+    # dense-speech fallback still needs the last-timestamp seek).
     prompt_tokens = tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
     )
@@ -64,9 +84,24 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
 
     texts = []
     seek = 0
-    n = len(audio)
     while seek < n:
-        chunk = audio[seek : seek + window]
+        hard_end = min(seek + window, n)
+
+        # Silence-aware cut: only on a full 30 s window, search its tail
+        # (last 10 s) for the quietest frame; cut there iff it is a real pause.
+        silence_cut = False
+        cut = hard_end
+        if hard_end == seek + window and frame_rms.size:
+            f0 = (seek + int(_MIN_ADVANCE_SECONDS * sr)) // hop
+            f1 = hard_end // hop
+            region = frame_rms[f0:f1]
+            if region.size:
+                local = int(np.argmin(region))
+                if region[local] <= silence_floor:
+                    cut = (f0 + local) * hop
+                    silence_cut = True
+
+        chunk = audio[seek:cut]
 
         inputs = processor(
             chunk,
@@ -111,16 +146,18 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         if text:
             texts.append(text)
 
-        # Advance the seek to the decoder's last reliable timestamp. Only trust
-        # it on a full 30 s window inside the sane range; otherwise consume the
-        # whole window (final short chunk, early collapse, or no timestamp).
-        timestamps = [t - timestamp_begin for t in token_ids if t >= timestamp_begin]
-        advance_s = float(_WINDOW_SECONDS)
-        if len(chunk) >= window and timestamps and timestamps[-1] > 0:
-            last_ts = timestamps[-1] * _TIMESTAMP_RESOLUTION
-            if _MIN_ADVANCE_SECONDS <= last_ts <= _WINDOW_SECONDS:
-                advance_s = last_ts
-
-        seek += max(int(advance_s * sr), 1)
+        if silence_cut:
+            # Clean seam: the window already ends in a pause, advance to it.
+            seek = cut
+        else:
+            # Dense speech (or final short chunk): iter_005's last-timestamp
+            # rewind, so the next window re-covers any mid-word tail.
+            timestamps = [t - timestamp_begin for t in token_ids if t >= timestamp_begin]
+            advance_s = float(_WINDOW_SECONDS)
+            if len(chunk) >= window and timestamps and timestamps[-1] > 0:
+                last_ts = timestamps[-1] * _TIMESTAMP_RESOLUTION
+                if _MIN_ADVANCE_SECONDS <= last_ts <= _WINDOW_SECONDS:
+                    advance_s = last_ts
+            seek += max(int(advance_s * sr), 1)
 
     return " ".join(texts)
