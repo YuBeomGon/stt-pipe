@@ -4032,3 +4032,14 @@ not enough improvement: Δcer -0.002919 < 0.000100
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 43 · phase3_014_iter_043 · cer=NA (ΔNA) · reject
+
+### 관찰
+score_report 없음
+
+### 분석
+static profile: /data/MyProject/side/evolve/aig/workspace/transcribe.py 에 assets/audio_profile/silero 직접 참조 검출
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
