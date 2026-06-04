@@ -1,7 +1,7 @@
 {
   "job_id": "phase3_013",
-  "updated_at_iter": 10,
-  "global_best": "phase3_013_iter_010",
+  "updated_at_iter": 11,
+  "global_best": "phase3_013_iter_011",
   "family_best": {
     "family_001": {
       "hyp_id": "phase3_013_iter_002",
@@ -153,28 +153,28 @@
       }
     },
     "family_007": {
-      "hyp_id": "phase3_013_iter_009",
-      "iter": 9,
+      "hyp_id": "phase3_013_iter_011",
+      "iter": 11,
       "status": "keep",
-      "cer": 0.17086070787515467,
-      "harness_signature": "sig_50e82ae5",
+      "cer": 0.15880138717041634,
+      "harness_signature": "sig_fe04433c",
       "harness_family_id": "family_007",
       "self_declared_family_id": null,
       "fingerprint": [
-        "compression-ratio",
-        "gzip",
-        "degeneracy-gate",
-        "fallback-trigger",
-        "repetition"
+        "beam-search",
+        "num-hypotheses",
+        "n-best",
+        "decode-search",
+        "substitution"
       ],
       "mode": "explore",
-      "diff_path": "runs/phase3_013_iter_009/candidate.diff",
-      "runtime_s": 162.77458798984298,
+      "diff_path": "runs/phase3_013_iter_011/candidate.diff",
+      "runtime_s": 215.43154082499677,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.3789076444489775,
-        "error_breakdown.sub_ratio": 0.5620888367586312,
+        "error_breakdown.del_ratio": 0.36323731138545956,
+        "error_breakdown.sub_ratio": 0.571358024691358,
         "hallucination_hit_rate": 0.0,
-        "total_inference_time_s": 162.77458798984298
+        "total_inference_time_s": 215.43154082499677
       }
     },
     "family_008": {
@@ -382,6 +382,31 @@
   ],
   "rejected_promising": [],
   "near_best": [
+    {
+      "hyp_id": "phase3_013_iter_011",
+      "iter": 11,
+      "status": "keep",
+      "cer": 0.15880138717041634,
+      "harness_signature": "sig_fe04433c",
+      "harness_family_id": "family_007",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "beam-search",
+        "num-hypotheses",
+        "n-best",
+        "decode-search",
+        "substitution"
+      ],
+      "mode": "explore",
+      "diff_path": "runs/phase3_013_iter_011/candidate.diff",
+      "runtime_s": 215.43154082499677,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.36323731138545956,
+        "error_breakdown.sub_ratio": 0.571358024691358,
+        "hallucination_hit_rate": 0.0,
+        "total_inference_time_s": 215.43154082499677
+      }
+    },
     {
       "hyp_id": "phase3_013_iter_010",
       "iter": 10,

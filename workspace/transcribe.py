@@ -1,32 +1,31 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Discovery (iter 10, explore): the dominant error axis is substitution (56% ≫
-del/ins, length_ratio 0.94 healthy), so the headroom is in *what* gets
-mis-recognized — domain-term consistency — not coverage. Each window currently
-decodes lexically blind: the prompt is a constant [SOT, ko, transcribe] prefix,
-so the same insurance term decoded correctly in one window can be substituted
-differently in the next, with no memory between them.
+Discovery (iter 11, explore): the dominant error axis is substitution (57% ≫
+del/ins, length_ratio 0.94 healthy). Substitution is by definition a *search*
+failure — the decoder reached a frame and committed to the wrong token among
+several acoustically-plausible competitors. Every iteration so far decoded with
+``beam_size=1`` (greedy): the single most-probable token is taken at each step
+with no way to revisit a locally-greedy choice that a later token makes look
+wrong. On whisper-large-v3-turbo this hurts more than on full Whisper, because
+the distilled turbo decoder commits harder to its top token.
 
-The unused capability is Whisper's native long-form anti-drift: the flat prompt
-list (probed iter_003) accepts [<|startofprev|>, *prev_text_ids, *sot] to carry
-the previous window's decoded text forward as decoder context. iter_003 fed
-that channel blindly and compounded its own substitutions window-to-window (cer
-0.49); iter_007's static glossary could not carry *real* decoded context. The
-missing piece both lacked is a GATE: the scores[0] log-prob channel and the
-gzip-degeneracy signal (both already wired here) decide whether a window's text
-is trustworthy enough to condition the next one on.
+The unused capability is generate()'s N-best return channel. whisper-large-v3-
+turbo has only **4 decoder layers** against a **32-layer encoder**; the encoder
+(run once per window, the real per-window cost driver) is unchanged by the
+beam, so widening it multiplies only the cheap decoder — beam search is
+affordable on turbo where it would be ruinous on full Whisper. Setting
+``num_hypotheses>1`` makes generate RETURN the whole beam: ``scores`` and
+``sequences_ids`` become length-N lists, a return channel every prior iteration
+read only at ``[0]`` and discarded the rest of. With the beam in hand the
+existing gzip-degeneracy gate can pick the best *clean* hypothesis instead of
+blindly trusting the top beam — a looping top-1 no longer wins when a quieter
+beam entry is fluent.
 
-Mechanism: maintain a rolling `context_ids` of the prior window's decoded text
-tokens (timestamps/specials stripped, capped to the last 200 — Whisper's own
-half-context limit). Prepend [<|startofprev|>, *context_ids, *sot] when context
-exists. After each window, carry its text forward ONLY if it cleared the -1.0
-log-prob gate AND was non-degenerate; otherwise reset context to empty. The gate
-is exactly what iter_003 omitted — a low-confidence or looping decode can no
-longer poison its successors, while confident windows propagate consistent
-domain spellings. No extra decode passes, so the runtime budget is unchanged.
-
-iter_006's silence-aware RMS windowing and iter_009's temperature/degeneracy
-fallback loop are retained verbatim.
+The temperature-fallback climb (iter_009) is retained but its greedy rung is
+now subsumed by the beam first pass, so the climb only fires when the entire
+beam fails the confidence/degeneracy gate. iter_006's silence-aware RMS
+windowing and iter_010's confidence-gated <|startofprev|> long-form context
+are retained verbatim.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -52,10 +51,15 @@ _MIN_ADVANCE_SECONDS = 20.0
 # Expressed as a low percentile of the whole-call frame-RMS distribution.
 _SILENCE_PERCENTILE = 20.0
 
-# Temperature-fallback schedule (Whisper's native robustness loop). Greedy
-# first; climb only when a decode is judged failed. Capped at 4 rungs so the
-# worst-case per-window cost stays bounded against the runtime budget.
-_TEMPERATURES = (0.0, 0.2, 0.4, 0.6)
+# Beam width for the first pass. Affordable here only because turbo's decoder
+# is 4 layers (vs 32 encoder layers run once per window). num_hypotheses=N
+# makes generate return the full N-best so the degeneracy gate can choose.
+_BEAM_SIZE = 5
+
+# Temperature-fallback schedule (Whisper's native robustness loop). The greedy
+# 0.0 rung is dropped: the beam first pass already covers the deterministic
+# search far better than greedy did. Climb only when the whole beam failed.
+_TEMPERATURES = (0.2, 0.4, 0.6)
 # Standard Whisper avg-log-prob gate: at or above this the decode is trusted.
 _LOGPROB_THRESHOLD = -1.0
 # A window the model is this confident is silence is not worth re-rolling.
@@ -79,6 +83,19 @@ def _compression_ratio(text: str) -> float:
     if not payload:
         return 0.0
     return len(payload) / len(gzip.compress(payload))
+
+
+def _is_better(cand_lp, cand_deg, best_lp, best_deg, have_best):
+    """Prefer any non-degenerate hypothesis over a degenerate one; within a
+    class break ties by avg log-prob. Same ordering iter_009 used to pick
+    across temperatures, now applied across beam hypotheses too."""
+    if not have_best:
+        return True
+    if best_deg and not cand_deg:
+        return True
+    if best_deg == cand_deg and cand_lp > best_lp:
+        return True
+    return False
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -150,54 +167,70 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         else:
             window_prompt = list(sot_prompt)
 
-        # Temperature fallback with a degeneracy gate. A window stops the climb
-        # only when it is confident (or silence) AND non-repetitive; a
-        # high-logprob loop is rejected so the next, higher temperature can
-        # break it. scores[0], no_speech_prob and the decoded text are the
-        # three signals consulted.
-        best = None
+        best_token_ids: list[int] = []
         best_logprob = float("-inf")
         best_degenerate = True
-        best_token_ids = []
-        for temp in _TEMPERATURES:
-            kwargs = {
-                "beam_size": 1,
-                "return_scores": True,
-                "return_no_speech_prob": True,
-            }
-            if temp > 0.0:
+        have_best = False
+        no_speech_prob = 0.0
+
+        # --- First pass: beam search, reading the WHOLE N-best ----------
+        # num_hypotheses=_BEAM_SIZE returns scores/sequences_ids as length-N
+        # lists. We score every beam entry through the degeneracy gate and the
+        # log-prob tie-break, so a fluent lower-ranked beam can beat a looping
+        # top beam — the channel prior iters threw away by reading only [0].
+        beam_result = generate(
+            features,
+            [window_prompt],
+            beam_size=_BEAM_SIZE,
+            num_hypotheses=_BEAM_SIZE,
+            return_scores=True,
+            return_no_speech_prob=True,
+        )[0]
+        no_speech_prob = beam_result.no_speech_prob
+        for hyp_lp, hyp_ids in zip(beam_result.scores, beam_result.sequences_ids):
+            text = tokenizer.decode(hyp_ids, skip_special_tokens=True).strip()
+            degenerate = _compression_ratio(text) > _COMPRESSION_RATIO_THRESHOLD
+            if _is_better(hyp_lp, degenerate, best_logprob, best_degenerate, have_best):
+                best_token_ids = hyp_ids
+                best_logprob = hyp_lp
+                best_degenerate = degenerate
+                have_best = True
+
+        confident = (
+            best_logprob >= _LOGPROB_THRESHOLD or no_speech_prob >= _NO_SPEECH_THRESHOLD
+        )
+
+        # --- Fallback: temperature climb only if the whole beam failed ---
+        if not (confident and not best_degenerate):
+            for temp in _TEMPERATURES:
                 # sampling_topk=0 makes CT2 sample the full distribution so the
                 # temperature actually perturbs the decode (topk=1 is greedy).
-                kwargs["sampling_topk"] = 0
-                kwargs["sampling_temperature"] = temp
-            else:
-                kwargs["sampling_temperature"] = 0.0
+                result = generate(
+                    features,
+                    [window_prompt],
+                    beam_size=1,
+                    sampling_topk=0,
+                    sampling_temperature=temp,
+                    return_scores=True,
+                    return_no_speech_prob=True,
+                )[0]
+                lp = result.scores[0]
+                ids = result.sequences_ids[0]
+                text = tokenizer.decode(ids, skip_special_tokens=True).strip()
+                degenerate = _compression_ratio(text) > _COMPRESSION_RATIO_THRESHOLD
+                if _is_better(lp, degenerate, best_logprob, best_degenerate, have_best):
+                    best_token_ids = ids
+                    best_logprob = lp
+                    best_degenerate = degenerate
+                    no_speech_prob = result.no_speech_prob
+                    have_best = True
 
-            result = generate(features, [window_prompt], **kwargs)[0]
-            avg_logprob = result.scores[0]
-            token_ids = result.sequences_ids[0]
-            text = tokenizer.decode(token_ids, skip_special_tokens=True).strip()
-            degenerate = _compression_ratio(text) > _COMPRESSION_RATIO_THRESHOLD
-
-            # Prefer any non-degenerate decode over a degenerate one; break ties
-            # within a class by log-prob.
-            better = (
-                best is None
-                or (best_degenerate and not degenerate)
-                or (best_degenerate == degenerate and avg_logprob > best_logprob)
-            )
-            if better:
-                best = result
-                best_logprob = avg_logprob
-                best_degenerate = degenerate
-                best_token_ids = token_ids
-
-            confident = (
-                avg_logprob >= _LOGPROB_THRESHOLD
-                or result.no_speech_prob >= _NO_SPEECH_THRESHOLD
-            )
-            if confident and not degenerate:
-                break
+                rung_confident = (
+                    lp >= _LOGPROB_THRESHOLD
+                    or result.no_speech_prob >= _NO_SPEECH_THRESHOLD
+                )
+                if rung_confident and not degenerate:
+                    break
 
         token_ids = best_token_ids
 
@@ -207,10 +240,9 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             texts.append(text)
 
         # Gate the long-form carry: only a confident, non-degenerate window
-        # seeds the next window's context. This is the check iter_003 lacked —
-        # a low-confidence or looping decode resets context instead of
-        # propagating its substitutions forward. Strip timestamp/special ids,
-        # keeping only natural text tokens (id < <|endoftext|>).
+        # seeds the next window's context (iter_010). A low-confidence or
+        # looping decode resets context instead of propagating its
+        # substitutions forward. Strip timestamp/special ids (id < <|endoftext|>).
         if best_logprob >= _LOGPROB_THRESHOLD and not best_degenerate:
             context_ids = [t for t in token_ids if t < eot]
         else:
