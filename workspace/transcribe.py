@@ -55,6 +55,13 @@ _SILENCE_PERCENTILE = 20.0
 # is 4 layers (vs 32 encoder layers run once per window). num_hypotheses=N
 # makes generate return the full N-best so the degeneracy gate can choose.
 _BEAM_SIZE = 5
+# Beam-search patience (CT2 generate's beam_search patience factor). Default 1.0
+# finalizes a beam as soon as beam_size complete hypotheses exist; >1.0 keeps
+# beam_size*patience candidates alive longer before pruning. On the substitution
+# axis (a search failure, 57% of errors) this widens the pool of acoustically-
+# plausible competitors the degeneracy/log-prob selector chooses among, without
+# growing the returned N-best — only the cheap 4-layer decoder does more work.
+_PATIENCE = 2.0
 
 # Temperature-fallback schedule (Whisper's native robustness loop). The greedy
 # 0.0 rung is dropped: the beam first pass already covers the deterministic
@@ -183,6 +190,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             [window_prompt],
             beam_size=_BEAM_SIZE,
             num_hypotheses=_BEAM_SIZE,
+            patience=_PATIENCE,
             return_scores=True,
             return_no_speech_prob=True,
         )[0]

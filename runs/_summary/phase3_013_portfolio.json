@@ -1,7 +1,7 @@
 {
   "job_id": "phase3_013",
-  "updated_at_iter": 11,
-  "global_best": "phase3_013_iter_011",
+  "updated_at_iter": 12,
+  "global_best": "phase3_013_iter_012",
   "family_best": {
     "family_001": {
       "hyp_id": "phase3_013_iter_002",
@@ -178,28 +178,27 @@
       }
     },
     "family_008": {
-      "hyp_id": "phase3_013_iter_010",
-      "iter": 10,
+      "hyp_id": "phase3_013_iter_012",
+      "iter": 12,
       "status": "keep",
-      "cer": 0.16547583779168046,
-      "harness_signature": "sig_63129874",
+      "cer": 0.15678859592562258,
+      "harness_signature": "sig_f3276c8b",
       "harness_family_id": "family_008",
       "self_declared_family_id": null,
       "fingerprint": [
-        "startofprev",
-        "prev-text-context",
-        "confidence-gated",
-        "long-form",
-        "anti-drift"
+        "patience",
+        "beam-search",
+        "decode-search",
+        "substitution"
       ],
-      "mode": "explore",
-      "diff_path": "runs/phase3_013_iter_010/candidate.diff",
-      "runtime_s": 161.33187696099048,
+      "mode": "refine",
+      "diff_path": "runs/phase3_013_iter_012/candidate.diff",
+      "runtime_s": 219.6048568660044,
       "axis_metric": {
-        "error_breakdown.del_ratio": 0.35953872887157073,
-        "error_breakdown.sub_ratio": 0.5744299931546522,
+        "error_breakdown.del_ratio": 0.3470045570745804,
+        "error_breakdown.sub_ratio": 0.5819717683672335,
         "hallucination_hit_rate": 0.0,
-        "total_inference_time_s": 161.33187696099048
+        "total_inference_time_s": 219.6048568660044
       }
     }
   },
@@ -383,6 +382,30 @@
   "rejected_promising": [],
   "near_best": [
     {
+      "hyp_id": "phase3_013_iter_012",
+      "iter": 12,
+      "status": "keep",
+      "cer": 0.15678859592562258,
+      "harness_signature": "sig_f3276c8b",
+      "harness_family_id": "family_008",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "patience",
+        "beam-search",
+        "decode-search",
+        "substitution"
+      ],
+      "mode": "refine",
+      "diff_path": "runs/phase3_013_iter_012/candidate.diff",
+      "runtime_s": 219.6048568660044,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.3470045570745804,
+        "error_breakdown.sub_ratio": 0.5819717683672335,
+        "hallucination_hit_rate": 0.0,
+        "total_inference_time_s": 219.6048568660044
+      }
+    },
+    {
       "hyp_id": "phase3_013_iter_011",
       "iter": 11,
       "status": "keep",
@@ -504,31 +527,6 @@
         "error_breakdown.sub_ratio": 0.572884012539185,
         "hallucination_hit_rate": 0.0,
         "total_inference_time_s": 161.23640212300234
-      }
-    },
-    {
-      "hyp_id": "phase3_013_iter_008",
-      "iter": 8,
-      "status": "micro_bank",
-      "cer": 0.1899691546276772,
-      "harness_signature": "sig_5103ae7a",
-      "harness_family_id": "family_006",
-      "self_declared_family_id": null,
-      "fingerprint": [
-        "no-repeat-ngram",
-        "repetition",
-        "degeneracy",
-        "repeated-text",
-        "decode-constraint"
-      ],
-      "mode": "explore",
-      "diff_path": "runs/phase3_013_iter_008/candidate.diff",
-      "runtime_s": 158.41861551592592,
-      "axis_metric": {
-        "error_breakdown.del_ratio": 0.3634987615815063,
-        "error_breakdown.sub_ratio": 0.5642142922667646,
-        "hallucination_hit_rate": 0.0,
-        "total_inference_time_s": 158.41861551592592
       }
     }
   ]
