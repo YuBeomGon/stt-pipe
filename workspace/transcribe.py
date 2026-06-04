@@ -1,19 +1,25 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Energy-VAD segmentation pipeline. The previous pipeline sliced the waveform
-into *blind* fixed 30s windows: boundaries fell mid-word (losing tokens at
-every seam) and any window that happened to contain a long silence (the 0715
-recordings carry 6–25% silence, with single gaps up to 34s) fed that silence
-straight to the decoder, which is exactly what triggers Whisper's
-repetition/hallucination collapse — and a collapsed window deletes its real
-content, so this shows up as the dominant deletion axis (del 80%,
-length_ratio 0.65, repeated_text 0.36).
+Timestamp-guided long-form decoding. The previous pipelines decided window
+boundaries *before* the model ever ran — first blind 30s seams, then
+frame-energy VAD. Both guess where speech ends from the waveform alone, and
+both leave the dominant error on the coverage/deletion axis (del 68%,
+length_ratio 0.80): a guessed boundary that lands a little early silently drops
+the span after it.
 
-Here the raw waveform's own frame energy is used to find speech regions, merge
-them across short gaps, and pack them into <=30s windows that break ONLY at
-silence. Clear inter-speech silence is never fed to the model; window seams
-land in silence instead of mid-word. Peak GPU memory is still one window
-(per-window generate), so the long-recording OOM stays fixed.
+Here the boundaries come from the model instead of from the audio. The decoder
+runs with timestamps ENABLED (the prompt omits ``<|notimestamps|>``), so each
+30s window's output carries Whisper's own timestamp tokens — a return channel
+the prior pipelines threw away (they forced ``<|notimestamps|>`` and stripped
+specials). The token id of a timestamp token maps linearly to a time offset
+(``(id - timestamp_begin) * 0.02s``). We read the *last* timestamp the model
+emitted in a window and advance ``seek`` to exactly that point, so the next
+window starts where speech actually left off. Text is emitted only up to that
+last timestamp (the last complete segment), so the re-read region is never
+double-counted.
+
+Peak GPU memory is still a single 30s window (one ``generate`` per seek), so
+the long-recording OOM stays fixed.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -26,79 +32,32 @@ from frozen.asr_backend import generate, load, to_storage_view
 
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
-_CHUNK_SECONDS = 30
-_FRAME_SECONDS = 0.02
-_MIN_SILENCE_SECONDS = 0.5
-_PAD_SECONDS = 0.25
-_SILENCE_DB_BELOW_PEAK = 40.0
-
-
-def _speech_windows(audio: np.ndarray, sr: int) -> list[tuple[int, int]]:
-    """Sample-index windows (<=30s) bounded by silence, via frame-energy VAD."""
-    n = audio.shape[0]
-    chunk_len = int(_CHUNK_SECONDS * sr)
-    frame = max(int(_FRAME_SECONDS * sr), 1)
-    n_frames = n // frame
-    if n_frames == 0:
-        return [(0, n)]
-
-    frames = audio[: n_frames * frame].reshape(n_frames, frame).astype(np.float64)
-    rms = np.sqrt(np.mean(frames * frames, axis=1) + 1e-12)
-    db = 20.0 * np.log10(rms + 1e-12)
-    speech = db > (db.max() - _SILENCE_DB_BELOW_PEAK)
-
-    idx = np.flatnonzero(speech)
-    if idx.size == 0:
-        return [(0, n)]
-
-    # Merge speech frames into regions, bridging silences shorter than the gap.
-    gap_frames = max(int(np.ceil(_MIN_SILENCE_SECONDS / _FRAME_SECONDS)), 1)
-    pad = int(_PAD_SECONDS * sr)
-    regions: list[tuple[int, int]] = []
-    seg_start = prev = idx[0]
-    for i in idx[1:]:
-        if i - prev > gap_frames:
-            regions.append((seg_start, prev + 1))
-            seg_start = i
-        prev = i
-    regions.append((seg_start, prev + 1))
-
-    # Pack regions into <=30s windows, force-splitting any single long region.
-    windows: list[tuple[int, int]] = []
-    cur_start: int | None = None
-    cur_end = 0
-    for fs, fe in regions:
-        s = max(0, fs * frame - pad)
-        e = min(n, fe * frame + pad)
-        while s < e:
-            piece_end = min(e, s + chunk_len)
-            if cur_start is None:
-                cur_start, cur_end = s, piece_end
-            elif piece_end - cur_start <= chunk_len:
-                cur_end = piece_end
-            else:
-                windows.append((cur_start, cur_end))
-                cur_start, cur_end = s, piece_end
-            s = piece_end
-    if cur_start is not None:
-        windows.append((cur_start, cur_end))
-    return windows
+_CHUNK_SECONDS = 30.0
+_TIME_PRECISION = 0.02  # Whisper timestamp token resolution, seconds per step.
+_MIN_ADVANCE_SECONDS = 1.0  # below this the timestamp is untrustworthy.
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
+    # Timestamps ON: omit <|notimestamps|>. The decoder now interleaves
+    # <|t|> tokens between segments — that is the channel we steer seek with.
     prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
-        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
+        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
     )
+    timestamp_begin = processor.tokenizer.convert_tokens_to_ids("<|0.00|>")
 
     audio = np.asarray(audio).reshape(-1)
+    n = audio.shape[0]
+    chunk_len = int(_CHUNK_SECONDS * sr)
+    min_advance = int(_MIN_ADVANCE_SECONDS * sr)
 
-    texts = []
-    for start, end in _speech_windows(audio, sr):
-        chunk = audio[start:end]
+    texts: list[str] = []
+    seek = 0
+    while seek < n:
+        chunk = audio[seek : seek + chunk_len]
         if chunk.shape[0] == 0:
-            continue
+            break
         inputs = processor(chunk, sampling_rate=sr, return_tensors="np")
         features = to_storage_view(inputs.input_features)
 
@@ -108,10 +67,27 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             beam_size=1,
             sampling_temperature=0.0,
         )
-
         token_ids = results[0].sequences_ids[0]
-        text = processor.tokenizer.decode(token_ids, skip_special_tokens=True)
+
+        # Locate the model's emitted timestamps. The last one bounds the last
+        # complete segment: emit text up to it, seek to it. With >=2 timestamps
+        # we trust the boundary; otherwise fall back to a full-window advance
+        # so a degenerate window can never stall the seek loop.
+        ts_positions = [i for i, t in enumerate(token_ids) if t >= timestamp_begin]
+        advance = chunk_len
+        emit_ids = token_ids
+        if len(ts_positions) >= 2:
+            last_i = ts_positions[-1]
+            last_ts_steps = token_ids[last_i] - timestamp_begin
+            ts_advance = int(last_ts_steps * _TIME_PRECISION * sr)
+            if ts_advance >= min_advance:
+                advance = ts_advance
+                emit_ids = token_ids[:last_i]
+
+        text = processor.tokenizer.decode(emit_ids, skip_special_tokens=True)
         if text.strip():
             texts.append(text.strip())
+
+        seek += advance
 
     return " ".join(texts)

@@ -3603,3 +3603,14 @@ meaningful improvement: Δcer 0.123138 >= 0.000100
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 4 · phase3_014_iter_004 · cer=0.170373 (Δ+0.117840) · keep
+
+### 관찰
+corpus_cer=0.170373, total_inference_time_s=164.6
+
+### 분석
+meaningful improvement: Δcer 0.117840 >= 0.000100
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
