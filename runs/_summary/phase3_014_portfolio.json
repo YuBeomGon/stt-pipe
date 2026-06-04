@@ -1,6 +1,6 @@
 {
   "job_id": "phase3_014",
-  "updated_at_iter": 9,
+  "updated_at_iter": 11,
   "global_best": "phase3_014_iter_008",
   "family_best": {
     "family_001": {
@@ -321,6 +321,31 @@
         "error_breakdown.sub_ratio": 0.579869931917488,
         "hallucination_hit_rate": 0.0,
         "total_inference_time_s": 165.8032260671025
+      }
+    },
+    {
+      "hyp_id": "phase3_014_iter_011",
+      "iter": 11,
+      "status": "micro_bank",
+      "cer": 0.271186588362407,
+      "harness_signature": "sig_71183d1b",
+      "harness_family_id": "family_006",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "startofprev",
+        "prior-text",
+        "condition-on-previous",
+        "context-carry",
+        "running-transcript"
+      ],
+      "mode": "explore",
+      "diff_path": "runs/phase3_014_iter_011/candidate.diff",
+      "runtime_s": 163.87001211498864,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.3491308678469299,
+        "error_breakdown.sub_ratio": 0.5916203450824149,
+        "hallucination_hit_rate": 0.0,
+        "total_inference_time_s": 163.87001211498864
       }
     }
   ],

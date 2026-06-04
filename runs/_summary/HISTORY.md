@@ -3680,3 +3680,14 @@ static runtime-purity: /data/MyProject/side/evolve/aig/workspace/transcribe.py �
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 11 · phase3_014_iter_011 · cer=0.271187 (Δ-0.105354) · reject
+
+### 관찰
+corpus_cer=0.271187, total_inference_time_s=163.9
+
+### 분석
+not enough improvement: Δcer -0.105354 < 0.000100
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
