@@ -925,6 +925,15 @@ _EXPLORE_DIRECTIVE = """\
 This iteration is an EXPLORATION slot (the job runs explore-heavy early and
 keeps a guaranteed floor of exploration throughout).
 
+DIVERGE — do not improve the current pipeline. This slot exists to escape the
+basin the champion sits in, so a small edit on top of the incumbent is a WASTED
+explore. The current code is shown above only so you can see what to AVOID
+repeating: pick a *fundamentally different approach* than the one it uses — a
+different decoding strategy, a different segmentation/windowing scheme, a
+different way of using the backend's return channel, a different error-axis to
+attack. If your change still reads as "the same pipeline with one knob moved,"
+it is the WRONG move for this slot; rewrite the mechanism instead.
+
 The obvious parameter tweaks (beam size, temperature scalar, penalties) are
 exhausted. The remaining headroom is in capabilities of the backend you have
 **not yet discovered or used**: things the decode call can return that you are
@@ -936,11 +945,12 @@ and reasoning from the diagnosis — is the work.
 The fingerprint table and findings ledger below record what has already been
 probed — investigate something they do NOT cover. A new *value* of a knob
 already tried (beam 5→6, another temperature) is NOT exploration; an unused
-capability of the surface IS. Find it in frozen.asr_backend, in what `load()`
-returns, and in what the decode call accepts/returns. Let the error profile's
-DOMINANT AXIS point you at which kind of capability would help. The "one focused
-change / no refactor" rule is relaxed when a structurally new mechanism
-justifies it.
+capability of the surface IS, and a structurally different pipeline IS. Find it
+in frozen.asr_backend, in what `load()` returns, and in what the decode call
+accepts/returns. Let the error profile's DOMINANT AXIS point you at which kind
+of capability would help. The "one focused change / no refactor" rule is
+suspended here: a structurally new mechanism that replaces a large part of the
+pipeline is exactly what this slot wants.
 === END EXPLORE MODE ==="""
 
 
