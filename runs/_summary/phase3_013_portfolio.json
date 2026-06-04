@@ -1,6 +1,6 @@
 {
   "job_id": "phase3_013",
-  "updated_at_iter": 14,
+  "updated_at_iter": 15,
   "global_best": "phase3_013_iter_013",
   "family_best": {
     "family_001": {
@@ -250,6 +250,31 @@
         "hallucination_hit_rate": 0.0,
         "total_inference_time_s": 184.0337748050806
       }
+    },
+    "family_011": {
+      "hyp_id": "phase3_013_iter_015",
+      "iter": 15,
+      "status": "micro_bank",
+      "cer": 0.15560357597197777,
+      "harness_signature": "sig_534bb34d",
+      "harness_family_id": "family_011",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "n-best",
+        "token-consensus",
+        "majority-vote",
+        "difflib",
+        "substitution"
+      ],
+      "mode": "explore",
+      "diff_path": "runs/phase3_013_iter_015/candidate.diff",
+      "runtime_s": 206.35304428305244,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.34505543733900773,
+        "error_breakdown.sub_ratio": 0.5888677343487513,
+        "hallucination_hit_rate": 0.0,
+        "total_inference_time_s": 206.35304428305244
+      }
     }
   },
   "metric_best": {
@@ -452,6 +477,31 @@
         "hallucination_hit_rate": 0.0,
         "total_inference_time_s": 184.0337748050806
       }
+    },
+    {
+      "hyp_id": "phase3_013_iter_015",
+      "iter": 15,
+      "status": "micro_bank",
+      "cer": 0.15560357597197777,
+      "harness_signature": "sig_534bb34d",
+      "harness_family_id": "family_011",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "n-best",
+        "token-consensus",
+        "majority-vote",
+        "difflib",
+        "substitution"
+      ],
+      "mode": "explore",
+      "diff_path": "runs/phase3_013_iter_015/candidate.diff",
+      "runtime_s": 206.35304428305244,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.34505543733900773,
+        "error_breakdown.sub_ratio": 0.5888677343487513,
+        "hallucination_hit_rate": 0.0,
+        "total_inference_time_s": 206.35304428305244
+      }
     }
   ],
   "rejected_promising": [],
@@ -504,6 +554,31 @@
         "error_breakdown.sub_ratio": 0.5884334643458731,
         "hallucination_hit_rate": 0.0,
         "total_inference_time_s": 184.0337748050806
+      }
+    },
+    {
+      "hyp_id": "phase3_013_iter_015",
+      "iter": 15,
+      "status": "micro_bank",
+      "cer": 0.15560357597197777,
+      "harness_signature": "sig_534bb34d",
+      "harness_family_id": "family_011",
+      "self_declared_family_id": null,
+      "fingerprint": [
+        "n-best",
+        "token-consensus",
+        "majority-vote",
+        "difflib",
+        "substitution"
+      ],
+      "mode": "explore",
+      "diff_path": "runs/phase3_013_iter_015/candidate.diff",
+      "runtime_s": 206.35304428305244,
+      "axis_metric": {
+        "error_breakdown.del_ratio": 0.34505543733900773,
+        "error_breakdown.sub_ratio": 0.5888677343487513,
+        "hallucination_hit_rate": 0.0,
+        "total_inference_time_s": 206.35304428305244
       }
     },
     {
