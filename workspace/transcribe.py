@@ -1,25 +1,22 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Timestamp-guided long-form decoding. The previous pipelines decided window
-boundaries *before* the model ever ran — first blind 30s seams, then
-frame-energy VAD. Both guess where speech ends from the waveform alone, and
-both leave the dominant error on the coverage/deletion axis (del 68%,
-length_ratio 0.80): a guessed boundary that lands a little early silently drops
-the span after it.
+Overlapping timestamp-guided long-form decoding. The incumbent advanced ``seek``
+to the *last* timestamp a window emitted and emitted text up to it — so the
+final segment of every window was the one Whisper decoded with the least
+right-context (the model was still "mid-thought" at the window's trailing edge).
+With coverage now healthy (length_ratio 0.94) the dominant error has shifted to
+*substitution* (56%): the model hears speech and emits roughly the right length
+but the wrong characters. A natural substitution source on this axis is exactly
+that right-edge, context-starved segment.
 
-Here the boundaries come from the model instead of from the audio. The decoder
-runs with timestamps ENABLED (the prompt omits ``<|notimestamps|>``), so each
-30s window's output carries Whisper's own timestamp tokens — a return channel
-the prior pipelines threw away (they forced ``<|notimestamps|>`` and stripped
-specials). The token id of a timestamp token maps linearly to a time offset
-(``(id - timestamp_begin) * 0.02s``). We read the *last* timestamp the model
-emitted in a window and advance ``seek`` to exactly that point, so the next
-window starts where speech actually left off. Text is emitted only up to that
-last timestamp (the last complete segment), so the re-read region is never
-double-counted.
-
-Peak GPU memory is still a single 30s window (one ``generate`` per seek), so
-the long-recording OOM stays fixed.
+This pipeline ends each window one segment EARLY: it emits up to the
+*penultimate* timestamp and advances ``seek`` there, so the trailing
+(context-starved) segment is re-decoded as an *interior* segment of the next
+window — this time with full right-context. Every segment thus gets at least one
+decode where it is not the window's trailing edge. The re-read is bounded
+(``_MIN_OVERLAP_ADVANCE``): we only drop-and-re-read when the penultimate
+boundary is late enough that the dropped tail is short, so window count grows by
+at most ~1.5x and peak memory is still a single 30s window.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -35,13 +32,18 @@ _TASK_TOKEN = "<|transcribe|>"
 _CHUNK_SECONDS = 30.0
 _TIME_PRECISION = 0.02  # Whisper timestamp token resolution, seconds per step.
 _MIN_ADVANCE_SECONDS = 1.0  # below this the timestamp is untrustworthy.
+# Only drop+re-read the trailing segment when the penultimate boundary is at
+# least this far into the window. This keeps the re-read tail short, bounds the
+# extra window count (advance >= 20s => <=1.5x windows), and avoids re-decoding
+# a genuinely long final segment (which is not an edge artifact).
+_MIN_OVERLAP_ADVANCE_SECONDS = 20.0
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
-    # Timestamps ON: omit <|notimestamps|>. The decoder now interleaves
-    # <|t|> tokens between segments — that is the channel we steer seek with.
+    # Timestamps ON: omit <|notimestamps|>. The decoder interleaves <|t|>
+    # tokens between segments — the channel we both seek and trim with.
     prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
     )
@@ -51,6 +53,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     n = audio.shape[0]
     chunk_len = int(_CHUNK_SECONDS * sr)
     min_advance = int(_MIN_ADVANCE_SECONDS * sr)
+    min_overlap_advance = int(_MIN_OVERLAP_ADVANCE_SECONDS * sr)
 
     texts: list[str] = []
     seek = 0
@@ -69,19 +72,34 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         token_ids = results[0].sequences_ids[0]
 
-        # Locate the model's emitted timestamps. The last one bounds the last
-        # complete segment: emit text up to it, seek to it. With >=2 timestamps
-        # we trust the boundary; otherwise fall back to a full-window advance
-        # so a degenerate window can never stall the seek loop.
         ts_positions = [i for i, t in enumerate(token_ids) if t >= timestamp_begin]
+
+        def _advance_at(pos: int) -> int:
+            return int((token_ids[pos] - timestamp_begin) * _TIME_PRECISION * sr)
+
         advance = chunk_len
         emit_ids = token_ids
-        if len(ts_positions) >= 2:
+
+        # Preferred boundary: the PENULTIMATE timestamp. Ending one segment
+        # early hands the right-edge (context-starved) segment to the next
+        # window, where it is re-decoded with right-context. Only do this when
+        # the penultimate boundary is late enough (short dropped tail) so the
+        # re-read stays cheap.
+        if len(ts_positions) >= 3:
+            pen_i = ts_positions[-2]
+            pen_advance = _advance_at(pen_i)
+            if pen_advance >= min_overlap_advance:
+                advance = pen_advance
+                emit_ids = token_ids[:pen_i]
+
+        # Fallback: last-timestamp boundary (no overlap) when the penultimate
+        # boundary was too early to re-read cheaply, or too few timestamps to
+        # define a droppable tail. Guards the loop against degenerate windows.
+        if advance == chunk_len and len(ts_positions) >= 2:
             last_i = ts_positions[-1]
-            last_ts_steps = token_ids[last_i] - timestamp_begin
-            ts_advance = int(last_ts_steps * _TIME_PRECISION * sr)
-            if ts_advance >= min_advance:
-                advance = ts_advance
+            last_advance = _advance_at(last_i)
+            if last_advance >= min_advance:
+                advance = last_advance
                 emit_ids = token_ids[:last_i]
 
         text = processor.tokenizer.decode(emit_ids, skip_special_tokens=True)
