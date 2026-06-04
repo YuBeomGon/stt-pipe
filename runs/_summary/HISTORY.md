@@ -3471,3 +3471,14 @@ not enough improvement: Δcer -0.001934 < 0.000100
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 18 · phase3_013_iter_018 · cer=0.155107 (Δ-0.000279) · reject
+
+### 관찰
+corpus_cer=0.155107, total_inference_time_s=175.4
+
+### 분석
+not enough improvement: Δcer -0.000279 < 0.000100
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
