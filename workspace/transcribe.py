@@ -66,9 +66,16 @@ _NUM_HYPOTHESES = 5
 # within EPSILON of the top beam compete on distinct lexicon hits. The lexicon
 # can then only arbitrate genuine acoustic ties — exactly the phone-band
 # confusions where 보험 and 보훔 are near-equiprobable — and can never override a
-# clearly-better acoustic path. EPSILON=0.04 sits just above the typical
-# inter-beam spread, so the gate is otherwise inert and beam[0] wins.
-_LEXICON_EPSILON = 0.04
+# clearly-better acoustic path. REFINE on iter_065: at EPSILON=0.04 the gate
+# still admitted beams up to 0.04 avg-logprob WORSE than the top — but the
+# iter_065 finding pinned the inter-beam spread at ~0.01-0.05, so 0.04 spans
+# nearly the whole spread and let the lexicon promote an acoustically-inferior
+# beam that merely substituted a domain term, re-injecting error on the dominant
+# 57% substitution axis (cer 0.1733 > best 0.1629). Tighten to 0.02 — the bottom
+# half of the spread — so only GENUINELY near-equiprobable hypotheses compete on
+# lexicon hits, the exact phone-band ties (보험 vs 보훔) the rerank is for, while
+# any beam the decoder ranks meaningfully higher acoustically still wins outright.
+_LEXICON_EPSILON = 0.02
 
 # Fixed Korean insurance / call-center domain lexicon. These are exactly the
 # substitution-prone terms whose distinguishing high-frequency consonant cues
