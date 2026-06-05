@@ -58,9 +58,14 @@ _MAX_FEATURE_FRAMES = 3000
 
 # Per-token acoustic-support floor. text_token_probs is a probability in (0,1];
 # a token below this was emitted with negligible acoustic evidence — the
-# decoder's language prior, not the audio. Conservative so genuine-but-hard
-# tokens survive and only clear unsupported substitution/hallucination is cut.
-_TOKEN_PROB_FLOOR = 0.15
+# decoder's language prior, not the audio. At 0.15 the floor also cut genuine
+# but acoustically-weak Korean grammatical morphemes (short particles 은/는/이/가,
+# sentence-final endings) that carry little energy on the 300-3400 Hz band yet
+# are correct — manufacturing the parent's deletion rise (0.27->0.35) without
+# moving the substitution axis (excising a sub yields a del, no net gain).
+# A near-zero floor excises only genuinely unsupported tokens (true
+# hallucinations) and spares the weak-but-real morphemes.
+_TOKEN_PROB_FLOOR = 0.05
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
