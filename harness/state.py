@@ -37,6 +37,21 @@ class HarnessState:
     # (codex Step2-6 review #2, proposal §4 "evaluated iteration 기준").
     evaluated_since_best_update: int = 0
 
+    # ── Lineage set (HARNESS-REDESIGN §195, Phase 1) ──────────────────
+    # Global champion ref: a git branch/tag holding the last promoted code.
+    # The on-disk transcribe.py is the *lineage head* during an active set; on
+    # set reset we restore from this ref. Default "champion" — gitops ensures it.
+    champion_ref: str = "champion"
+    # Active set bookkeeping (mirrors harness.lineage.SetState so resume can
+    # rebuild it). set_phase "idle" = no active set (legacy single-shot path).
+    set_id: int = 0
+    set_phase: str = "idle"          # idle|explore|repair|refine|closed
+    set_best_cer: float | None = None
+    set_best_hyp_id: str | None = None
+    set_repairs_used: int = 0
+    set_refines_used: int = 0
+    last_failure_hyp_id: str | None = None
+
     @classmethod
     def load(cls, path: Path) -> "HarnessState":
         data = json.loads(path.read_text(encoding="utf-8"))
