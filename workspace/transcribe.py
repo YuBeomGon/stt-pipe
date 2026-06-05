@@ -1,43 +1,45 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-DIVERGE slot. Every prior iteration ran a *single-shot* decode per window and
-read at most two return channels: ``sequences_ids`` (the text/timestamp tokens)
-and ``no_speech_prob`` (iter006). The decode result carries a third channel
-that no iteration has ever read — the per-sequence **score**, available when
-``generate(..., return_scores=True)`` is set. CT2 returns it length-normalised,
-so ``res.scores[0]`` is a usable proxy for the decoder's average log-prob over
-the window: a direct confidence signal for *how reliable this window's
-transcription is*, distinct from no_speech_prob (which asks "is this speech?"
-not "is this decode trustworthy?").
+DIVERGE slot. The whole job's consensus machinery (word-level MBR, iter_011 /
+024-028) voted position-wise over the **beam** N-best, and the ledger proved why
+it stayed inert: cross-beam disagreement is LOCAL and SPARSE — the beams are
+>=95% char-similar (iter_009/011), so they are correlated *on their errors*.
+A confident-wrong substitution sits in beam[0] AND most of its neighbours, so no
+position-wise vote can outvote it. iter_024 named the binding constraint exactly:
+the vote's **signal density**, not its threshold.
 
-That score channel is exactly what OpenAI's reference Whisper uses for its
-**temperature-fallback** long-form policy, which no iteration here has built.
-The mechanism this slot introduces replaces the single-shot decode with an
-adaptive per-window loop:
+This iteration attacks that root cause with a structurally different decode:
+**Minimum-Bayes-Risk decoding over INDEPENDENT temperature samples.** Instead of
+one beam search returning correlated hypotheses, each window is decoded with
+``num_hypotheses=N`` random samples drawn at ``sampling_temperature>0`` (CT2
+enables true sampling once ``sampling_topk != 1``). Independent draws from the
+decoder's full distribution are diverse where beams are not: a substitution that
+is a *confident* mode survives in every sample, but a substitution that is merely
+the locally-tempting-but-uncertain choice (the phone-band obstruent confusions
+that make up the 57% substitution axis — high-frequency cues attenuated by the
+300-3400 Hz telephony band, so the posterior there is flat) lands differently in
+each draw and is therefore a minority across the sample cloud.
 
-  - decode at temperature 0.0 with beam search (the high-precision attempt);
-  - score the result on two signals the score channel makes available — the
-    length-normalised avg log-prob (``res.scores[0]``) and the gzip
-    *compression ratio* of the emitted text (a degenerate, repeated, or
-    hallucinated window compresses far more than natural speech);
-  - if either signal flags the decode as untrustworthy (avg log-prob too low,
-    or compression ratio too high), re-decode the *same* window at a higher
-    sampling temperature and try again, walking a temperature schedule;
-  - keep the best-scoring attempt seen if none clears the gate.
+The selection rule is the MBR objective itself: pick the sample that minimises
+expected character error against the rest of the cloud — i.e. the **medoid**, the
+draw with maximum summed ``difflib`` char-similarity to the other samples. This
+is consensus by *whole-sequence* central tendency, not by per-position majority,
+so it needs no alignment and no vote threshold (the two things that made the
+beam-MBR brittle). A random per-sample substitution increases that sample's
+distance to the cluster and loses; the central, agreed-upon transcription wins.
 
-This is a fundamentally different decode strategy than the incumbent's fixed
-beam+no_speech gate: instead of a single irreversible decode, each window gets
-multiple attempts and the score channel arbitrates. It attacks the residual
-hallucination (0.18) / repeated-text (0.27) directly via the compression gate,
-and the low-confidence windows — where phone-band substitution concentrates —
-get a second, higher-entropy shot to escape a confidently-wrong beam path.
+The score channel (``return_scores``) breaks ties when the cloud is degenerate
+(every sample near-identical → similarities all ~1.0): the higher-avg-logprob
+draw is preferred. This is genuinely new on this job — every prior consensus
+used the beam N-best; none ever drew independent samples or selected by an
+edit-distance Bayes risk.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
 
-import zlib
+import difflib
 
 import numpy as np
 
@@ -50,33 +52,28 @@ _WINDOW_SECONDS = 30.0
 _TIME_PRECISION = 0.02
 _MIN_ADVANCE_SECONDS = 2.0
 
-# Temperature-fallback schedule (OpenAI Whisper's robustness policy). The first
-# attempt is beam search at T=0 (precision); each fallback raises entropy so the
-# decoder can escape a degenerate or confidently-wrong path.
-_TEMPERATURE_SCHEDULE = (0.0, 0.2, 0.4, 0.6, 0.8)
+# MBR-over-samples parameters. N independent draws give the consensus its
+# diversity (the signal density the correlated beam N-best lacked, ledger
+# iter_024). The temperature must be high enough that uncertain substitutions
+# scatter across draws, low enough that confident speech stays stable;
+# Whisper's own fallback ladder treats ~0.4 as the first genuinely-sampling
+# rung. sampling_topk=0 samples from the full softmax (CT2 enables sampling as
+# soon as sampling_topk != 1).
+_NUM_SAMPLES = 5
+_SAMPLING_TEMPERATURE = 0.4
+_SAMPLING_TOPK = 0
 
-# Gate thresholds read off the score channel. avg log-prob below the floor =>
-# the decoder is unsure of this window; gzip compression ratio above the ceiling
-# => the text is repetitive/hallucinated (natural speech ~1.3-1.8, degenerate
-# loops >> 2.4). Either condition triggers a higher-temperature retry.
-_LOGPROB_THRESHOLD = -1.0
-_COMPRESSION_RATIO_THRESHOLD = 2.4
-
-_BEAM_SIZE = 5
-
-# Gentle token-level repetition penalty (CT2 generate kwarg, never exercised on
-# this lineage). Whisper's standard ~1.1 setting nudges the beam off a
-# self-repeating degenerate path one token at a time without distorting natural
-# Korean morpheme repetition, attacking the confident-wrong-loop component of
-# the dominant substitution axis (and the two repeated_text focus files).
+# Gentle token-level repetition penalty (kept from the best lineage, iter_016):
+# suppresses the self-repeating degenerate path one token at a time inside each
+# sampled draw before the medoid even arbitrates.
 _REPETITION_PENALTY = 1.1
 
 
-def _compression_ratio(text: str) -> float:
-    if not text:
-        return 0.0
-    data = text.encode("utf-8")
-    return len(data) / len(zlib.compress(data))
+def _similarity(a: str, b: str) -> float:
+    # Character-level overlap proxy for 1 - normalised edit distance; stdlib,
+    # no external Levenshtein dependency. SequenceMatcher.ratio() is the MBR
+    # risk kernel: higher = lower expected char error against this reference.
+    return difflib.SequenceMatcher(None, a, b).ratio()
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -105,58 +102,48 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
-        # Temperature-fallback loop. Decode the window, score it off the score
-        # channel, and re-decode hotter until a trustworthy attempt is found or
-        # the schedule is exhausted (then keep the best-scoring attempt).
-        best = None  # (passes_comp, avg_logprob, res)
-        chosen = None
-        for temp in _TEMPERATURE_SCHEDULE:
-            if temp == 0.0:
-                res = generate(
-                    features,
-                    [sot_tokens],
-                    beam_size=_BEAM_SIZE,
-                    sampling_temperature=0.0,
-                    repetition_penalty=_REPETITION_PENALTY,
-                    return_scores=True,
-                )[0]
-            else:
-                res = generate(
-                    features,
-                    [sot_tokens],
-                    beam_size=1,
-                    sampling_temperature=temp,
-                    repetition_penalty=_REPETITION_PENALTY,
-                    return_scores=True,
-                )[0]
+        # Draw N independent samples from the decoder's distribution in a single
+        # generate() call (num_hypotheses=N with sampling enabled). These are
+        # genuinely diverse, unlike the >=95%-similar beam N-best.
+        res = generate(
+            features,
+            [sot_tokens],
+            beam_size=1,
+            num_hypotheses=_NUM_SAMPLES,
+            sampling_temperature=_SAMPLING_TEMPERATURE,
+            sampling_topk=_SAMPLING_TOPK,
+            repetition_penalty=_REPETITION_PENALTY,
+            return_scores=True,
+        )[0]
 
-            avg_logprob = res.scores[0] if res.scores else float("-inf")
+        seqs = res.sequences_ids
+        scores = res.scores if res.scores else [0.0] * len(seqs)
 
-            token_ids = res.sequences_ids[0]
+        # Decode every sample to text (timestamp tokens stripped for the
+        # similarity comparison; kept separately on the chosen draw for advance).
+        texts = []
+        for token_ids in seqs:
             text_tokens = [t for t in token_ids if t < timestamp_begin]
-            text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
-            comp_ratio = _compression_ratio(text)
-            passes_comp = comp_ratio <= _COMPRESSION_RATIO_THRESHOLD
+            texts.append(
+                tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
+            )
 
-            # Fallback ranking is lexicographic: a compression-passing attempt
-            # always outranks a degenerate one, ties broken by avg_logprob. This
-            # stops the no-clear-gate fallback from emitting a repeated/degenerate
-            # window just because it happened to score the highest logprob.
-            if best is None or (passes_comp, avg_logprob) > (best[0], best[1]):
-                best = (passes_comp, avg_logprob, res)
+        # MBR selection: the medoid sample — maximum summed char-similarity to
+        # the rest of the cloud (minimum expected char error). Score channel
+        # breaks ties when the cloud is degenerate / near-identical.
+        best_idx = 0
+        best_key = (float("-inf"), float("-inf"))
+        for i, ti in enumerate(texts):
+            risk = sum(_similarity(ti, tj) for j, tj in enumerate(texts) if j != i)
+            key = (risk, scores[i])
+            if key > best_key:
+                best_key = key
+                best_idx = i
 
-            if avg_logprob >= _LOGPROB_THRESHOLD and passes_comp:
-                chosen = res
-                break
+        chosen_ids = seqs[best_idx]
+        ts_tokens = [t for t in chosen_ids if t >= timestamp_begin]
 
-        if chosen is None:
-            chosen = best[2]
-
-        token_ids = chosen.sequences_ids[0]
-        text_tokens = [t for t in token_ids if t < timestamp_begin]
-        ts_tokens = [t for t in token_ids if t >= timestamp_begin]
-
-        text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
+        text = texts[best_idx]
         if text:
             pieces.append(text)
 
