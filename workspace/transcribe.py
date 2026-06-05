@@ -57,6 +57,13 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             [prompt_tokens] * len(batch_chunks),
             beam_size=1,
             sampling_temperature=0.0,
+            # Greedy decode on these calls loops on a short phrase and then
+            # emits EOS early, dropping the rest of the 30s window — that
+            # surfaces as the repeated_text flag plus low length_ratio
+            # (deletion), the dominant error axis. A modest repetition_penalty
+            # (named as a valid decode kwarg by the backend) discourages the
+            # loop so the decoder keeps transcribing the remaining speech.
+            repetition_penalty=1.15,
         )
 
         for r in results:
