@@ -56,15 +56,20 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             batch,
             [prompt_tokens] * len(batch_chunks),
             # Coverage/deletion is the dominant axis (length_ratio ~0.65, del
-            # 81%) and it is uniform across all files, not just looping ones:
-            # under greedy decode the model loops then emits EOS early and drops
-            # the window tail. beam_size>1 escapes that greedy loop-then-EOS
-            # trap, and length_penalty>1 favors longer hypotheses, recovering
-            # the deleted tail directly. Both knobs were inert under the prior
-            # greedy config. Beam search now carries repetition control, so the
-            # inherited n-gram block can stay narrow without taxing coverage.
+            # 82%) and it is uniform across all files: systemic early-EOS
+            # under-generation, beams finish on EOS before the window tail is
+            # decoded. length_penalty already biases scoring toward longer
+            # hypotheses, but pushing it harder at iter_008 doubled
+            # hallucination (0.09->0.18) — it rewards length blindly. patience
+            # attacks the same axis from the SEARCH side instead of the scoring
+            # side: beam search keeps expanding until beam_size*patience
+            # finished hypotheses exist, so one beam hitting EOS early no longer
+            # ends the search — longer completions that cover the tail get a
+            # chance to surface, with no extra length-score bias to invite
+            # hallucination.
             beam_size=2,
             length_penalty=1.2,
+            patience=2.0,
             sampling_temperature=0.0,
             no_repeat_ngram_size=5,
         )
