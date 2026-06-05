@@ -168,13 +168,30 @@ def _decode_chunk(features, prompt, tokenizer) -> tuple[str, bool]:
     text_b = tokenizer.decode(ids_b, skip_special_tokens=True).strip()
     cr_b = _compression_ratio(text_b)
 
-    # Prefer the candidate that repeats less; tie-break on higher confidence.
-    rank_a = (cr_a, -score_a)
-    rank_b = (cr_b, -score_b)
-    if rank_a <= rank_b:
-        chosen_text, chosen_score, chosen_cr = text_a, score_a, cr_a
+    # Selection is now axis-aware. Repetition collapse is the worst failure, so
+    # if EITHER candidate is still repetitive we rank repetition-first (lower
+    # compression ratio wins, tie-break on confidence) exactly as before. But
+    # when BOTH candidates clear the compression gate, repetition is no longer
+    # the discriminator — the remaining axis is substitution (the dominant 59%).
+    # Beam search (Pass B) is precisely the lever that resolves the domain-term
+    # near-homophone substitutions greedy Pass A commits to; ranking those two
+    # clean candidates by compression alone would silently discard beam's win
+    # whenever the greedy text happened to compress marginally less. So among
+    # non-repetitive candidates we keep the higher avg log-prob hypothesis.
+    a_clean = cr_a <= _CR_THRESH
+    b_clean = cr_b <= _CR_THRESH
+    if a_clean and b_clean:
+        if score_b > score_a:
+            chosen_text, chosen_score, chosen_cr = text_b, score_b, cr_b
+        else:
+            chosen_text, chosen_score, chosen_cr = text_a, score_a, cr_a
     else:
-        chosen_text, chosen_score, chosen_cr = text_b, score_b, cr_b
+        rank_a = (cr_a, -score_a)
+        rank_b = (cr_b, -score_b)
+        if rank_a <= rank_b:
+            chosen_text, chosen_score, chosen_cr = text_a, score_a, cr_a
+        else:
+            chosen_text, chosen_score, chosen_cr = text_b, score_b, cr_b
     # This chunk reached escalation, so it is suspect; only flag it confident if
     # the kept candidate now clears both gates (beam search may have recovered).
     confident = chosen_score >= _LOGPROB_THRESH and chosen_cr <= _CR_THRESH
