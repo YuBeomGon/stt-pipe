@@ -2452,10 +2452,6 @@ def run_job(config: RunnerConfig) -> HarnessState:
         if result is not None and getattr(result, "rate_limited", False):
             state.status = "aborted_rate_limit"
             state.save(state_path)
-            if config.commit_results:
-                commit_iteration(
-                    config, state_path, "abort", "rate_limit", state.iteration
-                )
             break
 
         if result is not None and result.format_reject:
@@ -2472,10 +2468,6 @@ def run_job(config: RunnerConfig) -> HarnessState:
         if command_fail_streak >= _COMMAND_FAIL_ABORT_COUNT:
             state.status = "aborted_command_failure"
             state.save(state_path)
-            if config.commit_results:
-                commit_iteration(
-                    config, state_path, "abort", "command_failure", state.iteration
-                )
             break
         # Format-reject abort guard (proposal §2.1) — only evaluated within
         # the *first* probe window of this run, not across jobs. If the
@@ -2490,16 +2482,7 @@ def run_job(config: RunnerConfig) -> HarnessState:
         ):
             state.status = "aborted_format_reject"
             state.save(state_path)
-            # Commit the aborted state so the next job's ensure_worktree_ready
-            # doesn't see runs/_summary/<job_id>_state.json as a modified
-            # tracked file and refuse to start. Uses commit_iteration with a
-            # synthetic ("abort", "format_reject") (status, hyp_id) pair —
-            # commit subject becomes `iterN: abort format_reject`, unique and
-            # parseable by analyze_run.py. (F2 fix.)
-            if config.commit_results:
-                commit_iteration(
-                    config, state_path, "abort", "format_reject", state.iteration
-                )
+            # state is durable on disk (untracked — runs/ is gitignored); no commit needed. ensure_worktree_ready never sees an untracked state file, so the next job starts cleanly (phase1.5; obsoletes F2).
             break
 
     # attempt cap 도달(success/abort 없이 evaluated 예산 미달로 루프 종료) — 상태를
@@ -2510,8 +2493,6 @@ def run_job(config: RunnerConfig) -> HarnessState:
     ):
         state.status = "incomplete_attempt_cap"
         state.save(state_path)
-        if config.commit_results:
-            commit_iteration(config, state_path, "abort", "attempt_cap", state.iteration)
     return state
 
 
