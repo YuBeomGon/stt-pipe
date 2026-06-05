@@ -2441,3 +2441,103 @@ def test_set_close_reset_registers_lineage_survivor(tmp_path):
     near = {e["hyp_id"]: e for e in pf.get("near_best", [])}
     assert "job_iter_008" in near
     assert near["job_iter_008"]["diff_path"] == "runs/job_iter_008/candidate.diff"
+
+
+def _run_set_iter_verify_fail(tmp_path, *, state, set_budget=4, max_repairs=2,
+                              max_refines=3, premap=None):
+    """Drive one set-path run_iteration whose verify FAILS (report=None). Mirrors
+    _run_set_iter but the verifier returns ok=False so step_set takes the
+    verify-fail branch (repair if set stays alive, reset once repairs exhausted)."""
+    import subprocess
+    from harness import gitops, runner
+    from harness.runner import RunnerConfig
+    from harness.verify import VerifyResult
+    gitops.ensure_champion_ref(tmp_path, "champion")
+    if premap is not None:
+        mp = tmp_path / "runs/_summary/promotion_map.jsonl"
+        mp.parent.mkdir(parents=True, exist_ok=True)
+        mp.write_text(premap, encoding="utf-8")
+    cfg_ = RunnerConfig(job_id="job", repo_root=tmp_path, main_repo_root=tmp_path,
+                        set_budget=set_budget, max_repairs=max_repairs,
+                        max_refines=max_refines, commit_results=True,
+                        candidate_cmd=None)
+    state_path = tmp_path / "runs/_summary/job_state.json"
+
+    def candidate(_prompt, out_dir):
+        (tmp_path / "workspace/transcribe.py").write_text("BROKEN\n", encoding="utf-8")
+        _write_valid_meta(out_dir)
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    def verifier(hyp_id):
+        out_dir = tmp_path / "runs" / hyp_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return VerifyResult(ok=False, hyp_id=hyp_id, out_dir=out_dir,
+                            report=None, error="boom")
+
+    runner.run_iteration(cfg_, state, state_path,
+                         candidate_func=candidate, verify_func=verifier)
+    return cfg_, state_path
+
+
+def test_verify_fail_reset_registers_lineage_survivor(tmp_path):
+    """F2 completeness: when a set closes via a VERIFY-FAIL reset (repairs
+    exhausted), the cultivated lineage best (state.set_best_*) is still registered
+    into the portfolio near_best pool — the verify-fail reset branch has its own
+    commit+return and must not silently drop the survivor."""
+    from harness.state import HarnessState
+    _init_repo(tmp_path)
+    portfolio_path = tmp_path / "runs/_summary/job_portfolio.json"
+    portfolio_path.parent.mkdir(parents=True, exist_ok=True)
+    portfolio_path.write_text(json.dumps({
+        "job_id": "job", "global_best": "champ",
+        "family_best": {"f0": {"hyp_id": "champ", "cer": 0.16,
+                               "harness_family_id": "f0", "axis_metric": {}}},
+    }), encoding="utf-8")
+    # Set is in 'repair' with repairs_used == max_repairs-1: the next verify-fail
+    # makes used >= max_repairs → step_set closes via 'repair_exhausted' (reset).
+    # The recorded lineage best (job_iter_008, 0.17) predates the failures.
+    state = HarnessState(job_id="job", best_cer=0.16, best_hyp_id="champ",
+                         set_id=1, set_phase="repair", set_best_cer=0.17,
+                         set_best_hyp_id="job_iter_008", set_repairs_used=1)
+    survivor_dir = tmp_path / "runs/job_iter_008"
+    survivor_dir.mkdir(parents=True, exist_ok=True)
+    (survivor_dir / "candidate.diff").write_text("--- a\n+++ b\n", encoding="utf-8")
+    (survivor_dir / "score_report.json").write_text(
+        json.dumps({"corpus_cer": 0.17, "total_inference_time_s": 90.0}),
+        encoding="utf-8")
+    _run_set_iter_verify_fail(tmp_path, state=state, max_repairs=2)
+    assert state.set_phase == "idle"                 # set closed (verify-fail reset)
+    assert state.set_best_hyp_id == "job_iter_008"   # recorded best preserved
+    pf = json.loads(portfolio_path.read_text())
+    near = {e["hyp_id"]: e for e in pf.get("near_best", [])}
+    assert "job_iter_008" in near
+    assert near["job_iter_008"]["diff_path"] == "runs/job_iter_008/candidate.diff"
+
+
+def test_verify_fail_repair_does_not_register_but_reset_does(tmp_path):
+    """Unit-level guard: the verify-fail branch invokes _register_lineage_survivor
+    on RESET (set closes) but NOT on REPAIR (set stays alive)."""
+    from harness import runner
+    from harness.state import HarnessState
+    _init_repo(tmp_path)
+    calls = []
+    orig = runner._register_lineage_survivor
+    runner._register_lineage_survivor = lambda cfg, st: calls.append(st.set_best_hyp_id)
+    try:
+        # explore + max_repairs>=1: verify-fail → step_set returns 'repair' (alive).
+        repair_state = HarnessState(job_id="job", best_cer=0.16, best_hyp_id="champ",
+                                    set_id=1, set_phase="explore",
+                                    set_best_cer=0.17, set_best_hyp_id="job_iter_008")
+        _run_set_iter_verify_fail(tmp_path, state=repair_state, max_repairs=2)
+        assert repair_state.set_phase == "repair"          # set still alive
+        assert calls == []                                  # NOT registered on repair
+
+        # repair + repairs_used==max_repairs-1: verify-fail → 'repair_exhausted' reset.
+        reset_state = HarnessState(job_id="job", best_cer=0.16, best_hyp_id="champ",
+                                   set_id=2, set_phase="repair", set_repairs_used=1,
+                                   set_best_cer=0.17, set_best_hyp_id="job_iter_008")
+        _run_set_iter_verify_fail(tmp_path, state=reset_state, max_repairs=2)
+        assert reset_state.set_phase == "idle"             # set closed (reset)
+        assert calls == ["job_iter_008"]                    # registered on reset only
+    finally:
+        runner._register_lineage_survivor = orig

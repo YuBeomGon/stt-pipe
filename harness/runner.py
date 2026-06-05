@@ -2350,6 +2350,14 @@ def run_iteration(
                     config, state_path, commit_status, hyp_id, state.iteration,
                     reason=result.reason,
                 )
+                # F2: a verify-fail can also CLOSE the set (repairs exhausted →
+                # t.action=="reset", rolled back to the protected champion above).
+                # That close path has its own commit+return and never reaches the
+                # terminal _register_lineage_survivor, so register here too — AFTER
+                # _persist_set_state copied the closed set's RECORDED best onto
+                # state.set_best_*. Only on reset; "repair" keeps the set alive.
+                if commit_status == "reset":
+                    _register_lineage_survivor(config, state)
             return result
         rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
         result = IterationResult(
