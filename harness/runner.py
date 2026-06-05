@@ -22,7 +22,13 @@ import yaml
 
 from harness import config as cfg
 from harness.history import append_event
-from harness.policy import Decision, PolicyConfig, decide_candidate
+from harness.policy import (
+    Decision,
+    PolicyConfig,
+    decide_candidate,
+    decide_lineage_progress,
+    decide_promotion,
+)
 from harness.state import HarnessState
 from harness.verify import VerifyConfig, VerifyResult, run_verify
 
@@ -230,6 +236,11 @@ class RunnerConfig:
     # PolicyConfig.absolute_delta_fallback. Value SSOT: harness/config.py.
     absolute_delta_fallback: float = cfg.BANKING_ABSOLUTE_DELTA
     commit_results: bool = False
+    # Lineage set (phase1). set_budget == 1 → legacy single-shot path (explore
+    # rolled back on reject). > 1 activates the bounded explore→repair/refine set.
+    set_budget: int = 1
+    max_repairs: int = cfg.SET_MAX_REPAIRS
+    max_refines: int = cfg.SET_MAX_REFINES
 
 
 @dataclass(frozen=True)
@@ -1196,6 +1207,18 @@ def _decide_iteration(config: RunnerConfig, state: HarnessState):
     portfolio = _load_portfolio(config)
     ctx = _scheduler_context(config, state, portfolio)
     sched = scheduler.decide_mode(state.evaluated_count + 1, max(1, config.iterations), ctx)
+    # Set-active override (phase1, I-1): a running set owns the prompt mode. The
+    # scheduler still computes scheduled_mode for the trace, but the set phase
+    # decides what we actually ask the candidate to do, so "refine the lineage
+    # head" / "repair the last failure" reaches the prompt (not a scheduler
+    # explore override). set_phase is the phase the PREVIOUS iter left behind.
+    if config.set_budget > 1 and state.set_phase in ("explore", "repair", "refine"):
+        from harness.scheduler import SchedulerDecision
+        sched = SchedulerDecision(
+            scheduled_mode=sched.scheduled_mode,
+            chosen_mode=state.set_phase,
+            override=f"set:{state.set_phase}",
+        )
     parents: list[dict[str, Any]] = []
     for e in pf.parents_for_mode(
         portfolio, sched.chosen_mode, evaluated_index=state.evaluated_count + 1
@@ -1217,6 +1240,35 @@ def _decide_iteration(config: RunnerConfig, state: HarnessState):
         if fail_parent:
             parents.append(fail_parent)
     return sched, parents
+
+
+def _set_state_from(state: HarnessState):
+    """Reconstruct the lineage SetState from the persisted HarnessState. An
+    idle/closed phase means there is no live set → start a fresh one (next id)."""
+    from harness.lineage import SetState
+    if state.set_phase in ("idle", "closed"):
+        return SetState.new(set_id=state.set_id + 1)
+    return SetState(
+        set_id=state.set_id,
+        phase=state.set_phase,
+        best_cer=state.set_best_cer,
+        best_hyp_id=state.set_best_hyp_id,
+        repairs_used=state.set_repairs_used,
+        refines_used=state.set_refines_used,
+        last_failure_hyp_id=state.last_failure_hyp_id,
+    )
+
+
+def _persist_set_state(state: HarnessState, s) -> None:
+    """Write the post-transition SetState back onto HarnessState. A closed set
+    becomes "idle" so the NEXT iter reseeds (see _set_state_from)."""
+    state.set_id = s.set_id
+    state.set_phase = "idle" if s.phase == "closed" else s.phase
+    state.set_best_cer = s.best_cer
+    state.set_best_hyp_id = s.best_hyp_id
+    state.set_repairs_used = s.repairs_used
+    state.set_refines_used = s.refines_used
+    state.last_failure_hyp_id = s.last_failure_hyp_id
 
 
 def _format_parents_block(parents: list[dict[str, Any]]) -> str:
@@ -2051,6 +2103,43 @@ def run_iteration(
         # 다음 iter 의 repair 모드가 _decide_iteration 에서 이 파일을 읽어 "무엇이 왜
         # 깨졌는지" 를 후보에게 그대로 전달할 수 있다(현재 stderr 미저장 갭 보완).
         _persist_verify_failure(repo_root, config, hyp_id, verify_result)
+        if config.set_budget > 1:
+            # Set path: a verify-fail doesn't end the lineage — step_set decides
+            # whether to repair (rollback candidate, keep set alive) or reset
+            # (rollback to champion, close set).
+            from harness.lineage import SetBudget, Outcome, step_set
+            from harness import gitops
+            s = _set_state_from(state)
+            outcome = Outcome(verify_ok=False, lineage_status=None, cer=None,
+                              beats_champion=False, hyp_id=hyp_id)
+            t = step_set(s, outcome, SetBudget(config.max_repairs, config.max_refines))
+            rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
+            if t.action == "reset":
+                gitops.restore_file_from_ref(repo_root, state.champion_ref, config.allowed_path)
+            _persist_set_state(state, t.state)
+            result = IterationResult(
+                hyp_id=hyp_id,
+                status="reject",
+                decision=None,
+                verify_result=verify_result,
+                reason=verify_result.error or "verify 실패 (set)",
+            )
+            append_event(
+                str(state.iteration),
+                hyp_id,
+                "NA",
+                "NA",
+                "reject",
+                _history_body(result),
+                repo_root=repo_root,
+            )
+            state.save(state_path)
+            if config.commit_results:
+                commit_iteration(
+                    config, state_path, "reject", hyp_id, state.iteration,
+                    reason=result.reason,
+                )
+            return result
         rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
         result = IterationResult(
             hyp_id=hyp_id,
@@ -2080,50 +2169,119 @@ def run_iteration(
     # scheduler progress 축(evaluated_count)을 여기서만 올린다(codex resolution A).
     state.record_evaluated()
 
-    decision = decide_candidate(
-        report=verify_result.report,
-        baseline=baseline,
-        best_cer=state.best_cer,
-        sigma=noise.get("sigma"),
-        sigma_is_provisional=bool(noise.get("is_provisional")),
+    if config.set_budget <= 1:
+        # ── legacy single-shot path (UNCHANGED) ───────────────────────────
+        decision = decide_candidate(
+            report=verify_result.report,
+            baseline=baseline,
+            best_cer=state.best_cer,
+            sigma=noise.get("sigma"),
+            sigma_is_provisional=bool(noise.get("is_provisional")),
+            config=PolicyConfig(absolute_delta_fallback=config.absolute_delta_fallback),
+        )
+
+        if decision.status in ("keep", "success"):
+            state.record_best(hyp_id, decision.candidate_cer)
+            if decision.status == "success":
+                state.status = "success"
+        else:
+            rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
+
+        result = IterationResult(
+            hyp_id=hyp_id,
+            status=decision.status,
+            decision=decision,
+            verify_result=verify_result,
+            reason=decision.reason,
+        )
+        append_event(
+            str(state.iteration),
+            hyp_id,
+            f"{decision.candidate_cer:.6f}",
+            _format_delta(decision.delta_from_best),
+            decision.status,
+            _history_body(result),
+            repo_root=repo_root,
+        )
+        state.save(state_path)
+        if config.commit_results:
+            commit_iteration(
+                config, state_path, decision.status, hyp_id, state.iteration,
+                reason=result.reason,
+            )
+        return result
+
+    # ── set path (set_budget>1): two comparisons (keeps global_best clean) ──
+    # decide_promotion = global-champion gate; decide_lineage_progress = in-set
+    # gate. step_set arbitrates between them (promotion always wins).
+    from harness.lineage import SetBudget, Outcome, step_set
+    from harness import gitops
+    cand_cer = float(verify_result.report["corpus_cer"])
+    promo = decide_promotion(
+        report=verify_result.report, baseline=baseline, champion_cer=state.best_cer,
+        sigma=noise.get("sigma"), sigma_is_provisional=bool(noise.get("is_provisional")),
         config=PolicyConfig(absolute_delta_fallback=config.absolute_delta_fallback),
     )
+    lin = decide_lineage_progress(verify_result.report, lineage_best_cer=state.set_best_cer)
+    s = _set_state_from(state)
+    outcome = Outcome(verify_ok=True, lineage_status=lin.status, cer=cand_cer,
+                      beats_champion=promo.status in ("keep", "success"),
+                      hyp_id=hyp_id)
+    t = step_set(s, outcome, SetBudget(config.max_repairs, config.max_refines))
 
-    if decision.status in ("keep", "success"):
-        state.record_best(hyp_id, decision.candidate_cer)
-        if decision.status == "success":
+    # Determine the committed status + champion mutations from the action, but
+    # rollback/restore (working-tree changes) and the actual commits happen
+    # AFTER state.save — commit_iteration stages state_path, which must exist on
+    # disk first (mirrors the legacy path's save-then-commit ordering).
+    if t.action == "promote":
+        decision_status = "success" if promo.status == "success" else "keep"
+        reason = promo.reason
+        state.record_best(hyp_id, cand_cer)
+        if promo.status == "success":
             state.status = "success"
-    else:
+    elif t.action == "advance":
+        decision_status = "lineage_advance"
+        reason = lin.reason
+    else:  # "repair" or "reset"
+        decision_status = "reject"
+        reason = lin.reason
         rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
+        if t.action == "reset":
+            gitops.restore_file_from_ref(repo_root, state.champion_ref, config.allowed_path)
 
+    _persist_set_state(state, t.state)
     result = IterationResult(
         hyp_id=hyp_id,
-        status=decision.status,
-        decision=decision,
+        status=decision_status,
+        decision=None,
         verify_result=verify_result,
-        reason=decision.reason,
+        reason=reason,
     )
     append_event(
         str(state.iteration),
         hyp_id,
-        f"{decision.candidate_cer:.6f}",
-        _format_delta(decision.delta_from_best),
-        decision.status,
+        f"{cand_cer:.6f}",
+        "NA",
+        decision_status,
         _history_body(result),
         repo_root=repo_root,
     )
     state.save(state_path)
     if config.commit_results:
-        commit_iteration(
-            config, state_path, decision.status, hyp_id, state.iteration,
-            reason=result.reason,
-        )
+        commit_iteration(config, state_path, decision_status, hyp_id,
+                         state.iteration, reason=reason)
+        if t.action == "promote":
+            head = _run_git(repo_root, ["rev-parse", "HEAD"]).stdout.strip()
+            gitops.advance_champion_ref(repo_root, state.champion_ref, head)
     return result
 
 
 def run_job(config: RunnerConfig) -> HarnessState:
     _check_bypass_in_production(config)
     state, state_path = load_or_init_state(config)
+    if config.set_budget > 1 and config.commit_results:
+        from harness import gitops
+        gitops.ensure_champion_ref(config.repo_root.resolve(), state.champion_ref)
     format_reject_count = 0
     command_fail_streak = 0
     starting_iteration = state.iteration
@@ -2231,12 +2389,27 @@ def main(argv: list[str] | None = None) -> int:
         default=cfg.BANKING_ABSOLUTE_DELTA,
         help="keep/bank threshold while σ provisional (review F2 banking; SSOT harness/config.py)",
     )
+    parser.add_argument(
+        "--set-budget", type=int, default=1,
+        help="lineage set 크기. 1 = 레거시 single-shot. >1 = bounded "
+             "explore→repair/refine set (worse-than-champion explore 보존).",
+    )
+    parser.add_argument(
+        "--max-repairs", type=int, default=cfg.SET_MAX_REPAIRS,
+        help="set 당 허용 verify-fail 수리 횟수 (SSOT harness/config.py)",
+    )
+    parser.add_argument(
+        "--max-refines", type=int, default=cfg.SET_MAX_REFINES,
+        help="set 당 허용 local-refine 횟수 (SSOT harness/config.py)",
+    )
     args = parser.parse_args(argv)
 
     if not args.manual and not args.candidate_cmd:
         parser.error("--candidate-cmd 또는 --manual 중 하나가 필요합니다")
     if args.iters > 1 and not args.commit_results:
         parser.error("--iters >1 은 --commit-results 가 필요합니다")
+    if args.set_budget > 1 and not args.commit_results:
+        parser.error("--set-budget>1 requires --commit-results (sets checkpoint code via commits)")
 
     state = run_job(
         RunnerConfig(
@@ -2247,6 +2420,9 @@ def main(argv: list[str] | None = None) -> int:
             manual=args.manual,
             absolute_delta_fallback=args.absolute_delta_fallback,
             commit_results=args.commit_results,
+            set_budget=args.set_budget,
+            max_repairs=args.max_repairs,
+            max_refines=args.max_refines,
         )
     )
     print(

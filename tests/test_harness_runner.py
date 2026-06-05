@@ -1617,3 +1617,57 @@ def test_explore_mode_prompts_for_novelty(tmp_path: Path) -> None:
     prompt = build_candidate_prompt(config, state)
     assert "EXPLORE MODE" in prompt
     assert "EXPLOIT MODE" not in prompt
+
+
+# ── Task 8: bounded lineage set (--set-budget) ─────────────────────────────
+
+
+def test_set_phase_overrides_scheduler_mode(tmp_path, monkeypatch):
+    """Step 2 (I-1): a running set owns the prompt mode — set_phase, not the
+    scheduler, decides chosen_mode while a set is active."""
+    from harness.runner import RunnerConfig, _decide_iteration
+    from harness.state import HarnessState
+
+    _init_repo(tmp_path)
+    cfg_ = RunnerConfig(job_id="j", repo_root=tmp_path, set_budget=4)
+    st = HarnessState(job_id="j", set_phase="refine", evaluated_count=20,
+                      best_hyp_id="h", best_cer=0.2)
+    sched, _parents = _decide_iteration(cfg_, st)
+    assert sched.chosen_mode == "refine"
+    assert sched.override == "set:refine"
+
+
+def test_set_keeps_worse_than_champion_explore(tmp_path, monkeypatch):
+    """C2 fix: with set_budget>1 a worse-than-champion explore survives into
+    refine (its code stays on disk) instead of being rolled back."""
+    _init_repo(tmp_path)
+    repo = tmp_path
+    cfg_ = RunnerConfig(job_id="job", repo_root=repo, set_budget=4,
+                        commit_results=True, manual=False, candidate_cmd=None)
+    state = HarnessState(job_id="job", best_cer=0.20, best_hyp_id="champ")
+    state_path = repo / "runs/_summary/job_state.json"
+
+    def candidate(_prompt: str, out_dir: Path):
+        (repo / "workspace/transcribe.py").write_text(
+            "def transcribe(a, sr):\n    return 'EXPLORE'\n", encoding="utf-8")
+        _write_valid_meta(out_dir)
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    def verifier(hyp_id: str) -> VerifyResult:
+        return VerifyResult(
+            ok=True,
+            hyp_id=hyp_id,
+            out_dir=repo / "runs" / hyp_id,
+            report={"corpus_cer": 0.30, "total_inference_time_s": 90.0},
+            per_file=[],
+        )
+
+    from harness import gitops
+    gitops.ensure_champion_ref(repo, "champion")
+    run_iteration(cfg_, state, state_path,
+                  candidate_func=candidate, verify_func=verifier)
+
+    assert state.set_phase == "refine"
+    assert state.set_best_cer == 0.30
+    assert state.best_cer == 0.20
+    assert "EXPLORE" in (repo / "workspace/transcribe.py").read_text(encoding="utf-8")
