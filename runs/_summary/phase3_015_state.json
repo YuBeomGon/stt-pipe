@@ -1,18 +1,18 @@
 {
   "job_id": "phase3_015",
-  "iteration": 2,
-  "best_cer": 0.41135005140895387,
-  "best_hyp_id": "phase3_015_iter_002",
+  "iteration": 3,
+  "best_cer": 0.17573148841991532,
+  "best_hyp_id": "phase3_015_iter_003",
   "status": "running",
   "iters_since_best_update": 0,
-  "evaluated_count": 1,
+  "evaluated_count": 2,
   "evaluated_since_best_update": 0,
   "champion_ref": "champion",
-  "set_id": 1,
+  "set_id": 2,
   "set_phase": "idle",
   "set_best_cer": null,
   "set_best_hyp_id": null,
   "set_repairs_used": 0,
   "set_refines_used": 0,
-  "last_failure_hyp_id": "phase3_015_iter_001"
+  "last_failure_hyp_id": null
 }
