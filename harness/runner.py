@@ -275,7 +275,7 @@ class IterationResult:
     # iters after the session limit was hit).
     command_failed: bool = False
     # Set when the candidate command kept hitting a Claude session/usage limit
-    # through the entire backoff ladder (5·10·20·40·80 min). run_job aborts the
+    # through the entire backoff ladder (5·10·20·40·80·80 min). run_job aborts the
     # job cleanly (status="aborted_rate_limit") rather than burning the budget —
     # a transient quota error, not a misaligned profile.
     rate_limited: bool = False
@@ -1220,8 +1220,8 @@ def _last_attempt_status(config: RunnerConfig) -> str | None:
 
 
 # Claude 세션/토큰 한도 backoff 사다리(분). 한도 신호가 계속 보이면 같은 iter 를
-# 이 간격으로 재시도한다 — 누적 5+10+20+40+80 = 155분. 소진 후에도 한도면 abort.
-_RATE_LIMIT_BACKOFF_MIN: tuple[int, ...] = (5, 10, 20, 40, 80)
+# 이 간격으로 재시도한다 — 누적 5+10+20+40+80+80 = 235분. 소진 후에도 한도면 abort.
+_RATE_LIMIT_BACKOFF_MIN: tuple[int, ...] = (5, 10, 20, 40, 80, 80)
 
 
 def _is_rate_limited(stdout_text: str) -> bool:
@@ -1458,11 +1458,17 @@ def _format_parents_block(parents: list[dict[str, Any]]) -> str:
 
 
 def _format_iter_plan(
-    iteration: int, sched, parents: list[dict[str, Any]]
+    iteration: int, evaluated: int, target: int, sched, parents: list[dict[str, Any]]
 ) -> str:
     """iter 시작 시 터미널 한 줄: 무슨 mode 로, 어떤 parent 를 재료로 시도하는지.
     verify_check 출력만으로는 mode/parent 가 안 보여(사이드카·decisions.jsonl 에만
-    기록) 운영자가 흐름을 못 따라가던 문제 보완."""
+    기록) 운영자가 흐름을 못 따라가던 문제 보완.
+
+    헤더는 **평가기준**으로 표시한다 — `[iter E/target · raw N]`. E=이번이 몇 번째
+    평가(verify 완료) 시도인지(=state.evaluated_count+1, scheduler progress 축과
+    동일), target=`--iters` 예산, N=원시 시도 수(format/command reject 포함).
+    format/command reject 는 평가로 안 쳐서 E 가 안 오르므로, raw N 만 보면 'iters
+    넘겼는데 안 멈춘다'고 오해하던 문제를 해소한다."""
     mode = sched.chosen_mode
     over = "" if sched.override in (None, "scheduled") else f" (override={sched.override})"
     if parents:
@@ -1477,7 +1483,7 @@ def _format_iter_plan(
         parent_s = "parent=" + ", ".join(bits)
     else:
         parent_s = "parent=none"
-    return f"[iter {iteration}] mode={mode}{over} · {parent_s}"
+    return f"[iter {evaluated}/{target} · raw {iteration}] mode={mode}{over} · {parent_s}"
 
 
 def _write_scheduler_sidecar(
@@ -2076,7 +2082,16 @@ def run_iteration(
 
     _cooldowns = _cd.compute_cooldowns(_decisions_records(config)).as_list()
     _write_scheduler_sidecar(out_dir, sched, parents, active_cooldowns=_cooldowns)
-    print(_format_iter_plan(state.iteration, sched, parents), flush=True)
+    print(
+        _format_iter_plan(
+            state.iteration,
+            state.evaluated_count + 1,
+            max(1, config.iterations),
+            sched,
+            parents,
+        ),
+        flush=True,
+    )
 
     def _invoke() -> subprocess.CompletedProcess[str] | None:
         if candidate_func is not None:
@@ -2098,7 +2113,7 @@ def run_iteration(
     # Claude 세션/토큰 한도("You've hit your session limit · resets …")는 일시적
     # 장애다 — 일반 command 실패로 취급해 곧장 abort 하면 밤샘 run 이 통째로 날아간다
     # (phase3_008: iter30 한도 → iter32 abort, 27/100). 한도 신호가 보이면 같은 iter 를
-    # 5·10·20·40·80 분 backoff 로 재시도(누적 ~155분)하고, 끝까지 풀리지 않으면
+    # 5·10·20·40·80·80 분 backoff 로 재시도(누적 ~235분)하고, 끝까지 풀리지 않으면
     # rate_limited 로 표시해 run_job 이 깔끔히 멈춘다.
     rate_limited_exhausted = False
     if candidate_result is not None:
@@ -2627,7 +2642,7 @@ def run_job(config: RunnerConfig) -> HarnessState:
         result = run_iteration(config, state, state_path)
         attempts += 1
 
-        # 세션/토큰 한도가 backoff 사다리(5·10·20·40·80분)를 다 쓰고도 안 풀림 →
+        # 세션/토큰 한도가 backoff 사다리(5·10·20·40·80·80분)를 다 쓰고도 안 풀림 →
         # 일시 장애지만 더 기다려도 의미 없으니 깔끔히 멈춘다(예산/상태 보존). 다음에
         # 같은 job-id 로 재개하면 evaluated 예산이 남아있어 이어서 돈다.
         if result is not None and getattr(result, "rate_limited", False):
