@@ -57,17 +57,19 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             [prompt_tokens] * len(batch_chunks),
             beam_size=1,
             sampling_temperature=0.0,
-            # Anti-loop block tuned for the dominant deletion/coverage axis.
-            # The parent's no_repeat_ngram_size=3 forbids re-emitting ANY exact
-            # 3-token sequence, but conversational Korean recurs short trigrams
-            # (back-channel/honorific patterns, e.g. "네 네 네"), so n=3 also
-            # blocks legitimate speech, knocks the greedy decoder off-track, and
-            # deepened deletion (length_ratio 0.65->0.62, cer 0.4128->0.4318 vs
-            # plain greedy). The genuine repetition-collapse loop phrases on the
-            # repeated_text files span >=4 subword tokens, so widening the block
-            # to n=4 still catches the real loop while sparing natural short
-            # repeats — relieving the coverage penalty on the clean files.
-            no_repeat_ngram_size=4,
+            # Anti-loop block widened further along the dominant deletion axis.
+            # The n-gram block is a coverage/anti-loop tradeoff knob: a small n
+            # also forbids natural recurring Korean n-grams (back-channel /
+            # honorific clusters), knocking the greedy decoder off-track and
+            # deepening deletion. The ledger shows this is monotone — n=3 gave
+            # cer 0.4318 (len 0.62), n=4 gave 0.4198 (len 0.63), each step
+            # toward plain greedy (0.4128, len 0.65) as fewer legitimate tokens
+            # are suppressed. The genuine repetition-collapse loops on the
+            # repeated_text files repeat whole clauses (>=5 subword tokens), so
+            # widening to n=5 still catches the real loop while sparing natural
+            # 4-grams — keeping the block's benefit on the looping files without
+            # taxing coverage on the clean ones.
+            no_repeat_ngram_size=5,
         )
 
         for r in results:
