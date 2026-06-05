@@ -1,30 +1,39 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Context-conditioned decoding (family_003) with a beam-search tune. The parent
-established the structural pipeline: silence-aligned segmentation tiles the
-whole recording into self-contained, ≤28s spans cut at the centre of a silence
-run (so no generate() call sees a mid-utterance fragment), and each chunk is
-decoded **statefully** — primed with the tail of the running transcript through
-the ``<|startofprev|>`` token convention so the decoder is biased toward
-vocabulary it has already committed to (same speaker, same insurance /
-call-center domain terms). Coverage is healthy (length_ratio ≈ 0.95); the
-binding error is now **substitution** (59% ≫ del/ins): the right span is heard
-but a plausible-but-wrong neighbour token is emitted.
+Confidence-gated escalation decoding. Every prior pipeline called generate()
+exactly once per chunk and read only ``results[0].sequences_ids[0]`` — the
+rest of the return channel was discarded. CTranslate2's Whisper.generate can
+also return ``.scores`` (length-normalized log-likelihood per hypothesis, when
+``return_scores=True``) and ``.no_speech_prob``. Those fields are an unused
+backend capability: a *per-chunk confidence signal* the harness never exploited.
 
-REFINE: the parent decoded greedily (beam_size=1). Greedy commits to the
-locally-best token at each step, which is exactly how a degraded phone-band or
-domain word collapses to a near-homophone. This slot flips the decode to beam
-search (beam_size=5) so multiple hypotheses survive and the length-normalized
-score can prefer the globally-coherent transcript — the standard, direct lever
-over substitution, not coverage. Everything else (segmentation, sliding
-priming context capped at _MAX_CONTEXT_TOKENS) is unchanged from the parent.
-The parent's greedy pass cost ~152s of inference; beam=5 stays well inside the
-~720s budget.
+The two focus files are flagged for ``repeated_text`` — decoder collapse into
+repetition on hard spans, which a single greedy pass cannot recover from. This
+rewrite turns each chunk's decode into a two-pass loop. Pass A is the cheap
+greedy decode we already used; it is now *gated* by two cheap signals — the
+returned ``.scores`` (avg log-prob) and the zlib compression ratio of the
+decoded text (high ratio == repetition). Only chunks that fail the gate spend a
+second, more expensive beam-search pass with explicit anti-repetition
+(``no_repeat_ngram_size`` + ``repetition_penalty``), then we keep whichever
+candidate repeats less. The common case stays at the current greedy cost; only
+collapsed chunks pay extra, so runtime tracks the incumbent.
+
+Segmentation (silence-aligned chunks) and sliding ``<|startofprev|>`` priming
+are retained — they fixed coverage. This revision *fuses* the two channels that
+were previously independent: the per-chunk confidence from the return channel
+(``.scores`` + compression ratio) now gates the prompt-priming channel. Only a
+chunk whose decode cleared both gates is carried forward as ``<|startofprev|>``
+context; a low-confidence (substitution-prone) decode no longer pollutes the
+prime of its successors. The dominant error axis is substitution (≈59%) with
+healthy coverage, so suppressing error-propagation through the context channel
+targets that axis directly rather than coverage.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
+
+import zlib
 
 import numpy as np
 
@@ -33,79 +42,143 @@ from frozen.asr_backend import generate, load, to_storage_view
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 
-# Whisper's hard mel window is 30s; keep chunks under it so a silence-aligned
-# tail extension can never overflow the forward pass.
+# Stay under Whisper's hard 30s mel window, with headroom so a silence-aligned
+# chunk never overflows the forward pass.
 _MAX_CHUNK_SECONDS = 28.0
-# Frame granularity of the energy VAD.
+# Energy VAD frame size.
 _FRAME_MS = 30.0
 # Minimum silence-run length that qualifies as a safe cut point.
 _MIN_SILENCE_S = 0.35
-# Whisper's decoder context is 448 tokens; cap carried-over priming well under
-# half so it can never starve generation of the new chunk.
+# Whisper's decoder context is 448 tokens; cap carried-over context well under
+# that so priming can never starve generation.
 _MAX_CONTEXT_TOKENS = 180
-# Beam width — >1 lets alternative hypotheses survive so the length-normalized
-# score can override a greedy substitution.
-_BEAM_SIZE = 5
-# Length penalty exponent for beam finalization. CT2 normalizes a beam's score
-# by length**_LENGTH_PENALTY; the default (1.0) is exact per-token averaging,
-# which on this audio let beam=5 prefer a clipped hypothesis (del 0.35→0.37 in
-# iter_007). A value >1 over-normalizes so longer, more-complete hypotheses are
-# no longer out-scored by short ones — recovering the coverage beam shed while
-# keeping the substitution reduction beam buys.
-_LENGTH_PENALTY = 1.3
+
+# Gate thresholds (Whisper reference defaults). A chunk whose greedy decode has
+# avg log-prob below _LOGPROB_THRESH OR a compression ratio above _CR_THRESH is
+# treated as a collapse/low-confidence decode and re-decoded with beam search.
+_LOGPROB_THRESH = -1.0
+_CR_THRESH = 2.4
 
 
 def _silence_aligned_bounds(audio: np.ndarray, sr: int) -> list[tuple[int, int]]:
-    """Partition [0, len(audio)) into chunks ≤ _MAX_CHUNK_SECONDS whose
-    boundaries fall in the middle of a silence run whenever one is reachable
-    within the window; otherwise cut at the hard window edge. Coverage is total
-    — the chunks tile the signal exactly."""
-    total = len(audio)
+    """Partition [0, len(audio)) into chunks <= max, cutting at silence centres.
+
+    Energy per ``_FRAME_MS`` frame is compared to a low percentile of the
+    file's own energy distribution to mark silent frames; silence runs longer
+    than ``_MIN_SILENCE_S`` become candidate cut points. We then greedily take
+    the farthest candidate within one max-chunk of the current start, falling
+    back to a hard cut at the max length only when no silence is in reach.
+    """
     max_len = int(_MAX_CHUNK_SECONDS * sr)
-    frame = max(1, int(_FRAME_MS / 1000.0 * sr))
-    n = total // frame
-    if n == 0:
-        return [(0, total)]
+    frame = int(sr * _FRAME_MS / 1000.0)
+    if frame <= 0 or len(audio) <= max_len:
+        return [(0, len(audio))]
 
-    trimmed = audio[: n * frame].astype(np.float64).reshape(n, frame)
-    energy = np.sqrt(np.mean(trimmed * trimmed, axis=1))
-    # Percentile-anchored silence threshold: robust to overall gain, marks the
-    # quietest ~20% of frames (scaled) as candidate silence.
-    thresh = float(np.percentile(energy, 20)) * 1.5
-    is_sil = energy < thresh
+    n = len(audio) // frame
+    frames = audio[: n * frame].reshape(n, frame).astype(np.float64)
+    energy = np.sqrt(np.mean(frames ** 2, axis=1) + 1e-12)
+    # Threshold between the file's noise floor and its speech energy. The 30th
+    # percentile sits inside silence for typical call-center duty cycles.
+    thr = np.percentile(energy, 30)
+    silent = energy <= thr
 
-    min_sil_frames = max(1, int(_MIN_SILENCE_S * 1000.0 / _FRAME_MS))
-    sil_centers: list[int] = []
+    min_sil_frames = max(1, int(_MIN_SILENCE_S / (_FRAME_MS / 1000.0)))
+    cuts: list[int] = []
     i = 0
     while i < n:
-        if is_sil[i]:
+        if silent[i]:
             j = i
-            while j < n and is_sil[j]:
+            while j < n and silent[j]:
                 j += 1
-            if (j - i) >= min_sil_frames:
-                sil_centers.append(((i + j) // 2) * frame)
+            if j - i >= min_sil_frames:
+                cuts.append(((i + j) // 2) * frame)
             i = j
         else:
             i += 1
-    centers = np.asarray(sil_centers, dtype=np.int64)
 
     bounds: list[tuple[int, int]] = []
     start = 0
+    total = len(audio)
     while start < total:
-        target_end = min(start + max_len, total)
-        if target_end >= total:
+        limit = start + max_len
+        if limit >= total:
             bounds.append((start, total))
             break
-        if centers.size:
-            cands = centers[(centers > start) & (centers <= target_end)]
-            end = int(cands[-1]) if cands.size else target_end
-        else:
-            end = target_end
-        if end <= start:
-            end = target_end
+        reachable = [c for c in cuts if start < c <= limit]
+        end = max(reachable) if reachable else limit
         bounds.append((start, end))
         start = end
     return bounds
+
+
+def _compression_ratio(text: str) -> float:
+    """Repetition proxy: original bytes / zlib-compressed bytes.
+
+    Highly repetitive text compresses far better, so a high ratio is a direct
+    signal of the repeated-text collapse the focus files are flagged for.
+    """
+    data = text.encode("utf-8")
+    if not data:
+        return 0.0
+    return len(data) / len(zlib.compress(data))
+
+
+def _decode_chunk(features, prompt, tokenizer) -> tuple[str, bool]:
+    """Decode one chunk, escalating to beam search only on a bad greedy pass.
+
+    Reads the previously-discarded ``.scores`` return channel: Pass A is the
+    cheap greedy decode, accepted iff its avg log-prob and compression ratio
+    clear the gates. A failing chunk gets Pass B — beam search with explicit
+    anti-repetition — and we keep whichever candidate repeats less.
+
+    Returns ``(text, confident)`` where ``confident`` is whether the *chosen*
+    candidate cleared both gates. transcribe() uses that flag to decide whether
+    this chunk's text is trustworthy enough to prime the next chunk — fusing the
+    return-channel confidence signal (family_004) with the prompt-priming
+    channel (family_003) so a low-confidence, substitution-prone decode is no
+    longer carried forward as context to corrupt its successors.
+    """
+    res_a = generate(
+        features,
+        [prompt],
+        beam_size=1,
+        sampling_temperature=0.0,
+        return_scores=True,
+    )
+    ids_a = res_a[0].sequences_ids[0]
+    score_a = res_a[0].scores[0]
+    text_a = tokenizer.decode(ids_a, skip_special_tokens=True).strip()
+    cr_a = _compression_ratio(text_a)
+
+    if score_a >= _LOGPROB_THRESH and cr_a <= _CR_THRESH:
+        return text_a, True
+
+    res_b = generate(
+        features,
+        [prompt],
+        beam_size=5,
+        num_hypotheses=1,
+        length_penalty=1.0,
+        repetition_penalty=1.1,
+        no_repeat_ngram_size=3,
+        return_scores=True,
+    )
+    ids_b = res_b[0].sequences_ids[0]
+    score_b = res_b[0].scores[0]
+    text_b = tokenizer.decode(ids_b, skip_special_tokens=True).strip()
+    cr_b = _compression_ratio(text_b)
+
+    # Prefer the candidate that repeats less; tie-break on higher confidence.
+    rank_a = (cr_a, -score_a)
+    rank_b = (cr_b, -score_b)
+    if rank_a <= rank_b:
+        chosen_text, chosen_score, chosen_cr = text_a, score_a, cr_a
+    else:
+        chosen_text, chosen_score, chosen_cr = text_b, score_b, cr_b
+    # This chunk reached escalation, so it is suspect; only flag it confident if
+    # the kept candidate now clears both gates (beam search may have recovered).
+    confident = chosen_score >= _LOGPROB_THRESH and chosen_cr <= _CR_THRESH
+    return chosen_text, confident
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -117,10 +190,14 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     )
     startofprev = tokenizer.convert_tokens_to_ids("<|startofprev|>")
 
-    # Sub-100ms of signal is silence residue, not worth a forward pass.
+    # A chunk shorter than this is sub-100ms of real signal — only silence
+    # hallucination lives there.
     min_samples = sr // 10
 
     texts: list[str] = []
+    # Token ids of the previous chunk's transcript, used to prime the next
+    # decode through the <|startofprev|> context channel. Sliding (last chunk
+    # only), capped, so a single bad decode cannot propagate down the file.
     prev_context_ids: list[int] = []
 
     for start, end in _silence_aligned_bounds(audio, sr):
@@ -128,28 +205,29 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         if len(chunk) < min_samples:
             continue
 
-        inputs = processor(chunk, sampling_rate=sr, return_tensors="np")
+        inputs = processor(
+            chunk,
+            sampling_rate=sr,
+            return_tensors="np",
+        )
         features = to_storage_view(inputs.input_features)
 
         if prev_context_ids:
-            prompt = [startofprev] + prev_context_ids + list(sot_prefix)
+            prompt = [startofprev] + prev_context_ids + sot_prefix
         else:
             prompt = list(sot_prefix)
 
-        res = generate(
-            features,
-            [prompt],
-            beam_size=_BEAM_SIZE,
-            length_penalty=_LENGTH_PENALTY,
-            sampling_temperature=0.0,
-        )
-        ids = res[0].sequences_ids[0]
-        text = tokenizer.decode(ids, skip_special_tokens=True).strip()
+        text, confident = _decode_chunk(features, prompt, tokenizer)
         if text:
             texts.append(text)
-            # Sliding (not accumulated) context: only the most recent text,
-            # capped, so a single mis-decode cannot propagate down the file.
-            ctx = tokenizer.encode(text, add_special_tokens=False)
-            prev_context_ids = ctx[-_MAX_CONTEXT_TOKENS:]
+            # Carry this chunk's text (tail only) as priming context for the
+            # next chunk ONLY if its decode cleared the confidence gates. A
+            # low-confidence chunk is exactly the one most likely to carry a
+            # substitution error; priming the successor with it would propagate
+            # that error. When unconfident we hold the last trusted context
+            # instead of overwriting it with suspect text.
+            if confident:
+                ctx = tokenizer.encode(text, add_special_tokens=False)
+                prev_context_ids = ctx[-_MAX_CONTEXT_TOKENS:]
 
     return " ".join(texts)
