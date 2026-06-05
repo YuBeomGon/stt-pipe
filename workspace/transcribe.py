@@ -1,48 +1,43 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-DIVERGE slot. This replaces the whole decode/selection mechanism with a
-cross-sample **ROVER token-vote fusion**, attacking the dominant 57%
-substitution axis at the one place every prior iteration left untouched.
+DIVERGE slot. Every prior iteration ran a *single-shot* decode per window and
+read at most two return channels: ``sequences_ids`` (the text/timestamp tokens)
+and ``no_speech_prob`` (iter006). The decode result carries a third channel
+that no iteration has ever read — the per-sequence **score**, available when
+``generate(..., return_scores=True)`` is set. CT2 returns it length-normalised,
+so ``res.scores[0]`` is a usable proxy for the decoder's average log-prob over
+the window: a direct confidence signal for *how reliable this window's
+transcription is*, distinct from no_speech_prob (which asks "is this speech?"
+not "is this decode trustworthy?").
 
-The ledger's binding facts about that axis:
-  - the beam N-best is >=95% correlated (iter_063), so a confidently-wrong
-    phone-band domain token sits in *all* beam hypotheses — beam width,
-    patience, and lexicon-rerank (063-085) provably cannot surface the correct
-    token because it never enters the beam;
-  - align()-driven excision (iter_081-085) can only *delete* a wrong token,
-    converting a substitution to a deletion with no net CER gain (iter_082).
+That score channel is exactly what OpenAI's reference Whisper uses for its
+**temperature-fallback** long-form policy, which no iteration here has built.
+The mechanism this slot introduces replaces the single-shot decode with an
+adaptive per-window loop:
 
-The unused capability: **temperature sampling decorrelates errors across
-draws**. A pool of independent random samples (whisper's `best_of`) is not
-locked to one beam path, so the correct obstruent-attenuated domain token the
-beam pruned can appear in a *minority* of the samples. Position-wise majority
-voting — ROVER, structurally distinct from every prior whole-hypothesis MBR /
-medoid / sequence-rescore selector, which choose one entire hypothesis and so
-inherit its shared substitution — can then *repair* the anchor token by swapping
-it for the cross-sample consensus token.
+  - decode at temperature 0.0 with beam search (the high-precision attempt);
+  - score the result on two signals the score channel makes available — the
+    length-normalised avg log-prob (``res.scores[0]``) and the gzip
+    *compression ratio* of the emitted text (a degenerate, repeated, or
+    hallucinated window compresses far more than natural speech);
+  - if either signal flags the decode as untrustworthy (avg log-prob too low,
+    or compression ratio too high), re-decode the *same* window at a higher
+    sampling temperature and try again, walking a temperature schedule;
+  - keep the best-scoring attempt seen if none clears the gate.
 
-Mechanism per window:
-  - decode a precision **anchor**: T=0 beam search (also the source of the
-    timestamp tokens that drive the advance, unchanged from the incumbent);
-  - decode a **diverse pool**: K random samples from the same encode
-    (beam_size=1, sampling_temperature>0, top-k);
-  - align each sample's text token-ids to the anchor's with difflib and tally,
-    per anchor position, which token ids the samples propose;
-  - at each 1:1-aligned position, replace the anchor token with a pool token
-    only when a strict majority of samples agree on it AND that agreement
-    exceeds the samples backing the anchor token.
-
-Insert/delete and length-mismatched spans contribute no votes, so the fused
-sequence has exactly the anchor's length: coverage (length_ratio 0.96) and the
-insertion axis are left untouched and only the substitution axis is moved.
+This is a fundamentally different decode strategy than the incumbent's fixed
+beam+no_speech gate: instead of a single irreversible decode, each window gets
+multiple attempts and the score channel arbitrates. It attacks the residual
+hallucination (0.18) / repeated-text (0.27) directly via the compression gate,
+and the low-confidence windows — where phone-band substitution concentrates —
+get a second, higher-entropy shot to escape a confidently-wrong beam path.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
 
-import difflib
-from collections import Counter
+import zlib
 
 import numpy as np
 
@@ -55,64 +50,33 @@ _WINDOW_SECONDS = 30.0
 _TIME_PRECISION = 0.02
 _MIN_ADVANCE_SECONDS = 2.0
 
+# Temperature-fallback schedule (OpenAI Whisper's robustness policy). The first
+# attempt is beam search at T=0 (precision); each fallback raises entropy so the
+# decoder can escape a degenerate or confidently-wrong path.
+_TEMPERATURE_SCHEDULE = (0.0, 0.2, 0.4, 0.6, 0.8)
+
+# Gate thresholds read off the score channel. avg log-prob below the floor =>
+# the decoder is unsure of this window; gzip compression ratio above the ceiling
+# => the text is repetitive/hallucinated (natural speech ~1.3-1.8, degenerate
+# loops >> 2.4). Either condition triggers a higher-temperature retry.
+_LOGPROB_THRESHOLD = -1.0
+_COMPRESSION_RATIO_THRESHOLD = 2.4
+
 _BEAM_SIZE = 5
 
-# Diverse sampling pool (whisper's best_of). Random sampling decorrelates errors
-# across draws, unlike the >=95%-correlated beam N-best (ledger iter_063), so a
-# correct phone-band domain token the beam pruned can surface in the pool and be
-# voted in. Temperature/top-k set the pool's entropy. iter_086/087 ran T=0.4,
-# topk=10 and substitution stayed pinned at 0.56: at that low temperature each
-# sample sits too close to the greedy anchor's beam path, so the pool echoes the
-# anchor token rather than carrying the beam-pruned correct one — the
-# decorrelation premise barely holds and the vote has nothing better to swap in.
-# Raise temperature to 0.7 so draws genuinely escape the anchor path, and narrow
-# top-k to 6 so those escaped draws still concentrate on a small plausible set —
-# a 4/5 supermajority can only form if the freed samples converge, which a wide
-# top-k at high temperature would scatter into noise.
-_NUM_SAMPLES = 5
-_SAMPLE_TEMPERATURE = 0.7
-_SAMPLE_TOPK = 6
-
-# ROVER override gate: a pool token may replace the anchor token at a
-# 1:1-aligned position only if at least this many samples agree on it AND that
-# agreement strictly exceeds the samples backing the anchor token. iter_086 ran
-# a bare 3/5 majority and its swaps were net-harmful (sub only 0.57->0.56 while
-# hal rose 0.00->0.18) — a phonetic-neighbour the T=0.4 pool happens to agree on
-# overrode a correct anchor token. A 4/5 SUPERMAJORITY admits only the highest-
-# confidence cross-sample repairs; every weaker position falls back to the strong
-# precision anchor, so the fusion stops trading the substitution axis for noise.
-_VOTE_MIN = 4
+# Gentle token-level repetition penalty (CT2 generate kwarg, never exercised on
+# this lineage). Whisper's standard ~1.1 setting nudges the beam off a
+# self-repeating degenerate path one token at a time without distorting natural
+# Korean morpheme repetition, attacking the confident-wrong-loop component of
+# the dominant substitution axis (and the two repeated_text focus files).
+_REPETITION_PENALTY = 1.1
 
 
-def _rover_fuse(anchor: list[int], samples: list[list[int]]) -> list[int]:
-    """Position-wise majority vote of the sample pool onto the anchor tokens.
-
-    Only 1:1-aligned spans (difflib ``equal``/``replace`` of equal length)
-    contribute votes, so the returned sequence keeps the anchor's length — the
-    insertion/deletion axes cannot move, only substitution.
-    """
-    if not anchor or not samples:
-        return anchor
-
-    votes = [Counter() for _ in anchor]
-    for seq in samples:
-        if not seq:
-            continue
-        matcher = difflib.SequenceMatcher(a=anchor, b=seq, autojunk=False)
-        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-            if tag in ("equal", "replace") and (i2 - i1) == (j2 - j1):
-                for off in range(i2 - i1):
-                    votes[i1 + off][seq[j1 + off]] += 1
-
-    fused: list[int] = []
-    for pos, tok in enumerate(anchor):
-        counter = votes[pos]
-        if counter:
-            alt, alt_n = counter.most_common(1)[0]
-            if alt != tok and alt_n >= _VOTE_MIN and alt_n > counter.get(tok, 0):
-                tok = alt
-        fused.append(tok)
-    return fused
+def _compression_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    data = text.encode("utf-8")
+    return len(data) / len(zlib.compress(data))
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -134,39 +98,65 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         chunk = audio[cursor : cursor + win_samples]
         chunk_seconds = chunk.shape[0] / sr
 
-        inputs = processor([chunk], sampling_rate=sr, return_tensors="np")
+        inputs = processor(
+            [chunk],
+            sampling_rate=sr,
+            return_tensors="np",
+        )
         features = to_storage_view(inputs.input_features)
 
-        # Precision anchor: T=0 beam decode. Its timestamp tokens drive advance.
-        anchor_res = generate(
-            features,
-            [sot_tokens],
-            beam_size=_BEAM_SIZE,
-            sampling_temperature=0.0,
-        )[0]
+        # Temperature-fallback loop. Decode the window, score it off the score
+        # channel, and re-decode hotter until a trustworthy attempt is found or
+        # the schedule is exhausted (then keep the best-scoring attempt).
+        best = None  # (passes_comp, avg_logprob, res)
+        chosen = None
+        for temp in _TEMPERATURE_SCHEDULE:
+            if temp == 0.0:
+                res = generate(
+                    features,
+                    [sot_tokens],
+                    beam_size=_BEAM_SIZE,
+                    sampling_temperature=0.0,
+                    repetition_penalty=_REPETITION_PENALTY,
+                    return_scores=True,
+                )[0]
+            else:
+                res = generate(
+                    features,
+                    [sot_tokens],
+                    beam_size=1,
+                    sampling_temperature=temp,
+                    repetition_penalty=_REPETITION_PENALTY,
+                    return_scores=True,
+                )[0]
 
-        # Diverse pool: K decorrelated random samples from the same encode.
-        sample_res = generate(
-            features,
-            [sot_tokens],
-            beam_size=1,
-            num_hypotheses=_NUM_SAMPLES,
-            sampling_temperature=_SAMPLE_TEMPERATURE,
-            sampling_topk=_SAMPLE_TOPK,
-        )[0]
+            avg_logprob = res.scores[0] if res.scores else float("-inf")
 
-        anchor_ids = anchor_res.sequences_ids[0]
-        anchor_text = [t for t in anchor_ids if t < timestamp_begin]
-        ts_tokens = [t for t in anchor_ids if t >= timestamp_begin]
+            token_ids = res.sequences_ids[0]
+            text_tokens = [t for t in token_ids if t < timestamp_begin]
+            text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
+            comp_ratio = _compression_ratio(text)
+            passes_comp = comp_ratio <= _COMPRESSION_RATIO_THRESHOLD
 
-        sample_texts = [
-            [t for t in seq if t < timestamp_begin]
-            for seq in sample_res.sequences_ids
-        ]
+            # Fallback ranking is lexicographic: a compression-passing attempt
+            # always outranks a degenerate one, ties broken by avg_logprob. This
+            # stops the no-clear-gate fallback from emitting a repeated/degenerate
+            # window just because it happened to score the highest logprob.
+            if best is None or (passes_comp, avg_logprob) > (best[0], best[1]):
+                best = (passes_comp, avg_logprob, res)
 
-        fused = _rover_fuse(anchor_text, sample_texts)
+            if avg_logprob >= _LOGPROB_THRESHOLD and passes_comp:
+                chosen = res
+                break
 
-        text = tokenizer.decode(fused, skip_special_tokens=True).strip()
+        if chosen is None:
+            chosen = best[2]
+
+        token_ids = chosen.sequences_ids[0]
+        text_tokens = [t for t in token_ids if t < timestamp_begin]
+        ts_tokens = [t for t in token_ids if t >= timestamp_begin]
+
+        text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
         if text:
             pieces.append(text)
 
