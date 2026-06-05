@@ -52,29 +52,39 @@ _MIN_ADVANCE_SECONDS = 2.0
 _BEAM_SIZE = 5
 _NUM_HYPOTHESES = 5
 
+# Conservative MBR override margin. Over a full 30 s window all beams are
+# ≥95% char-similar, so raw centroid selection differs from beam[0] by 3rd-
+# decimal noise and discards the max-joint-logprob prior for nothing. Only
+# override beam[0] when the centroid's mean agreement beats it by this margin.
+_MBR_MARGIN = 0.05
+
 
 def _consensus_index(texts: list[str]) -> int:
-    """Index of the minimum-Bayes-risk hypothesis.
+    """Index of the minimum-Bayes-risk hypothesis, with a likelihood prior.
 
     Risk of hypothesis i = sum_j (1 - char_similarity(i, j)); minimising it is
-    equivalent to maximising total similarity to the rest of the beam. The
+    equivalent to maximising mean similarity to the rest of the beam. The
     centroid hypothesis — the spelling the most beam paths agree on — wins,
-    so an isolated confidently-wrong path is rejected.
+    so an isolated confidently-wrong path is rejected. But beam[0] is the
+    max-joint-logprob path, so we keep it unless the centroid's mean agreement
+    exceeds beam[0]'s by ``_MBR_MARGIN``: near-tie windows retain the
+    likelihood prior, only genuinely isolated beam[0] outliers get overridden.
     """
     n = len(texts)
     if n <= 1:
         return 0
-    best_i = 0
-    best_score = -1.0
+    means = []
     for i in range(n):
         score = 0.0
         for j in range(n):
             if i == j:
                 continue
             score += difflib.SequenceMatcher(None, texts[i], texts[j]).ratio()
-        if score > best_score:
-            best_score = score
-            best_i = i
+        means.append(score / (n - 1))
+
+    best_i = max(range(n), key=means.__getitem__)
+    if best_i == 0 or means[best_i] - means[0] <= _MBR_MARGIN:
+        return 0
     return best_i
 
 
