@@ -1930,6 +1930,15 @@ def _persist_decision(
         return []  # never break the commit path
 
 
+# Statuses that advance the on-disk code and therefore checkpoint the workspace
+# as a git commit. keep/success = promotion; lineage_advance = in-set lineage
+# head; reset = workspace restored to champion (a real code change, must be a
+# checkpoint so the next ensure_worktree_ready sees a clean tree == HEAD).
+# reject/repair_rollback/abort do NOT advance code (workspace already == HEAD
+# after rollback) → no commit. (phase1.5, HARNESS-REDESIGN §80.)
+_CODE_CHECKPOINT_STATUSES = ("keep", "success", "lineage_advance", "reset")
+
+
 def commit_iteration(
     config: RunnerConfig,
     state_path: Path,
@@ -1939,26 +1948,16 @@ def commit_iteration(
     reason: str | None = None,
     attempt_status: str | None = None,
 ) -> None:
-    meta_jsonl = _persist_candidate_meta(config, hyp_id, iteration, status)
-    decision_paths = _persist_decision(
+    # Metadata is written to disk (append-only / atomic) but NOT committed — it
+    # lives under runs/, now fully gitignored. Persist first (these write the
+    # durable files), then commit ONLY the code file for code-advancing statuses.
+    _persist_candidate_meta(config, hyp_id, iteration, status)
+    _persist_decision(
         config, hyp_id, iteration, status, reason=reason, attempt_status=attempt_status
     )
-    paths = [
-        config.allowed_path.as_posix(),
-        str((config.summary_dir / "HISTORY.md").as_posix()),
-        *decision_paths,
-    ]
-    if meta_jsonl is not None:
-        try:
-            paths.append(meta_jsonl.resolve().relative_to(config.repo_root.resolve()).as_posix())
-        except ValueError:
-            paths.append(str((config.summary_dir / f"{config.job_id}_candidate_meta.jsonl").as_posix()))
-    try:
-        state_rel = state_path.resolve().relative_to(config.repo_root.resolve())
-    except ValueError:
-        state_rel = state_path
-    paths.append(state_rel.as_posix())
-    _run_git(config.repo_root, ["add", "--", *paths])
+    if status not in _CODE_CHECKPOINT_STATUSES:
+        return
+    _run_git(config.repo_root, ["add", "--", config.allowed_path.as_posix()])
     diff = _run_git(config.repo_root, ["diff", "--cached", "--quiet"], check=False)
     if diff.returncode == 0:
         return
@@ -2247,8 +2246,10 @@ def run_iteration(
                               beats_champion=False, hyp_id=hyp_id)
             t = step_set(s, outcome, SetBudget(config.max_repairs, config.max_refines))
             rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
+            commit_status = "repair_rollback"
             if t.action == "reset":
                 gitops.restore_file_from_ref(repo_root, state.champion_ref, config.allowed_path)
+                commit_status = "reset"
             _persist_set_state(state, t.state)
             result = IterationResult(
                 hyp_id=hyp_id,
@@ -2269,7 +2270,7 @@ def run_iteration(
             state.save(state_path)
             if config.commit_results:
                 commit_iteration(
-                    config, state_path, "reject", hyp_id, state.iteration,
+                    config, state_path, commit_status, hyp_id, state.iteration,
                     reason=result.reason,
                 )
             return result
@@ -2370,6 +2371,7 @@ def run_iteration(
         # beat the global champion → keep/success status mutates the global best
         # (record_best) and, after commit, advances the champion ref.
         decision_status = "success" if promo.status == "success" else "keep"
+        commit_status = decision_status
         reason = promo.reason
         state.record_best(hyp_id, cand_cer)
         if promo.status == "success":
@@ -2378,13 +2380,19 @@ def run_iteration(
         # in-set lineage head only: lineage_advance is pool-inert (portfolio.py)
         # and never touches the global champion / best — that is the C2 fix.
         decision_status = "lineage_advance"
+        commit_status = decision_status
         reason = lin.reason
     else:  # "repair" or "reset"
-        decision_status = "reject"
         reason = lin.reason
         rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
         if t.action == "reset":
+            # restore workspace to champion (a code change vs the lineage HEAD)
+            # → commit it as a checkpoint so the tree is clean next iter.
             gitops.restore_file_from_ref(repo_root, state.champion_ref, config.allowed_path)
+            commit_status = "reset"
+        else:
+            commit_status = "repair_rollback"  # repair: tree already == HEAD, no commit
+        decision_status = "reject"   # result/accounting status unchanged
 
     _persist_set_state(state, t.state)
     result = IterationResult(
@@ -2405,7 +2413,7 @@ def run_iteration(
     )
     state.save(state_path)
     if config.commit_results:
-        commit_iteration(config, state_path, decision_status, hyp_id,
+        commit_iteration(config, state_path, commit_status, hyp_id,
                          state.iteration, reason=reason)
         if t.action == "promote":
             head = _run_git(repo_root, ["rev-parse", "HEAD"]).stdout.strip()

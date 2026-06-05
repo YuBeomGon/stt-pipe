@@ -14,10 +14,13 @@ data/raw/
 # 모델 캐시
 .cache/
 
-# 실행 산출물 — `runs/_summary/` 만 tracked (HISTORY.md / REPORT.md / HOLDOUT.md
-# / JOB_DONE.lock), per-iter `runs/<hyp_id>/` 는 ignored.
-runs/*
-!runs/_summary/
+# 실행 산출물 — 전부 ignored. metadata(state/portfolio/decisions/candidate_meta/
+# HISTORY)는 append-only/atomic 파일로 디스크에 durable 하게 남고, git 에는 코드
+# checkpoint(verified code + promotion)만 커밋한다(phase1.5, HARNESS-REDESIGN §80).
+# resume 는 디스크 파일만으로 충분(load_or_init_state). 후보가 ignored runs/_summary/
+# 나 새 runs/<dir> 에 쓰는 poison 은 git 이 못 보므로 run_iteration 의 pre/post
+# 스냅샷 diff(snapshot_ignored_surface/diff_ignored_surface)로 탐지·제거한다.
+runs/
 notes/
 
 # `.claude/` 는 추적함 — Phase 3 가드 본문 (.claude.alt/ 와 swap 짝). swap 시

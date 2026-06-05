@@ -293,11 +293,15 @@ def test_run_iteration_rejects_and_rolls_back_summary_scope_violation(
     result = run_iteration(config, state, state_path, candidate, lambda _hyp: None)
 
     assert result.status == "reject"
+    # phase1.5: HISTORY.md is now an *ignored* file, so the snapshot guard removes
+    # the modified-poison file precisely (delete) rather than git-restoring its
+    # prior content (git cannot restore an ignored file). The injected text is
+    # gone and append_event recreates HISTORY.md with the reject narrative.
     history = (tmp_path / "runs/_summary/HISTORY.md").read_text(encoding="utf-8")
     assert "candidate injected text" not in history
-    assert original_history in history
     assert "candidate scope" in history
     assert not (tmp_path / "runs/_summary/poison.txt").exists()
+    _ = original_history  # original content not recoverable for an ignored file
 
 
 def test_run_iteration_rejects_when_candidate_writes_summary_during_verify(
@@ -355,11 +359,13 @@ def test_run_iteration_rejects_when_candidate_writes_summary_during_verify(
     assert (tmp_path / "baseline/target_cer.json").read_text(
         encoding="utf-8"
     ) == original_baseline
-    # HISTORY restored, then reject narrative appended
+    # phase1.5: HISTORY.md is ignored — the snapshot guard removes the modified-
+    # poison file (delete) and append_event recreates it with the reject narrative.
+    # The tracked baseline/ poison above is still git-restored (assertion holds).
     history = (tmp_path / "runs/_summary/HISTORY.md").read_text(encoding="utf-8")
     assert "poisoned by candidate during verify" not in history
-    assert original_history in history
     assert "verify 중 scope" in history
+    _ = original_history  # original content not recoverable for an ignored file
 
 
 def test_run_job_breaks_immediately_on_success(tmp_path: Path, monkeypatch) -> None:
@@ -513,6 +519,48 @@ def test_step1_decision_trace_committed_and_survives_next_iter(tmp_path: Path) -
         ["git", "status", "--porcelain"], cwd=tmp_path, capture_output=True, text=True
     ).stdout.strip()
     assert porcelain == "", f"dirty tree: {porcelain}"
+
+
+def test_commit_iteration_commits_code_only(tmp_path: Path) -> None:
+    """phase1.5: commit_iteration stages/commits ONLY workspace/transcribe.py,
+    and only for code-advancing statuses (keep/success/lineage_advance/reset).
+    Metadata is written to disk but never tracked; reject/abort commit nothing."""
+    from harness import runner
+    _init_repo(tmp_path)
+    config = RunnerConfig(job_id="job", repo_root=tmp_path, commit_results=True)
+    state_path = tmp_path / "runs/_summary/job_state.json"
+    HarnessState(job_id="job").save(state_path)
+
+    def _head_count() -> int:
+        r = subprocess.run(["git", "rev-list", "--count", "HEAD"],
+                           cwd=tmp_path, check=True, capture_output=True, text=True)
+        return int(r.stdout.strip())
+
+    base = _head_count()
+    # keep with a real code change → one commit, staging code only.
+    # _persist_decision only records when the iter dir exists (it reads
+    # runs/<hyp_id>/candidate.diff), so create it — the decisions file is then
+    # written to disk but, with runs/ ignored, never tracked.
+    (tmp_path / "runs/h1").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "runs/h1/candidate.diff").write_text(
+        "@@ @@\n+    return 'k'\n", encoding="utf-8")
+    (tmp_path / "workspace/transcribe.py").write_text(
+        "def transcribe(a, sr):\n    return 'k'\n", encoding="utf-8")
+    runner.commit_iteration(config, state_path, "keep", "h1", 1)
+    assert _head_count() == base + 1
+    files = subprocess.run(
+        ["git", "show", "--name-only", "--pretty=format:", "HEAD"],
+        cwd=tmp_path, check=True, capture_output=True, text=True).stdout.split()
+    assert files == ["workspace/transcribe.py"]   # metadata NOT in the commit
+
+    # reject → no commit (workspace unchanged from HEAD; runs/ ignored).
+    runner.commit_iteration(config, state_path, "reject", "h2", 2)
+    assert _head_count() == base + 1
+
+    # metadata files exist on disk but are NOT tracked.
+    decisions = tmp_path / "runs/_summary/job_decisions.jsonl"
+    assert decisions.is_file()
+    assert not _tracked(tmp_path, "runs/_summary/job_decisions.jsonl")
 
 
 def test_scope_violation_summary_poison_caught_by_snapshot(tmp_path: Path) -> None:
@@ -1190,36 +1238,23 @@ fingerprint: [language]
     assert meta["fingerprint"] == ["language"]
 
 
-def test_run_job_commits_aborted_state_when_commit_results(
+def test_run_job_aborts_with_durable_untracked_state_no_commit(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """F2: when --commit-results is on and the abort guard fires, the final
-    state file with status='aborted_format_reject' must be committed.
-    Otherwise the next job's ensure_worktree_ready sees runs/_summary/
-    <job>_state.json as a modified tracked file and refuses to start."""
+    """phase1.5: when the format-reject abort guard fires, the final state file
+    (status='aborted_format_reject') is durable on disk but NOT committed (runs/
+    is gitignored). The tree stays clean and the NEXT job's ensure_worktree_ready
+    is unaffected because the state file is never a tracked file. The old F2
+    abort-commit is obsolete."""
     _init_repo(tmp_path)
     config = RunnerConfig(
         job_id="job", repo_root=tmp_path, iterations=25, commit_results=True
     )
-
     from harness.runner import IterationResult
 
     def fake_iter(cfg, state, state_path):
         state.advance()
-        # Always emit format reject so abort fires at iter 5 (need 4 of 5).
-        # Each call must also commit something tracked or commit_iteration
-        # finds nothing staged. Touch state via save.
-        state.save(state_path)
-        # Stage + commit the per-iter reject so the abort commit at the end
-        # only has the state-status change left to commit.
-        subprocess.run(
-            ["git", "add", "runs/_summary/job_state.json"],
-            cwd=tmp_path, check=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", f"iter{state.iteration}: reject job_iter_{state.iteration:03d}"],
-            cwd=tmp_path, check=True, capture_output=True,
-        )
+        state.save(state_path)  # durable, untracked (runs/ ignored)
         return IterationResult(
             hyp_id=f"job_iter_{state.iteration:03d}",
             status="reject",
@@ -1233,18 +1268,23 @@ def test_run_job_commits_aborted_state_when_commit_results(
     state = run_job(config)
 
     assert state.status == "aborted_format_reject"
-    # The abort commit must exist at HEAD.
+    # state persisted on disk with the aborted status...
+    on_disk = HarnessState.load(tmp_path / "runs/_summary/job_state.json")
+    assert on_disk.status == "aborted_format_reject"
+    # ...but the state file is NOT tracked, and the tree is clean.
+    assert not _tracked(tmp_path, "runs/_summary/job_state.json")
+    porcelain = subprocess.run(
+        ["git", "status", "--porcelain"],  # no --ignored: tree must be clean
+        cwd=tmp_path, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert porcelain == "", f"worktree dirty after abort: {porcelain!r}"
+    # No 'abort' commit was created (HEAD is still the init commit).
     head_subject = subprocess.run(
         ["git", "log", "-1", "--pretty=%s"],
         cwd=tmp_path, check=True, capture_output=True, text=True,
     ).stdout.strip()
-    assert "abort format_reject" in head_subject, head_subject
-    # And the working tree must be clean (no leftover modified state file).
-    status = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=tmp_path, check=True, capture_output=True, text=True,
-    ).stdout
-    assert status == "", f"worktree dirty after abort commit: {status!r}"
+    assert "abort" not in head_subject
+    assert head_subject == "init"
 
 def test_harden_candidate_cmd_injects_flags_for_claude() -> None:
     hardened, added = _harden_candidate_cmd('claude -p')
