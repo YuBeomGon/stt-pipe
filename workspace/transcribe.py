@@ -19,7 +19,14 @@ candidate repeats less. The common case stays at the current greedy cost; only
 collapsed chunks pay extra, so runtime tracks the incumbent.
 
 Segmentation (silence-aligned chunks) and sliding ``<|startofprev|>`` priming
-are retained — they fixed coverage and are orthogonal to the decode strategy.
+are retained — they fixed coverage. This revision *fuses* the two channels that
+were previously independent: the per-chunk confidence from the return channel
+(``.scores`` + compression ratio) now gates the prompt-priming channel. Only a
+chunk whose decode cleared both gates is carried forward as ``<|startofprev|>``
+context; a low-confidence (substitution-prone) decode no longer pollutes the
+prime of its successors. The dominant error axis is substitution (≈59%) with
+healthy coverage, so suppressing error-propagation through the context channel
+targets that axis directly rather than coverage.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -116,13 +123,20 @@ def _compression_ratio(text: str) -> float:
     return len(data) / len(zlib.compress(data))
 
 
-def _decode_chunk(features, prompt, tokenizer) -> str:
+def _decode_chunk(features, prompt, tokenizer) -> tuple[str, bool]:
     """Decode one chunk, escalating to beam search only on a bad greedy pass.
 
     Reads the previously-discarded ``.scores`` return channel: Pass A is the
     cheap greedy decode, accepted iff its avg log-prob and compression ratio
     clear the gates. A failing chunk gets Pass B — beam search with explicit
     anti-repetition — and we keep whichever candidate repeats less.
+
+    Returns ``(text, confident)`` where ``confident`` is whether the *chosen*
+    candidate cleared both gates. transcribe() uses that flag to decide whether
+    this chunk's text is trustworthy enough to prime the next chunk — fusing the
+    return-channel confidence signal (family_004) with the prompt-priming
+    channel (family_003) so a low-confidence, substitution-prone decode is no
+    longer carried forward as context to corrupt its successors.
     """
     res_a = generate(
         features,
@@ -137,7 +151,7 @@ def _decode_chunk(features, prompt, tokenizer) -> str:
     cr_a = _compression_ratio(text_a)
 
     if score_a >= _LOGPROB_THRESH and cr_a <= _CR_THRESH:
-        return text_a
+        return text_a, True
 
     res_b = generate(
         features,
@@ -157,7 +171,14 @@ def _decode_chunk(features, prompt, tokenizer) -> str:
     # Prefer the candidate that repeats less; tie-break on higher confidence.
     rank_a = (cr_a, -score_a)
     rank_b = (cr_b, -score_b)
-    return text_a if rank_a <= rank_b else text_b
+    if rank_a <= rank_b:
+        chosen_text, chosen_score, chosen_cr = text_a, score_a, cr_a
+    else:
+        chosen_text, chosen_score, chosen_cr = text_b, score_b, cr_b
+    # This chunk reached escalation, so it is suspect; only flag it confident if
+    # the kept candidate now clears both gates (beam search may have recovered).
+    confident = chosen_score >= _LOGPROB_THRESH and chosen_cr <= _CR_THRESH
+    return chosen_text, confident
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -196,11 +217,17 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         else:
             prompt = list(sot_prefix)
 
-        text = _decode_chunk(features, prompt, tokenizer)
+        text, confident = _decode_chunk(features, prompt, tokenizer)
         if text:
             texts.append(text)
-            # Carry this chunk's text (tail only) as context for the next one.
-            ctx = tokenizer.encode(text, add_special_tokens=False)
-            prev_context_ids = ctx[-_MAX_CONTEXT_TOKENS:]
+            # Carry this chunk's text (tail only) as priming context for the
+            # next chunk ONLY if its decode cleared the confidence gates. A
+            # low-confidence chunk is exactly the one most likely to carry a
+            # substitution error; priming the successor with it would propagate
+            # that error. When unconfident we hold the last trusted context
+            # instead of overwriting it with suspect text.
+            if confident:
+                ctx = tokenizer.encode(text, add_special_tokens=False)
+                prev_context_ids = ctx[-_MAX_CONTEXT_TOKENS:]
 
     return " ".join(texts)
