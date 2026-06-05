@@ -42,6 +42,16 @@ _MIN_ADVANCE_SECONDS = 2.0
 
 _BEAM_SIZE = 5
 
+# Token-level repetition penalty on the beam. The parent (iter_030) stripped
+# its decode to a bare single beam pass (penalty defaulting to 1.0) to isolate
+# the pre-emphasis input effect, so on its spectrally-tilted input the beam can
+# still lock onto a self-repeating / locally-tempting wrong token — the
+# loop-substitution component of the dominant axis (sub 57%). iter_016 (the best
+# candidate, cer 0.1629) established ~1.1 suppresses exactly that path during
+# decode. It rides in **decoding_kwargs, orthogonal to the input-side
+# pre-emphasis the parent applies before processor(...).
+_REPETITION_PENALTY = 1.1
+
 # Pre-emphasis coefficient. The standard speech value (~0.97) is a full
 # +6 dB/octave high-shelf, but on this batch the noise floor sits very low
 # (rms_db_p05 ≈ -68..-82 dB): a steep high-pass lifts that high-frequency hiss
@@ -107,6 +117,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             [sot_tokens],
             beam_size=_BEAM_SIZE,
             sampling_temperature=0.0,
+            repetition_penalty=_REPETITION_PENALTY,
         )[0]
 
         token_ids = res.sequences_ids[0]
