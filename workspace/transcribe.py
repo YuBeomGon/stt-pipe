@@ -90,17 +90,24 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         ]
         batch = to_storage_view(np.stack(feats, axis=0))
 
-        # ABLATION: the beam_size=2 override is removed, dropping decode back to
-        # greedy (CT2's default beam_size=1). Beam search was originally added
-        # (iter_008/009) to fight the deletion axis on the blind-grid pipeline;
-        # silence-aware segmentation (iter_010) now owns coverage (length_ratio
-        # 0.94, dominant axis flipped to substitution), so the beam's original
-        # justification is gone. This tests whether it still pays for its ~2x
-        # cost now that segmentation, not search, supplies the coverage.
+        # REFINE on the greedy+segmentation best (iter_011): keep greedy decode
+        # (beam ablated, coverage owned by silence-aware cuts) and add a WIDE
+        # exact-cycle block. The parent's no_repeat_ngram_size=5 was scored in
+        # the coverage-starved blind-grid regime (length_ratio 0.65) where the
+        # ledger (iter_006/007) found ANY n-gram block net-negative — it traded
+        # away scarce coverage. That objection is regime-dependent: post-segmentation
+        # coverage is 0.94 and the dominant axis flipped to substitution, so the
+        # collateral block of natural recurring Korean grams no longer starves
+        # the window tail. Both focus files are repeated_text guard violations
+        # (clause-level loops, >=6 subword tokens), so n=6 still catches the real
+        # repetition-collapse loop while sparing the natural <=5-grams whose
+        # blocking would otherwise ADD substitutions on the clean files. Greedy
+        # is kept, so runtime is unchanged (ngram filtering is decode-cheap).
         results = generate(
             batch,
             [prompt_tokens] * len(batch_chunks),
             sampling_temperature=0.0,
+            no_repeat_ngram_size=6,
         )
 
         for r in results:
