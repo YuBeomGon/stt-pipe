@@ -42,13 +42,15 @@ _MIN_ADVANCE_SECONDS = 2.0
 
 _BEAM_SIZE = 5
 
-# Pre-emphasis coefficient. The standard speech-processing value (~0.97) applies
-# a first-order high-pass y[n] = x[n] - alpha*x[n-1], boosting energy above
-# ~1 kHz by roughly +6 dB/octave to undo the spectral tilt of the telephony
-# band-pass. This restores the high-frequency consonant cues a phone channel
-# attenuates — the cues whose loss drives phone-band substitution — without
-# touching the decode search at all.
-_PREEMPHASIS_ALPHA = 0.97
+# Pre-emphasis coefficient. The standard speech value (~0.97) is a full
+# +6 dB/octave high-shelf, but on this batch the noise floor sits very low
+# (rms_db_p05 ≈ -68..-82 dB): a steep high-pass lifts that high-frequency hiss
+# along with the consonant cues, which can manufacture substitutions instead of
+# resolving them (iter_029 regressed to 0.1854 at alpha=0.97). A milder alpha
+# applies a gentler (~+3 dB/octave) tilt — enough to restore some obstruent
+# contrast the telephony band-pass removed without amplifying the noise floor
+# into the encoder. This is the parent's same input-conditioning lever, tuned.
+_PREEMPHASIS_ALPHA = 0.5
 
 
 def _preemphasis(audio: np.ndarray, alpha: float) -> np.ndarray:
