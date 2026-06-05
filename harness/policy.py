@@ -27,6 +27,9 @@ class PolicyConfig:
     # 0.002 로 묶여 있던 탓에 Δ0.0004 같은 실제 개선이 버려져 정체가 일부 artifact
     # 였다. micro_bank 경계(0.002)는 그대로 두고 keep 만 낮춘다.
     keep_delta_eps: float = cfg.KEEP_DELTA_EPS
+    # In-set "worth cultivating" gate: a candidate worse than the lineage best
+    # by more than this factor is a dead end (close the set). SSOT: config.py.
+    lineage_dead_end_factor: float = cfg.LINEAGE_DEAD_END_FACTOR
     success_runtime_multiplier: float = 1.0
 
 
@@ -38,6 +41,56 @@ class Decision:
     delta_from_best: float | None
     threshold: float | None
     reason: str
+
+
+LineageStatus = Literal["advance", "hold", "dead_end"]
+
+
+@dataclass(frozen=True)
+class LineageDecision:
+    status: LineageStatus
+    candidate_cer: float
+    lineage_best_cer: float | None
+    delta: float | None
+    reason: str
+
+
+def decide_lineage_progress(
+    report: dict[str, Any],
+    lineage_best_cer: float | None,
+    config: PolicyConfig | None = None,
+) -> LineageDecision:
+    """In-set comparison (HARNESS-REDESIGN §86, §136): is this candidate worth
+    keeping as / advancing the lineage head?
+
+    - No lineage best yet (first scored candidate in the set) → ``advance`` and
+      seed the lineage, *even if it is worse than the global champion*. This is
+      the whole point: a 0.190 explore (champion 0.154) survives to be refined.
+    - Catastrophic (non-finite, or worse than lineage best by
+      ``config.lineage_dead_end_factor``) → ``dead_end``; close the set.
+    - Strict improvement over lineage best (Δ ≥ keep_delta_eps) → ``advance``.
+    - Otherwise → ``hold`` (no local gain; refine may try again until budget).
+    """
+    cfg_ = config or PolicyConfig()
+    cer = float(report["corpus_cer"])
+    if not math.isfinite(cer):
+        return LineageDecision("dead_end", cer, lineage_best_cer, None,
+                               f"non-finite corpus_cer: {cer!r}")
+    if lineage_best_cer is None:
+        return LineageDecision("advance", cer, None, None,
+                               "set seed (first lineage candidate)")
+    delta = lineage_best_cer - cer
+    factor = cfg_.lineage_dead_end_factor
+    if cer > lineage_best_cer * factor:
+        return LineageDecision(
+            "dead_end", cer, lineage_best_cer, delta,
+            f"catastrophic: {cer:.6f} > {lineage_best_cer:.6f}×{factor}",
+        )
+    if delta >= cfg_.keep_delta_eps:
+        return LineageDecision("advance", cer, lineage_best_cer, delta,
+                               f"lineage improvement Δ{delta:.6f}")
+    return LineageDecision("hold", cer, lineage_best_cer, delta,
+                           f"no lineage gain Δ{delta:.6f}")
 
 
 def improvement_threshold(
