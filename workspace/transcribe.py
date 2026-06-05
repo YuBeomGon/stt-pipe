@@ -1,45 +1,43 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-DIVERGE slot. The dominant error axis has flipped from coverage/substitution
-to **over-generation**: insertion 11%, hallucination 36%, repeated-text 36%.
-The decoder emits text that is not in the audio. The per-file diagnosis shows
-*where*: every ``hallucination_hit`` / ``repeated_text`` flag lands on a file
-with a high silence fraction (silence_ratio 0.19, 0.25, 0.13) and long silent
-gaps (longest_silence 22–34 s). This is Whisper's documented silence-
-hallucination failure — fed a 30 s window that is mostly silence, beam search
-still produces a fluent, confident, *invented* Korean sentence.
+DIVERGE slot. Every prior iteration ran a *single-shot* decode per window and
+read at most two return channels: ``sequences_ids`` (the text/timestamp tokens)
+and ``no_speech_prob`` (iter006). The decode result carries a third channel
+that no iteration has ever read — the per-sequence **score**, available when
+``generate(..., return_scores=True)`` is set. CT2 returns it length-normalised,
+so ``res.scores[0]`` is a usable proxy for the decoder's average log-prob over
+the window: a direct confidence signal for *how reliable this window's
+transcription is*, distinct from no_speech_prob (which asks "is this speech?"
+not "is this decode trustworthy?").
 
-No prompt/glossary/beam change can fix this, because the wrong text is emitted
-with high token likelihood; the signal that the window is empty lives in a
-**different return channel** that every prior iteration discarded.
+That score channel is exactly what OpenAI's reference Whisper uses for its
+**temperature-fallback** long-form policy, which no iteration here has built.
+The mechanism this slot introduces replaces the single-shot decode with an
+adaptive per-window loop:
 
-`frozen.asr_backend.generate` forwards ``**decoding_kwargs`` straight to
-``ctranslate2.models.Whisper.generate``, whose docstring lists
-``return_no_speech_prob``. With that flag set, each result object carries a
-``no_speech_prob`` field — the decoder's own probability that the window is
-non-speech (mass on the ``<|nospeech|>`` token). This is a *gate*, not a
-coverage lever: when a window scores high no-speech, we drop its decoded text
-rather than splice an invented sentence into the transcript.
+  - decode at temperature 0.0 with beam search (the high-precision attempt);
+  - score the result on two signals the score channel makes available — the
+    length-normalised avg log-prob (``res.scores[0]``) and the gzip
+    *compression ratio* of the emitted text (a degenerate, repeated, or
+    hallucinated window compresses far more than natural speech);
+  - if either signal flags the decode as untrustworthy (avg log-prob too low,
+    or compression ratio too high), re-decode the *same* window at a higher
+    sampling temperature and try again, walking a temperature schedule;
+  - keep the best-scoring attempt seen if none clears the gate.
 
-So the mechanism this iteration introduces is a **no-speech gate** on the
-decode return channel:
-
-  - decode each window with ``return_no_speech_prob=True``;
-  - if ``no_speech_prob`` exceeds a threshold, emit nothing for that window
-    and advance by a fixed hop (the window held no speech to transcribe);
-  - otherwise emit the text and advance content-adaptively via the timestamp
-    channel as before.
-
-We also drop the static glossary prompt: it biased the language prior (a
-substitution lever) but does nothing for over-generation, and a non-empty
-``<|startofprev|>`` prefix actively *encourages* the decoder to keep
-generating on silence. The bare SOT prompt gives the no-speech token its
-cleanest shot at winning the gate.
+This is a fundamentally different decode strategy than the incumbent's fixed
+beam+no_speech gate: instead of a single irreversible decode, each window gets
+multiple attempts and the score channel arbitrates. It attacks the residual
+hallucination (0.18) / repeated-text (0.27) directly via the compression gate,
+and the low-confidence windows — where phone-band substitution concentrates —
+get a second, higher-entropy shot to escape a confidently-wrong beam path.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
+
+import zlib
 
 import numpy as np
 
@@ -52,15 +50,26 @@ _WINDOW_SECONDS = 30.0
 _TIME_PRECISION = 0.02
 _MIN_ADVANCE_SECONDS = 2.0
 
-# No-speech gate. CT2 reports no_speech_prob in [0, 1]; on the diagnosis
-# files the hallucinated windows are the silence-dominated ones. A high
-# threshold keeps real speech (which scores low) while dropping windows the
-# decoder itself flags as non-speech, where its emitted text is invented.
-_NO_SPEECH_THRESHOLD = 0.6
+# Temperature-fallback schedule (OpenAI Whisper's robustness policy). The first
+# attempt is beam search at T=0 (precision); each fallback raises entropy so the
+# decoder can escape a degenerate or confidently-wrong path.
+_TEMPERATURE_SCHEDULE = (0.0, 0.2, 0.4, 0.6, 0.8)
 
-# When a window is gated as non-speech we cannot trust its timestamp tokens to
-# tell us how far to advance, so we hop a fixed amount through the silence.
-_SILENCE_HOP_SECONDS = 25.0
+# Gate thresholds read off the score channel. avg log-prob below the floor =>
+# the decoder is unsure of this window; gzip compression ratio above the ceiling
+# => the text is repetitive/hallucinated (natural speech ~1.3-1.8, degenerate
+# loops >> 2.4). Either condition triggers a higher-temperature retry.
+_LOGPROB_THRESHOLD = -1.0
+_COMPRESSION_RATIO_THRESHOLD = 2.4
+
+_BEAM_SIZE = 5
+
+
+def _compression_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    data = text.encode("utf-8")
+    return len(data) / len(zlib.compress(data))
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -89,22 +98,47 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
-        res = generate(
-            features,
-            [sot_tokens],
-            beam_size=5,
-            sampling_temperature=0.0,
-            return_no_speech_prob=True,
-        )[0]
+        # Temperature-fallback loop. Decode the window, score it off the score
+        # channel, and re-decode hotter until a trustworthy attempt is found or
+        # the schedule is exhausted (then keep the best-scoring attempt).
+        best = None  # (avg_logprob, res)
+        chosen = None
+        for temp in _TEMPERATURE_SCHEDULE:
+            if temp == 0.0:
+                res = generate(
+                    features,
+                    [sot_tokens],
+                    beam_size=_BEAM_SIZE,
+                    sampling_temperature=0.0,
+                    return_scores=True,
+                )[0]
+            else:
+                res = generate(
+                    features,
+                    [sot_tokens],
+                    beam_size=1,
+                    sampling_temperature=temp,
+                    return_scores=True,
+                )[0]
 
-        # The no-speech gate: trust the decoder's own emptiness estimate over
-        # its emitted tokens. On a non-speech window the text is hallucinated.
-        no_speech_prob = getattr(res, "no_speech_prob", 0.0)
-        if no_speech_prob >= _NO_SPEECH_THRESHOLD:
-            cursor += max(1, int(_SILENCE_HOP_SECONDS * sr))
-            continue
+            avg_logprob = res.scores[0] if res.scores else float("-inf")
 
-        token_ids = res.sequences_ids[0]
+            token_ids = res.sequences_ids[0]
+            text_tokens = [t for t in token_ids if t < timestamp_begin]
+            text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
+            comp_ratio = _compression_ratio(text)
+
+            if best is None or avg_logprob > best[0]:
+                best = (avg_logprob, res)
+
+            if avg_logprob >= _LOGPROB_THRESHOLD and comp_ratio <= _COMPRESSION_RATIO_THRESHOLD:
+                chosen = res
+                break
+
+        if chosen is None:
+            chosen = best[1]
+
+        token_ids = chosen.sequences_ids[0]
         text_tokens = [t for t in token_ids if t < timestamp_begin]
         ts_tokens = [t for t in token_ids if t >= timestamp_begin]
 
