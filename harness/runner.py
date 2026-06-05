@@ -2410,40 +2410,108 @@ def run_iteration(
                       hyp_id=hyp_id)
     t = step_set(s, outcome, SetBudget(config.max_repairs, config.max_refines))
 
-    # Determine the committed status + champion mutations from the action, but
-    # rollback/restore (working-tree changes) and the actual commits happen
-    # AFTER state.save — commit_iteration stages state_path, which must exist on
-    # disk first (mirrors the legacy path's save-then-commit ordering).
+    # F3/Missed#1 restructure: for a `promote` the serialized gate runs BETWEEN a
+    # code-only PRE-GATE commit and the SINGLE decision-persist. Nothing is banked
+    # (record_best / global_best / state.status="success") and no decision row is
+    # written until the gate WINS. `final_status` carries the post-gate outcome and
+    # is persisted exactly ONCE at the end via a single commit_iteration call. The
+    # working tree + HEAD are reconciled per the (re-)decided action so the next
+    # ensure_worktree_ready always sees a clean tree (Override 1 + Override 2).
     if t.action == "promote":
-        # provisionally a champion beat → record_best now; the serialized gate
-        # (post-save) re-validates against the LIVE champion and does the ref CAS.
-        # If the gate LOSES, the post-save block re-decides with beats_champion=False.
-        decision_status = "success" if promo.status == "success" else "keep"
-        commit_status = decision_status
         reason = promo.reason
-        state.record_best(hyp_id, cand_cer)
-        if promo.status == "success":
-            state.status = "success"
+        eff_state = t.state
+        if config.commit_results:
+            from harness import promotion as promo_mod
+            # 1) commit the candidate CODE as the lineage head BEFORE the gate —
+            #    code-only (NO _persist_decision), so the gate gets a source_commit
+            #    and HEAD == candidate without banking any decision. A promote
+            #    candidate always changed allowed_path vs HEAD, so this commit lands.
+            pre_gate_head = _run_git(repo_root, ["rev-parse", "HEAD"]).stdout.strip()
+            _run_git(repo_root, ["add", "--", config.allowed_path.as_posix()])
+            if _run_git(repo_root, ["diff", "--cached", "--quiet"],
+                        check=False).returncode != 0:
+                _run_git(repo_root, ["commit", "-m",
+                                     f"iter{state.iteration}: lineage(pre-gate) {hyp_id}"])
+            source_commit = _run_git(repo_root, ["rev-parse", "HEAD"]).stdout.strip()
+            main_repo = _main_repo_root(config)
+            pres = promo_mod.try_promote(
+                main_repo, job_id=config.job_id, source_commit=source_commit,
+                rel_path=config.allowed_path, candidate_report=verify_result.report,
+                baseline=baseline, sigma=noise.get("sigma"),
+                sigma_is_provisional=bool(noise.get("is_provisional")),
+                champion_ref=state.champion_ref, summary_dir=config.summary_dir,
+                absolute_delta_fallback=config.absolute_delta_fallback,
+            )
+            if pres.status == promo_mod.PROMOTE:
+                # WIN: champion advanced via the gate CAS. Bank ONLY now.
+                state.record_best(hyp_id, cand_cer)
+                final_status = "success" if promo.status == "success" else "keep"
+                if promo.status == "success":
+                    state.status = "success"
+                reason = promo.reason
+                eff_state = t.state
+            else:
+                # LOST race: re-decide the set step with beats_champion=False —
+                # nothing was banked (the pre-gate commit is code-only), so
+                # global_best/best_cer are clean. Reconcile HEAD == worktree.
+                outcome2 = Outcome(verify_ok=True, lineage_status=lin.status,
+                                   cer=cand_cer, beats_champion=False, hyp_id=hyp_id)
+                t2 = step_set(s, outcome2,
+                              SetBudget(config.max_repairs, config.max_refines))
+                eff_state = t2.state
+                reason = lin.reason
+                if t2.action == "advance":
+                    # candidate stays the lineage head — tree already clean, no-op.
+                    final_status = "lineage_advance"
+                elif t2.action == "reset":
+                    # close the set: restore champion to the worktree; the single
+                    # commit_iteration("reset") below commits it (HEAD==worktree).
+                    rollback_paths(repo_root, [
+                        st for st in candidate_owned_statuses(git_status(repo_root), config)
+                        if st.untracked])
+                    gitops.restore_file_from_ref(
+                        repo_root, state.champion_ref, config.allowed_path)
+                    final_status = "reset"
+                else:  # "repair": drop the candidate (current HEAD) back to the
+                    # PRIOR lineage head — Override 2: rewind HEAD~1, NOT
+                    # restore_lineage_head (which would keep the candidate HEAD).
+                    if source_commit != pre_gate_head:
+                        gitops.rewind_to_prior_lineage_head(repo_root)
+                    final_status = "repair_rollback"
+        else:
+            # No commit_results (legacy/test path): no gate runs. Preserve prior
+            # behavior — bank the candidate as best, no git ops.
+            state.record_best(hyp_id, cand_cer)
+            final_status = "success" if promo.status == "success" else "keep"
+            if promo.status == "success":
+                state.status = "success"
     elif t.action == "advance":
         # in-set lineage head only: lineage_advance is pool-inert (portfolio.py)
         # and never touches the global champion / best — that is the C2 fix.
-        decision_status = "lineage_advance"
-        commit_status = decision_status
+        final_status = "lineage_advance"
         reason = lin.reason
+        eff_state = t.state
     else:  # "repair" or "reset"
         reason = lin.reason
+        eff_state = t.state
         if t.action == "reset":
             rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
             gitops.restore_file_from_ref(repo_root, state.champion_ref, config.allowed_path)
-            commit_status = "reset"
+            final_status = "reset"
         else:  # "repair"
             gitops.restore_lineage_head(repo_root, config.allowed_path)
             rollback_paths(repo_root, [st for st in candidate_owned_statuses(
                 git_status(repo_root), config) if st.untracked])
-            commit_status = "repair_rollback"
-        decision_status = "reject"   # result/accounting status unchanged
+            final_status = "repair_rollback"
 
-    _persist_set_state(state, t.state)
+    # Map final_status → IterationResult/accounting status: keep/success and
+    # lineage_advance stay; reset/repair_rollback collapse to "reject".
+    decision_status = (
+        final_status if final_status in ("keep", "success", "lineage_advance")
+        else "reject"
+    )
+
+    _persist_set_state(state, eff_state)
     result = IterationResult(
         hyp_id=hyp_id,
         status=decision_status,
@@ -2462,48 +2530,12 @@ def run_iteration(
     )
     state.save(state_path)
     if config.commit_results:
-        commit_iteration(config, state_path, commit_status, hyp_id,
+        # ONE decision row per iter with the FINAL post-gate status. For reset this
+        # also commits the restored champion (tree != HEAD); for the promote-WIN /
+        # lost-race-advance cases the pre-gate / candidate commit already == HEAD so
+        # the code commit is a no-op and only _persist_decision runs.
+        commit_iteration(config, state_path, final_status, hyp_id,
                          state.iteration, reason=reason)
-        if t.action == "promote":
-            from harness import promotion as promo_mod
-            source_commit = _run_git(repo_root, ["rev-parse", "HEAD"]).stdout.strip()
-            main_repo = _main_repo_root(config)
-            pres = promo_mod.try_promote(
-                main_repo, job_id=config.job_id, source_commit=source_commit,
-                rel_path=config.allowed_path, candidate_report=verify_result.report,
-                baseline=baseline, sigma=noise.get("sigma"),
-                sigma_is_provisional=bool(noise.get("is_provisional")),
-                champion_ref=state.champion_ref, summary_dir=config.summary_dir,
-                absolute_delta_fallback=config.absolute_delta_fallback,
-            )
-            if pres.status == promo_mod.PROMOTE:
-                # champion advanced by the gate; record_best already done in the
-                # promote-decision block above.
-                pass
-            else:
-                # LOST race (C2 fix): do NOT mutate the closed Transition. Re-decide
-                # the set step with beats_champion=False — the candidate is verify-OK
-                # and may still improve the lineage, so step_set keeps it as the
-                # lineage head (advance/hold) and the set continues. The candidate
-                # stays committed on the job branch (it is the new lineage head).
-                outcome2 = Outcome(verify_ok=True, lineage_status=lin.status,
-                                   cer=cand_cer, beats_champion=False, hyp_id=hyp_id)
-                t2 = step_set(s, outcome2,
-                              SetBudget(config.max_repairs, config.max_refines))
-                _persist_set_state(state, t2.state)
-                if t2.action in ("repair", "reset"):
-                    # the no-longer-champion-beating candidate is not even a local
-                    # gain → roll back to lineage head (repair) / champion (reset).
-                    if t2.action == "reset":
-                        rollback_paths(repo_root, candidate_owned_statuses(
-                            git_status(repo_root), config))
-                        gitops.restore_file_from_ref(
-                            repo_root, state.champion_ref, config.allowed_path)
-                    else:
-                        gitops.restore_lineage_head(repo_root, config.allowed_path)
-                        rollback_paths(repo_root, [st for st in candidate_owned_statuses(
-                            git_status(repo_root), config) if st.untracked])
-                state.save(state_path)
     return result
 
 

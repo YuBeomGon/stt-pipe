@@ -2208,3 +2208,191 @@ def test_stub_start_no_champion_cer_first_candidate_promotes(tmp_path):
         "def transcribe(a, sr):\n    return 'STUBWIN'")
     rows = [l for l in mp.read_text().splitlines() if l.strip()]
     assert any(json.loads(r)["job_id"] == "job" for r in rows)
+
+
+# ── Task 3: restructured set-path promote arm (F3 + Missed#1) ──────────────
+
+def _run_set_iter(tmp_path, *, cand_body, cer, state, premap=None,
+                  main_repo=None, set_budget=4, max_repairs=2, max_refines=3):
+    """Drive one set-path run_iteration in tmp_path with a champion ref. Returns
+    (cfg, state_path). premap=text seeds promotion_map.jsonl before the iter."""
+    import subprocess
+    from harness import gitops, runner
+    from harness.runner import RunnerConfig
+    from harness.verify import VerifyResult
+    gitops.ensure_champion_ref(tmp_path, "champion")
+    if premap is not None:
+        mp = tmp_path / "runs/_summary/promotion_map.jsonl"
+        mp.parent.mkdir(parents=True, exist_ok=True)
+        mp.write_text(premap, encoding="utf-8")
+    cfg_ = RunnerConfig(job_id="job", repo_root=tmp_path,
+                        main_repo_root=main_repo or tmp_path,
+                        set_budget=set_budget, max_repairs=max_repairs,
+                        max_refines=max_refines, commit_results=True,
+                        candidate_cmd=None)
+    state_path = tmp_path / "runs/_summary/job_state.json"
+
+    def candidate(_prompt, out_dir):
+        (tmp_path / "workspace/transcribe.py").write_text(cand_body, encoding="utf-8")
+        _write_valid_meta(out_dir)
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    def verifier(hyp_id):
+        report = {"corpus_cer": cer, "total_inference_time_s": 90.0}
+        # mirror real verify: persist score_report.json so _persist_decision can
+        # mirror the portfolio (global_best/near_best).
+        out_dir = tmp_path / "runs" / hyp_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "score_report.json").write_text(json.dumps(report), encoding="utf-8")
+        return VerifyResult(ok=True, hyp_id=hyp_id, out_dir=out_dir,
+                            report=report, per_file=[])
+
+    runner.run_iteration(cfg_, state, state_path,
+                         candidate_func=candidate, verify_func=verifier)
+    return cfg_, state_path
+
+
+def _clean(tmp_path) -> bool:
+    import subprocess
+    out = subprocess.run(["git", "status", "--porcelain"], cwd=tmp_path,
+                         check=True, capture_output=True, text=True).stdout
+    return out.strip() == ""
+
+
+def _decision_rows(tmp_path, iteration):
+    """Return all decisions.jsonl rows for the given iteration."""
+    p = tmp_path / "runs/_summary/job_decisions.jsonl"
+    if not p.is_file():
+        return []
+    rows = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        if rec.get("iter") == iteration:
+            rows.append(rec)
+    return rows
+
+
+@pytest.mark.worktree
+@pytest.mark.promotion
+def test_set_win_records_best_and_clean_tree(tmp_path):
+    """WIN: champion advances via the gate CAS, global_best/best_cer update, tree
+    clean, next ensure_worktree_ready passes, and exactly ONE decisions.jsonl row
+    is written for the iter carrying the final keep/success status (Override 1)."""
+    from harness import gitops
+    from harness.runner import RunnerConfig, ensure_worktree_ready
+    from harness.state import HarnessState
+    _init_repo(tmp_path)
+    state = HarnessState(job_id="job", best_cer=0.20, best_hyp_id="champ")
+    cfg_, _ = _run_set_iter(tmp_path, cand_body="def t():\n return 'W'\n",
+                            cer=0.15, state=state)
+    assert state.best_cer == 0.15                    # global best advanced ONLY on win
+    champ = gitops.read_ref(tmp_path, "refs/heads/champion")
+    assert champ is not None
+    assert _clean(tmp_path)
+    ensure_worktree_ready(RunnerConfig(job_id="job", repo_root=tmp_path,
+                                       set_budget=4))   # no crash
+    pf = json.loads((tmp_path / "runs/_summary/job_portfolio.json").read_text())
+    assert pf["global_best"] == "job_iter_001"
+    # Override 1: exactly one decisions row for this iter, final status keep/success.
+    rows = _decision_rows(tmp_path, 1)
+    assert len(rows) == 1
+    assert rows[0]["final_decision"] in ("keep", "success")
+
+
+@pytest.mark.worktree
+@pytest.mark.promotion
+def test_set_lost_race_advance_does_not_bank_loser(tmp_path):
+    """LOSE→advance: candidate beats local best (0.20) so step_set keeps it as the
+    lineage head, but it lost the live gate (peer 0.10). best_cer/global_best must
+    NOT be the lost candidate; tree clean."""
+    from harness.runner import RunnerConfig, ensure_worktree_ready
+    from harness.state import HarnessState
+    _init_repo(tmp_path)
+    state = HarnessState(job_id="job", best_cer=0.20, best_hyp_id="champ")
+    cfg_, _ = _run_set_iter(
+        tmp_path, cand_body="def t():\n return 'LATE'\n", cer=0.15, state=state,
+        premap=json.dumps({"job_id": "peer", "cer": 0.10,
+                           "champion_commit": "dead"}) + "\n")
+    assert "LATE" in (tmp_path / "workspace/transcribe.py").read_text()
+    assert state.set_phase not in ("idle", "closed")          # set alive
+    assert state.best_cer == 0.20                              # NOT the loser 0.15
+    assert state.best_hyp_id == "champ"
+    assert _clean(tmp_path)
+    pf = json.loads((tmp_path / "runs/_summary/job_portfolio.json").read_text())
+    assert pf.get("global_best") != "job_iter_001"            # loser not banked
+    # one decisions row, final status lineage_advance (pool-inert).
+    rows = _decision_rows(tmp_path, 1)
+    assert len(rows) == 1
+    assert rows[0]["final_decision"] == "lineage_advance"
+    ensure_worktree_ready(RunnerConfig(job_id="job", repo_root=tmp_path, set_budget=4))
+
+
+@pytest.mark.worktree
+@pytest.mark.promotion
+def test_set_lost_race_reset_commits_champion_clean_tree(tmp_path):
+    """LOSE→reset (refine budget exhausted): champion restored AND committed so
+    HEAD==worktree==champion (clean) — the F3 crash scenario."""
+    from harness.runner import RunnerConfig, ensure_worktree_ready
+    from harness.state import HarnessState
+    _init_repo(tmp_path)
+    # an in-refine set with refines_used at the budget edge: a champion-beating
+    # candidate that LOSES the gate → step_set(refine, beats=False) → reset.
+    state = HarnessState(job_id="job", best_cer=0.20, best_hyp_id="champ",
+                         set_id=1, set_phase="refine", set_best_cer=0.16,
+                         set_best_hyp_id="prev", set_refines_used=2)
+    cfg_, _ = _run_set_iter(
+        tmp_path, cand_body="def t():\n return 'LOSE'\n", cer=0.15, state=state,
+        max_refines=3,
+        premap=json.dumps({"job_id": "peer", "cer": 0.10,
+                           "champion_commit": "dead"}) + "\n")
+    assert state.set_phase == "idle"                          # set closed (reset)
+    assert state.best_cer == 0.20                             # loser not banked
+    assert _clean(tmp_path)                                   # F3: HEAD==worktree
+    ensure_worktree_ready(RunnerConfig(job_id="job", repo_root=tmp_path, set_budget=4))
+
+
+@pytest.mark.worktree
+@pytest.mark.promotion
+def test_set_lost_race_repair_rewinds_to_prior_head(tmp_path):
+    """LOSE→repair: the candidate (committed as a pre-gate code checkpoint HEAD) is
+    rewound to the prior lineage head; HEAD==worktree==prior head, clean. Triggered
+    by a 'hold' candidate that beat local best in-process but lost the live gate."""
+    import subprocess
+    from harness import gitops
+    from harness.runner import RunnerConfig, ensure_worktree_ready
+    from harness.state import HarnessState
+
+    def _git(root, *a):
+        return subprocess.run(["git", *a], cwd=root, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    _init_repo(tmp_path)
+    gitops.ensure_champion_ref(tmp_path, "champion")
+    # seed a lineage head commit (the prior head) so HEAD~1 exists distinct from
+    # champion: commit a lineage_advance manually.
+    (tmp_path / "workspace/transcribe.py").write_text(
+        "def t():\n return 'PRIOR'\n", encoding="utf-8")
+    _git(tmp_path, "add", "--", "workspace/transcribe.py")
+    _git(tmp_path, "commit", "-qm", "iter0: lineage_advance prior")
+    prior_head = _git(tmp_path, "rev-parse", "HEAD")
+    prior_body = (tmp_path / "workspace/transcribe.py").read_text()
+
+    # refine state with a lineage best EQUAL to the incoming cer → 'hold'
+    # (no local gain) but the candidate beats the local best in-process; the live
+    # gate (peer 0.10) loses → step_set(refine, hold, beats=False) → repair.
+    state = HarnessState(job_id="job", best_cer=0.20, best_hyp_id="champ",
+                         set_id=1, set_phase="refine", set_best_cer=0.16,
+                         set_best_hyp_id="prev", set_refines_used=0)
+    _run_set_iter(
+        tmp_path, cand_body="def t():\n return 'HOLDCAND'\n", cer=0.16, state=state,
+        max_refines=3,
+        premap=json.dumps({"job_id": "peer", "cer": 0.10,
+                           "champion_commit": "dead"}) + "\n")
+    assert _git(tmp_path, "rev-parse", "HEAD") == prior_head      # rewound
+    assert (tmp_path / "workspace/transcribe.py").read_text() == prior_body
+    assert _clean(tmp_path)
+    assert state.best_cer == 0.20                                 # loser not banked
+    ensure_worktree_ready(RunnerConfig(job_id="job", repo_root=tmp_path, set_budget=4))
