@@ -71,18 +71,6 @@ _BEAM_SIZE = 5
 # the dominant substitution axis (and the two repeated_text focus files).
 _REPETITION_PENALTY = 1.1
 
-# No-speech gate (COMPOSE: family_006's no_speech_prob return channel grafted
-# onto this score/compression temperature-fallback loop). return_no_speech_prob
-# makes each decode carry the decoder's own probability mass on <|nospeech|> —
-# a signal ORTHOGONAL to the score channel: avg_logprob/compression score "is
-# this decode degenerate?" but cannot tell a fluent INVENTED silence sentence
-# from real speech, whereas no_speech_prob can. On the two hallucination_hit
-# focus files (longest_silence 22-34 s) a 30 s window can be mostly silence yet
-# still decode a confident wrong Korean sentence; when no_speech_prob clears the
-# threshold we drop the window's text rather than splice the invention in.
-# OpenAI's reference long-form policy uses 0.6.
-_NO_SPEECH_THRESHOLD = 0.6
-
 
 def _compression_ratio(text: str) -> float:
     if not text:
@@ -131,7 +119,6 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
                     sampling_temperature=0.0,
                     repetition_penalty=_REPETITION_PENALTY,
                     return_scores=True,
-                    return_no_speech_prob=True,
                 )[0]
             else:
                 res = generate(
@@ -141,7 +128,6 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
                     sampling_temperature=temp,
                     repetition_penalty=_REPETITION_PENALTY,
                     return_scores=True,
-                    return_no_speech_prob=True,
                 )[0]
 
             avg_logprob = res.scores[0] if res.scores else float("-inf")
@@ -170,15 +156,8 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         text_tokens = [t for t in token_ids if t < timestamp_begin]
         ts_tokens = [t for t in token_ids if t >= timestamp_begin]
 
-        # No-speech gate: the chosen decode may be a fluent, confident
-        # INVENTION over a mostly-silent window (the hallucination_hit failure on
-        # the long-silence focus files). no_speech_prob — a return channel the
-        # score/compression gate above cannot substitute for — flags exactly that
-        # case, so drop the text rather than splice the invented sentence in.
-        no_speech_prob = getattr(chosen, "no_speech_prob", 0.0)
-
         text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
-        if text and no_speech_prob < _NO_SPEECH_THRESHOLD:
+        if text:
             pieces.append(text)
 
         advance_seconds = _WINDOW_SECONDS
