@@ -1,43 +1,33 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-DIVERGE slot. Every prior iteration ran a *single-shot* decode per window and
-read at most two return channels: ``sequences_ids`` (the text/timestamp tokens)
-and ``no_speech_prob`` (iter006). The decode result carries a third channel
-that no iteration has ever read — the per-sequence **score**, available when
-``generate(..., return_scores=True)`` is set. CT2 returns it length-normalised,
-so ``res.scores[0]`` is a usable proxy for the decoder's average log-prob over
-the window: a direct confidence signal for *how reliable this window's
-transcription is*, distinct from no_speech_prob (which asks "is this speech?"
-not "is this decode trustworthy?").
+DIVERGE slot. Every prior input-side iteration (iter_018-021) conditioned only
+the *gain* of the waveform: a scalar multiply to hit an RMS/peak target. None
+ever touched its *spectrum*. This iteration introduces a fundamentally
+different input-conditioning axis — **pre-emphasis spectral shaping** — and
+removes the entire temperature-fallback / MBR decode machinery the incumbent
+carried, decoding each window with a single clean beam pass instead.
 
-That score channel is exactly what OpenAI's reference Whisper uses for its
-**temperature-fallback** long-form policy, which no iteration here has built.
-The mechanism this slot introduces replaces the single-shot decode with an
-adaptive per-window loop:
+Motivation from the dominant axis. The error mix is 57% substitution with a
+healthy length_ratio (0.96), so the headroom is in *what* gets mis-recognised,
+not coverage. This is call-center audio: a telephony channel band-limits the
+signal to roughly 300-3400 Hz, which attenuates precisely the high-frequency
+energy (fricative/affricate noise bursts, stop releases) that distinguishes
+Korean obstruents — ㅅ/ㅆ, ㅈ/ㅊ, ㄱ/ㅋ, plosive vs aspirated. A decoder starved
+of those cues falls back on its language prior and substitutes a
+phonetically-adjacent word: the loop-substitution failure on phone-band audio.
 
-  - decode at temperature 0.0 with beam search (the high-precision attempt);
-  - score the result on two signals the score channel makes available — the
-    length-normalised avg log-prob (``res.scores[0]``) and the gzip
-    *compression ratio* of the emitted text (a degenerate, repeated, or
-    hallucinated window compresses far more than natural speech);
-  - if either signal flags the decode as untrustworthy (avg log-prob too low,
-    or compression ratio too high), re-decode the *same* window at a higher
-    sampling temperature and try again, walking a temperature schedule;
-  - keep the best-scoring attempt seen if none clears the gate.
-
-This is a fundamentally different decode strategy than the incumbent's fixed
-beam+no_speech gate: instead of a single irreversible decode, each window gets
-multiple attempts and the score channel arbitrates. It attacks the residual
-hallucination (0.18) / repeated-text (0.27) directly via the compression gate,
-and the low-confidence windows — where phone-band substitution concentrates —
-get a second, higher-entropy shot to escape a confidently-wrong beam path.
+A first-order pre-emphasis filter ``y[n] = x[n] - alpha * x[n-1]`` is the
+classical fix — a +6 dB/octave high-shelf that restores the spectral tilt the
+phone channel removed, applied to the raw np.ndarray *before* the frozen
+WhisperProcessor's fixed mel extraction (which only normalises log-magnitude
+and never compensates spectral tilt). This is orthogonal to every decode knob
+in the ledger and to the gain transforms of iter_018-021: it changes the
+acoustic evidence the encoder receives, not how the decoder searches over it.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
-
-import zlib
 
 import numpy as np
 
@@ -50,33 +40,36 @@ _WINDOW_SECONDS = 30.0
 _TIME_PRECISION = 0.02
 _MIN_ADVANCE_SECONDS = 2.0
 
-# Temperature-fallback schedule (OpenAI Whisper's robustness policy). The first
-# attempt is beam search at T=0 (precision); each fallback raises entropy so the
-# decoder can escape a degenerate or confidently-wrong path.
-_TEMPERATURE_SCHEDULE = (0.0, 0.2, 0.4, 0.6, 0.8)
-
-# Gate thresholds read off the score channel. avg log-prob below the floor =>
-# the decoder is unsure of this window; gzip compression ratio above the ceiling
-# => the text is repetitive/hallucinated (natural speech ~1.3-1.8, degenerate
-# loops >> 2.4). Either condition triggers a higher-temperature retry.
-_LOGPROB_THRESHOLD = -1.0
-_COMPRESSION_RATIO_THRESHOLD = 2.4
-
 _BEAM_SIZE = 5
 
-# Gentle token-level repetition penalty (CT2 generate kwarg, never exercised on
-# this lineage). Whisper's standard ~1.1 setting nudges the beam off a
-# self-repeating degenerate path one token at a time without distorting natural
-# Korean morpheme repetition, attacking the confident-wrong-loop component of
-# the dominant substitution axis (and the two repeated_text focus files).
-_REPETITION_PENALTY = 1.1
+# Pre-emphasis coefficient. The standard speech-processing value (~0.97) applies
+# a first-order high-pass y[n] = x[n] - alpha*x[n-1], boosting energy above
+# ~1 kHz by roughly +6 dB/octave to undo the spectral tilt of the telephony
+# band-pass. This restores the high-frequency consonant cues a phone channel
+# attenuates — the cues whose loss drives phone-band substitution — without
+# touching the decode search at all.
+_PREEMPHASIS_ALPHA = 0.97
 
 
-def _compression_ratio(text: str) -> float:
-    if not text:
-        return 0.0
-    data = text.encode("utf-8")
-    return len(data) / len(zlib.compress(data))
+def _preemphasis(audio: np.ndarray, alpha: float) -> np.ndarray:
+    """First-order pre-emphasis high-pass; preserves length, RMS-rescaled.
+
+    Pre-emphasis lowers broadband RMS (it removes low-frequency energy), so we
+    restore the original RMS afterwards to keep the waveform inside the same
+    dynamic range the fixed mel normalisation expects — the spectral *shape*
+    is what changes, not the overall level.
+    """
+    if audio.shape[0] < 2:
+        return audio
+    filtered = np.empty_like(audio)
+    filtered[0] = audio[0]
+    filtered[1:] = audio[1:] - alpha * audio[:-1]
+
+    orig_rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)))
+    new_rms = float(np.sqrt(np.mean(filtered.astype(np.float64) ** 2)))
+    if new_rms > 1e-8:
+        filtered = filtered * (orig_rms / new_rms)
+    return filtered.astype(np.float32)
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -84,6 +77,8 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     tokenizer = processor.tokenizer
 
     audio = np.asarray(audio, dtype=np.float32)
+    audio = _preemphasis(audio, _PREEMPHASIS_ALPHA)
+
     n_samples = audio.shape[0]
     win_samples = int(_WINDOW_SECONDS * sr)
 
@@ -105,54 +100,14 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
-        # Temperature-fallback loop. Decode the window, score it off the score
-        # channel, and re-decode hotter until a trustworthy attempt is found or
-        # the schedule is exhausted (then keep the best-scoring attempt).
-        best = None  # (passes_comp, avg_logprob, res)
-        chosen = None
-        for temp in _TEMPERATURE_SCHEDULE:
-            if temp == 0.0:
-                res = generate(
-                    features,
-                    [sot_tokens],
-                    beam_size=_BEAM_SIZE,
-                    sampling_temperature=0.0,
-                    repetition_penalty=_REPETITION_PENALTY,
-                    return_scores=True,
-                )[0]
-            else:
-                res = generate(
-                    features,
-                    [sot_tokens],
-                    beam_size=1,
-                    sampling_temperature=temp,
-                    repetition_penalty=_REPETITION_PENALTY,
-                    return_scores=True,
-                )[0]
+        res = generate(
+            features,
+            [sot_tokens],
+            beam_size=_BEAM_SIZE,
+            sampling_temperature=0.0,
+        )[0]
 
-            avg_logprob = res.scores[0] if res.scores else float("-inf")
-
-            token_ids = res.sequences_ids[0]
-            text_tokens = [t for t in token_ids if t < timestamp_begin]
-            text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
-            comp_ratio = _compression_ratio(text)
-            passes_comp = comp_ratio <= _COMPRESSION_RATIO_THRESHOLD
-
-            # Fallback ranking is lexicographic: a compression-passing attempt
-            # always outranks a degenerate one, ties broken by avg_logprob. This
-            # stops the no-clear-gate fallback from emitting a repeated/degenerate
-            # window just because it happened to score the highest logprob.
-            if best is None or (passes_comp, avg_logprob) > (best[0], best[1]):
-                best = (passes_comp, avg_logprob, res)
-
-            if avg_logprob >= _LOGPROB_THRESHOLD and passes_comp:
-                chosen = res
-                break
-
-        if chosen is None:
-            chosen = best[2]
-
-        token_ids = chosen.sequences_ids[0]
+        token_ids = res.sequences_ids[0]
         text_tokens = [t for t in token_ids if t < timestamp_begin]
         ts_tokens = [t for t in token_ids if t >= timestamp_begin]
 
