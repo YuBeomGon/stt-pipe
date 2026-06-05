@@ -2234,12 +2234,16 @@ def run_iteration(
     # AFTER state.save — commit_iteration stages state_path, which must exist on
     # disk first (mirrors the legacy path's save-then-commit ordering).
     if t.action == "promote":
+        # beat the global champion → keep/success status mutates the global best
+        # (record_best) and, after commit, advances the champion ref.
         decision_status = "success" if promo.status == "success" else "keep"
         reason = promo.reason
         state.record_best(hyp_id, cand_cer)
         if promo.status == "success":
             state.status = "success"
     elif t.action == "advance":
+        # in-set lineage head only: lineage_advance is pool-inert (portfolio.py)
+        # and never touches the global champion / best — that is the C2 fix.
         decision_status = "lineage_advance"
         reason = lin.reason
     else:  # "repair" or "reset"
@@ -2253,7 +2257,7 @@ def run_iteration(
     result = IterationResult(
         hyp_id=hyp_id,
         status=decision_status,
-        decision=None,
+        decision=None,  # set path carries no policy.Decision; status/reason authoritative
         verify_result=verify_result,
         reason=reason,
     )
