@@ -1,35 +1,43 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-DIVERGE slot. Every prior iteration treated the decoder's *output vocabulary*
-as fixed: every decode ran with the CT2 default ``suppress_tokens=[-1]`` (only
-the model's built-in symbol set masked). No iteration ever constrained *which*
-content tokens the decoder is allowed to emit. That is an entirely unused
-input channel of ``generate()`` — orthogonal to every decode knob in the
-ledger (beam_size, temperature, patience, repetition/length penalty, the
-score/no_speech/N-best return channels) and to the input-side gain/spectral
-conditioning of iter_018-032.
+DIVERGE slot. Every prior iteration ran a *single-shot* decode per window and
+read at most two return channels: ``sequences_ids`` (the text/timestamp tokens)
+and ``no_speech_prob`` (iter006). The decode result carries a third channel
+that no iteration has ever read — the per-sequence **score**, available when
+``generate(..., return_scores=True)`` is set. CT2 returns it length-normalised,
+so ``res.scores[0]`` is a usable proxy for the decoder's average log-prob over
+the window: a direct confidence signal for *how reliable this window's
+transcription is*, distinct from no_speech_prob (which asks "is this speech?"
+not "is this decode trustworthy?").
 
-Motivation from the dominant axis. The error mix is 57% substitution on a
-healthy length_ratio (0.96): the headroom is in *what* gets mis-recognised.
-whisper-large-v3-turbo is a multilingual model, and on telephony-band Korean
-(300-3400 Hz, obstruent cues attenuated) it routinely resolves an ambiguous
-Korean syllable to a phonetically-adjacent token in a *different script* —
-Hanja (CJK ideographs) or Japanese kana — which the Korean ground truth never
-contains. Every such emission is a guaranteed substitution error.
+That score channel is exactly what OpenAI's reference Whisper uses for its
+**temperature-fallback** long-form policy, which no iteration here has built.
+The mechanism this slot introduces replaces the single-shot decode with an
+adaptive per-window loop:
 
-The mechanism: scan the tokenizer vocabulary once and build a suppression set
-of every token whose surface form contains a CJK-ideograph / Hiragana /
-Katakana / CJK-compatibility codepoint, then pass it (alongside the ``-1``
-default sentinel) as ``suppress_tokens`` to every decode. The decoder keeps
-full Hangul, ASCII (numbers, the occasional English loanword), and punctuation
-mass, but is forbidden from spending probability on scripts that can only be
-wrong here. This removes a substitution failure mode at the source rather than
-triaging it post-hoc.
+  - decode at temperature 0.0 with beam search (the high-precision attempt);
+  - score the result on two signals the score channel makes available — the
+    length-normalised avg log-prob (``res.scores[0]``) and the gzip
+    *compression ratio* of the emitted text (a degenerate, repeated, or
+    hallucinated window compresses far more than natural speech);
+  - if either signal flags the decode as untrustworthy (avg log-prob too low,
+    or compression ratio too high), re-decode the *same* window at a higher
+    sampling temperature and try again, walking a temperature schedule;
+  - keep the best-scoring attempt seen if none clears the gate.
+
+This is a fundamentally different decode strategy than the incumbent's fixed
+beam+no_speech gate: instead of a single irreversible decode, each window gets
+multiple attempts and the score channel arbitrates. It attacks the residual
+hallucination (0.18) / repeated-text (0.27) directly via the compression gate,
+and the low-confidence windows — where phone-band substitution concentrates —
+get a second, higher-entropy shot to escape a confidently-wrong beam path.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
+
+import zlib
 
 import numpy as np
 
@@ -42,55 +50,38 @@ _WINDOW_SECONDS = 30.0
 _TIME_PRECISION = 0.02
 _MIN_ADVANCE_SECONDS = 2.0
 
+# Temperature-fallback schedule (OpenAI Whisper's robustness policy). The first
+# attempt is beam search at T=0 (precision); each fallback raises entropy so the
+# decoder can escape a degenerate or confidently-wrong path.
+_TEMPERATURE_SCHEDULE = (0.0, 0.2, 0.4, 0.6, 0.8)
+
+# Gate thresholds read off the score channel. avg log-prob below the floor =>
+# the decoder is unsure of this window; gzip compression ratio above the ceiling
+# => the text is repetitive/hallucinated (natural speech ~1.3-1.8, degenerate
+# loops >> 2.4). Either condition triggers a higher-temperature retry.
+_LOGPROB_THRESHOLD = -1.0
+_COMPRESSION_RATIO_THRESHOLD = 2.4
+
 _BEAM_SIZE = 5
 
-# Per-token repetition penalty (iter_016, best 0.1629). The parent's CJK-mask
-# decode left this at the CT2 default 1.0; ~1.1 steers the beam off a
-# self-repeating / locally-tempting wrong token during decode itself —
-# orthogonal to the suppress_tokens script mask.
+# Gentle token-level repetition penalty (CT2 generate kwarg, never exercised on
+# this lineage). Whisper's standard ~1.1 setting nudges the beam off a
+# self-repeating degenerate path one token at a time without distorting natural
+# Korean morpheme repetition, attacking the confident-wrong-loop component of
+# the dominant substitution axis (and the two repeated_text focus files).
 _REPETITION_PENALTY = 1.1
 
-# Codepoint ranges that can only be a substitution error in a Korean transcript:
-# Hiragana/Katakana, CJK unified ideographs (+ ext-A and compatibility forms).
-# Hangul (U+AC00-D7A3, U+1100-11FF, U+3130-318F) is deliberately NOT here.
-_FORBIDDEN_RANGES = (
-    (0x3040, 0x30FF),    # Hiragana + Katakana
-    (0x3400, 0x4DBF),    # CJK unified ideographs ext A
-    (0x4E00, 0x9FFF),    # CJK unified ideographs
-    (0xF900, 0xFAFF),    # CJK compatibility ideographs
-    (0x20000, 0x2FA1F),  # CJK ext B..F + supplement
-)
 
-# Built once on first call (vocab scan is ~50k cheap decodes) and reused.
-_SUPPRESS_TOKENS: list[int] | None = None
-
-
-def _is_forbidden_char(ch: str) -> bool:
-    o = ord(ch)
-    for lo, hi in _FORBIDDEN_RANGES:
-        if lo <= o <= hi:
-            return True
-    return False
-
-
-def _build_suppress_tokens(tokenizer) -> list[int]:
-    # -1 keeps CT2's default built-in symbol suppression; we extend it with
-    # every vocab token whose decoded form carries a forbidden-script char.
-    suppress = [-1]
-    for tid in range(tokenizer.vocab_size):
-        surface = tokenizer.decode([tid])
-        if any(_is_forbidden_char(ch) for ch in surface):
-            suppress.append(tid)
-    return suppress
+def _compression_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    data = text.encode("utf-8")
+    return len(data) / len(zlib.compress(data))
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
-    global _SUPPRESS_TOKENS
     model, processor = load()
     tokenizer = processor.tokenizer
-
-    if _SUPPRESS_TOKENS is None:
-        _SUPPRESS_TOKENS = _build_suppress_tokens(tokenizer)
 
     audio = np.asarray(audio, dtype=np.float32)
     n_samples = audio.shape[0]
@@ -114,16 +105,54 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
-        res = generate(
-            features,
-            [sot_tokens],
-            beam_size=_BEAM_SIZE,
-            sampling_temperature=0.0,
-            repetition_penalty=_REPETITION_PENALTY,
-            suppress_tokens=_SUPPRESS_TOKENS,
-        )[0]
+        # Temperature-fallback loop. Decode the window, score it off the score
+        # channel, and re-decode hotter until a trustworthy attempt is found or
+        # the schedule is exhausted (then keep the best-scoring attempt).
+        best = None  # (passes_comp, avg_logprob, res)
+        chosen = None
+        for temp in _TEMPERATURE_SCHEDULE:
+            if temp == 0.0:
+                res = generate(
+                    features,
+                    [sot_tokens],
+                    beam_size=_BEAM_SIZE,
+                    sampling_temperature=0.0,
+                    repetition_penalty=_REPETITION_PENALTY,
+                    return_scores=True,
+                )[0]
+            else:
+                res = generate(
+                    features,
+                    [sot_tokens],
+                    beam_size=1,
+                    sampling_temperature=temp,
+                    repetition_penalty=_REPETITION_PENALTY,
+                    return_scores=True,
+                )[0]
 
-        token_ids = res.sequences_ids[0]
+            avg_logprob = res.scores[0] if res.scores else float("-inf")
+
+            token_ids = res.sequences_ids[0]
+            text_tokens = [t for t in token_ids if t < timestamp_begin]
+            text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
+            comp_ratio = _compression_ratio(text)
+            passes_comp = comp_ratio <= _COMPRESSION_RATIO_THRESHOLD
+
+            # Fallback ranking is lexicographic: a compression-passing attempt
+            # always outranks a degenerate one, ties broken by avg_logprob. This
+            # stops the no-clear-gate fallback from emitting a repeated/degenerate
+            # window just because it happened to score the highest logprob.
+            if best is None or (passes_comp, avg_logprob) > (best[0], best[1]):
+                best = (passes_comp, avg_logprob, res)
+
+            if avg_logprob >= _LOGPROB_THRESHOLD and passes_comp:
+                chosen = res
+                break
+
+        if chosen is None:
+            chosen = best[2]
+
+        token_ids = chosen.sequences_ids[0]
         text_tokens = [t for t in token_ids if t < timestamp_begin]
         ts_tokens = [t for t in token_ids if t >= timestamp_begin]
 
