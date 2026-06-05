@@ -71,6 +71,42 @@ _BEAM_SIZE = 5
 # the dominant substitution axis (and the two repeated_text focus files).
 _REPETITION_PENALTY = 1.1
 
+# Output-vocabulary mask (iter_036-040, proven to run at 0.1629). A multilingual
+# whisper can emit non-Korean scripts the 0715 GT never contains; every such
+# token is a guaranteed substitution on the dominant 57% axis. We forbid the
+# vocab ids whose surface form carries any of these scripts, leaving
+# Hangul/ASCII/punctuation untouched. -1 stays first so CT2's built-in symbol
+# suppression is preserved (the mask is additive, not a replacement).
+_FORBIDDEN_RANGES = (
+    (0x3400, 0x4DBF),   # CJK Ext A
+    (0x4E00, 0x9FFF),   # CJK Unified Ideographs
+    (0x3040, 0x309F),   # Hiragana
+    (0x30A0, 0x30FF),   # Katakana
+    (0x0370, 0x03FF),   # Greek
+    (0x0400, 0x04FF),   # Cyrillic
+    (0x0590, 0x05FF),   # Hebrew
+    (0x0600, 0x06FF),   # Arabic
+    (0x0900, 0x097F),   # Devanagari
+    (0x0E00, 0x0E7F),   # Thai
+    (0xFF00, 0xFFEF),   # Halfwidth/Fullwidth forms
+)
+
+
+def _is_forbidden_codepoint(o: int) -> bool:
+    for lo, hi in _FORBIDDEN_RANGES:
+        if lo <= o <= hi:
+            return True
+    return False
+
+
+def _build_suppress_tokens(tokenizer) -> list[int]:
+    suppress = [-1]
+    for tid in range(tokenizer.vocab_size):
+        surface = tokenizer.decode([tid])
+        if any(_is_forbidden_codepoint(ord(ch)) for ch in surface):
+            suppress.append(tid)
+    return suppress
+
 
 def _compression_ratio(text: str) -> float:
     if not text:
@@ -91,6 +127,8 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     sot_tokens = tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
     )
+
+    suppress_tokens = _build_suppress_tokens(tokenizer)
 
     pieces: list[str] = []
     cursor = 0
@@ -118,6 +156,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
                     beam_size=_BEAM_SIZE,
                     sampling_temperature=0.0,
                     repetition_penalty=_REPETITION_PENALTY,
+                    suppress_tokens=suppress_tokens,
                     return_scores=True,
                 )[0]
             else:
@@ -127,6 +166,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
                     beam_size=1,
                     sampling_temperature=temp,
                     repetition_penalty=_REPETITION_PENALTY,
+                    suppress_tokens=suppress_tokens,
                     return_scores=True,
                 )[0]
 
