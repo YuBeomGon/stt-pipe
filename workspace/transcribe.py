@@ -1,34 +1,43 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-REFINE slot on the word-level MBR consensus lineage (iter_011). The parent
-decodes each window with beam_size=num_hypotheses=5 and reconciles the N beam
-paths position-by-position: beam[0] (the max-joint-logprob path) is the
-skeleton, every other beam is aligned to it word-by-word with difflib, and a
-beam[0] word is overridden only when a strict majority of the OTHER beams
-independently substitute the *same* spelling there. Isolated confidently-wrong
-beam[0] words get corrected by the majority; diffusely-disputed words keep the
-likelihood prior.
+DIVERGE slot. Every prior iteration ran a *single-shot* decode per window and
+read at most two return channels: ``sequences_ids`` (the text/timestamp tokens)
+and ``no_speech_prob`` (iter006). The decode result carries a third channel
+that no iteration has ever read — the per-sequence **score**, available when
+``generate(..., return_scores=True)`` is set. CT2 returns it length-normalised,
+so ``res.scores[0]`` is a usable proxy for the decoder's average log-prob over
+the window: a direct confidence signal for *how reliable this window's
+transcription is*, distinct from no_speech_prob (which asks "is this speech?"
+not "is this decode trustworthy?").
 
-The tune this slot makes targets the dominant substitution axis (57%) through
-the lever ledger iter_012 isolated: the MBR vote threshold is cornered, so the
-remaining headroom is in *the inputs to the vote* — the beam paths themselves —
-not the threshold. iter_009/011 established that across-beam disagreement is
-LOCAL and SPARSE (whole-window beams are >=95% char-similar; substitution sits
-at isolated word positions). With only N=5 beams there are just 4 non-anchor
-voters, so a genuine local substitution position rarely musters the 3-vote
-majority the parent requires — the vote fires too seldom to move the axis. This
-slot widens the N-best pool to 8 (beam_size=num_hypotheses=8) so the word vote
-draws on 7 independent non-anchor voters, and scales the majority threshold
-proportionally to 5-of-7. Same arbitration mechanism, denser evidence per
-position. iter_012 spent this lever on `patience` (deeper beam); this is the
-orthogonal input-improvement — more parallel hypotheses, not deeper ones.
+That score channel is exactly what OpenAI's reference Whisper uses for its
+**temperature-fallback** long-form policy, which no iteration here has built.
+The mechanism this slot introduces replaces the single-shot decode with an
+adaptive per-window loop:
+
+  - decode at temperature 0.0 with beam search (the high-precision attempt);
+  - score the result on two signals the score channel makes available — the
+    length-normalised avg log-prob (``res.scores[0]``) and the gzip
+    *compression ratio* of the emitted text (a degenerate, repeated, or
+    hallucinated window compresses far more than natural speech);
+  - if either signal flags the decode as untrustworthy (avg log-prob too low,
+    or compression ratio too high), re-decode the *same* window at a higher
+    sampling temperature and try again, walking a temperature schedule;
+  - keep the best-scoring attempt seen if none clears the gate.
+
+This is a fundamentally different decode strategy than the incumbent's fixed
+beam+no_speech gate: instead of a single irreversible decode, each window gets
+multiple attempts and the score channel arbitrates. It attacks the residual
+hallucination (0.18) / repeated-text (0.27) directly via the compression gate,
+and the low-confidence windows — where phone-band substitution concentrates —
+get a second, higher-entropy shot to escape a confidently-wrong beam path.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
 
-import difflib
+import zlib
 
 import numpy as np
 
@@ -41,71 +50,33 @@ _WINDOW_SECONDS = 30.0
 _TIME_PRECISION = 0.02
 _MIN_ADVANCE_SECONDS = 2.0
 
-# Widened N-best pool feeding the word vote. The parent ran 5/5; iter_009/011
-# showed cross-beam disagreement is local and sparse, so 4 non-anchor voters
-# rarely reach a 3-vote majority and the vote is near-inert. 8 beams give 7
-# non-anchor voters — denser evidence at exactly the isolated substitution
-# positions the vote exists to correct.
-_BEAM_SIZE = 8
-_NUM_HYPOTHESES = 8
+# Temperature-fallback schedule (OpenAI Whisper's robustness policy). The first
+# attempt is beam search at T=0 (precision); each fallback raises entropy so the
+# decoder can escape a degenerate or confidently-wrong path.
+_TEMPERATURE_SCHEDULE = (0.0, 0.2, 0.4, 0.6, 0.8)
 
-# A beam[0] word is overridden only when at least this many of the OTHER beams
-# independently align a single identical alternative spelling at that position.
-# With N=8 that is 5 of the 7 non-anchor beams — a strict majority scaled from
-# the parent's 3-of-4, so beam[0] is still replaced only as the isolated
-# outlier, never on a near-even split where the max-joint-logprob prior holds.
-_WORD_VOTE_MIN = 5
+# Gate thresholds read off the score channel. avg log-prob below the floor =>
+# the decoder is unsure of this window; gzip compression ratio above the ceiling
+# => the text is repetitive/hallucinated (natural speech ~1.3-1.8, degenerate
+# loops >> 2.4). Either condition triggers a higher-temperature retry.
+_LOGPROB_THRESHOLD = -1.0
+_COMPRESSION_RATIO_THRESHOLD = 2.4
 
-# Per-token repetition penalty applied DURING decode, before the word vote sees
-# the beams. The parent ran the default 1.0, so every one of the 8 beams — the
-# anchor and all 7 voters — could lock onto a self-repeating or locally-tempting
-# wrong token. iter_016 established ~1.1 as the value that suppresses exactly
-# that loop-substitution component of the 57% axis. Cleaning the beams at the
-# source gives the consensus vote denser, less-correlated-on-error evidence at
-# the isolated substitution positions, rather than voting over paths that all
-# inherited the same confident mistake.
+_BEAM_SIZE = 5
+
+# Gentle token-level repetition penalty (CT2 generate kwarg, never exercised on
+# this lineage). Whisper's standard ~1.1 setting nudges the beam off a
+# self-repeating degenerate path one token at a time without distorting natural
+# Korean morpheme repetition, attacking the confident-wrong-loop component of
+# the dominant substitution axis (and the two repeated_text focus files).
 _REPETITION_PENALTY = 1.1
 
 
-def _word_consensus(texts: list[str]) -> str:
-    """Word-level minimum-Bayes-risk over the N-best beam list.
-
-    The whole-window MBR (iter008/009) failed because over 30 s of text every
-    beam is >=95% char-similar, so the centroid/argmax distinction collapses
-    into 3rd-decimal noise. Substitution is *local*: a confidently-wrong
-    spelling sits at one word while the rest of the window is identical across
-    beams. So keep beam[0] (the max-joint-logprob path) as the skeleton and
-    align every other beam to it word-by-word with difflib; at each beam[0]
-    word position tally the alternative words the other beams substitute there,
-    and override beam[0] only when ``_WORD_VOTE_MIN`` of them independently
-    agree on the *same* replacement. An isolated beam[0] outlier is corrected
-    by the majority; a word the beams disagree about diffusely keeps beam[0]'s
-    likelihood prior.
-    """
-    if len(texts) <= 1:
-        return texts[0] if texts else ""
-    base = texts[0].split()
-    if not base:
-        return texts[0]
-
-    others = [t.split() for t in texts[1:]]
-    votes: list[dict[str, int]] = [{} for _ in base]
-    for words in others:
-        sm = difflib.SequenceMatcher(None, base, words, autojunk=False)
-        for tag, i1, i2, j1, j2 in sm.get_opcodes():
-            if tag == "replace" and (i2 - i1) == (j2 - j1):
-                for k in range(i2 - i1):
-                    w = words[j1 + k]
-                    votes[i1 + k][w] = votes[i1 + k].get(w, 0) + 1
-
-    out = list(base)
-    for idx, vote in enumerate(votes):
-        if not vote:
-            continue
-        cand, cnt = max(vote.items(), key=lambda kv: kv[1])
-        if cnt >= _WORD_VOTE_MIN:
-            out[idx] = cand
-    return " ".join(out)
+def _compression_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    data = text.encode("utf-8")
+    return len(data) / len(zlib.compress(data))
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -134,33 +105,60 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
-        res = generate(
-            features,
-            [sot_tokens],
-            beam_size=_BEAM_SIZE,
-            num_hypotheses=_NUM_HYPOTHESES,
-            sampling_temperature=0.0,
-            repetition_penalty=_REPETITION_PENALTY,
-        )[0]
+        # Temperature-fallback loop. Decode the window, score it off the score
+        # channel, and re-decode hotter until a trustworthy attempt is found or
+        # the schedule is exhausted (then keep the best-scoring attempt).
+        best = None  # (passes_comp, avg_logprob, res)
+        chosen = None
+        for temp in _TEMPERATURE_SCHEDULE:
+            if temp == 0.0:
+                res = generate(
+                    features,
+                    [sot_tokens],
+                    beam_size=_BEAM_SIZE,
+                    sampling_temperature=0.0,
+                    repetition_penalty=_REPETITION_PENALTY,
+                    return_scores=True,
+                )[0]
+            else:
+                res = generate(
+                    features,
+                    [sot_tokens],
+                    beam_size=1,
+                    sampling_temperature=temp,
+                    repetition_penalty=_REPETITION_PENALTY,
+                    return_scores=True,
+                )[0]
 
-        # Reconcile the full N-best beam list at the word level. beam[0] is the
-        # skeleton (it carries timestamps and the likelihood prior); the rest
-        # vote on local substitutions.
-        texts = []
-        for seq in res.sequences_ids:
-            text_tokens = [t for t in seq if t < timestamp_begin]
-            texts.append(
-                tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
-            )
+            avg_logprob = res.scores[0] if res.scores else float("-inf")
 
-        merged = _word_consensus(texts)
-        if merged:
-            pieces.append(merged)
+            token_ids = res.sequences_ids[0]
+            text_tokens = [t for t in token_ids if t < timestamp_begin]
+            text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
+            comp_ratio = _compression_ratio(text)
+            passes_comp = comp_ratio <= _COMPRESSION_RATIO_THRESHOLD
 
-        # Window advance comes from beam[0]'s timestamp tokens (the merged text
-        # has none; only the skeleton path carries them).
-        token_ids = res.sequences_ids[0]
+            # Fallback ranking is lexicographic: a compression-passing attempt
+            # always outranks a degenerate one, ties broken by avg_logprob. This
+            # stops the no-clear-gate fallback from emitting a repeated/degenerate
+            # window just because it happened to score the highest logprob.
+            if best is None or (passes_comp, avg_logprob) > (best[0], best[1]):
+                best = (passes_comp, avg_logprob, res)
+
+            if avg_logprob >= _LOGPROB_THRESHOLD and passes_comp:
+                chosen = res
+                break
+
+        if chosen is None:
+            chosen = best[2]
+
+        token_ids = chosen.sequences_ids[0]
+        text_tokens = [t for t in token_ids if t < timestamp_begin]
         ts_tokens = [t for t in token_ids if t >= timestamp_begin]
+
+        text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
+        if text:
+            pieces.append(text)
 
         advance_seconds = _WINDOW_SECONDS
         if ts_tokens:
