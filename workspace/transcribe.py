@@ -1,43 +1,40 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-DIVERGE slot. Every prior iteration ran a *single-shot* decode per window and
-read at most two return channels: ``sequences_ids`` (the text/timestamp tokens)
-and ``no_speech_prob`` (iter006). The decode result carries a third channel
-that no iteration has ever read — the per-sequence **score**, available when
-``generate(..., return_scores=True)`` is set. CT2 returns it length-normalised,
-so ``res.scores[0]`` is a usable proxy for the decoder's average log-prob over
-the window: a direct confidence signal for *how reliable this window's
-transcription is*, distinct from no_speech_prob (which asks "is this speech?"
-not "is this decode trustworthy?").
+DIVERGE slot. Every prior iteration read at most ``sequences_ids[0]`` — the
+single highest-likelihood beam path — and arbitrated *between windows*
+(temperature fallback, no_speech gating) but never *within* a window's beam.
+The decode call carries an N-best channel no iteration has ever populated:
+``generate(..., num_hypotheses=N)`` fills ``res.sequences_ids[0..N-1]`` with
+the full top-N beam list, not just the winner.
 
-That score channel is exactly what OpenAI's reference Whisper uses for its
-**temperature-fallback** long-form policy, which no iteration here has built.
-The mechanism this slot introduces replaces the single-shot decode with an
-adaptive per-window loop:
+The incumbent's failure axis is substitution (56% ≫ del/ins, coverage healthy
+at length_ratio 0.96): the headroom is in *which* token the decoder commits to
+on low-confidence phone-band windows, not in coverage. Beam[0] is the path of
+maximum joint log-prob — but on narrowband call-center audio that maximum is
+often a confidently-wrong spelling one beam path locks onto, while the *other*
+beams cluster around the correct word.
 
-  - decode at temperature 0.0 with beam search (the high-precision attempt);
-  - score the result on two signals the score channel makes available — the
-    length-normalised avg log-prob (``res.scores[0]``) and the gzip
-    *compression ratio* of the emitted text (a degenerate, repeated, or
-    hallucinated window compresses far more than natural speech);
-  - if either signal flags the decode as untrustworthy (avg log-prob too low,
-    or compression ratio too high), re-decode the *same* window at a higher
-    sampling temperature and try again, walking a temperature schedule;
-  - keep the best-scoring attempt seen if none clears the gate.
+This slot replaces single-path selection with **Minimum-Bayes-Risk consensus
+decoding** over the N-best list. We decode N hypotheses per window, then emit
+not the top-likelihood path but the hypothesis with minimum expected character
+risk against the rest — i.e. the one most similar to all the others, the
+centroid of the beam. An isolated wrong spelling has high risk (it disagrees
+with the consensus) and is rejected; a spelling several beams independently
+agree on has low risk and wins. This attacks substitution directly: instead of
+trusting a single argmax path, it lets the beam vote on *what was said*.
 
-This is a fundamentally different decode strategy than the incumbent's fixed
-beam+no_speech gate: instead of a single irreversible decode, each window gets
-multiple attempts and the score channel arbitrates. It attacks the residual
-hallucination (0.18) / repeated-text (0.27) directly via the compression gate,
-and the low-confidence windows — where phone-band substitution concentrates —
-get a second, higher-entropy shot to escape a confidently-wrong beam path.
+This is a fundamentally different decode strategy than the incumbent's
+single-path temperature-fallback gate — arbitration moves from between-window
+confidence thresholds to within-window cross-hypothesis agreement, and reads a
+return channel (the N-best list) every prior iter threw away by taking only
+``sequences_ids[0]``.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
 
-import zlib
+import difflib
 
 import numpy as np
 
@@ -50,26 +47,35 @@ _WINDOW_SECONDS = 30.0
 _TIME_PRECISION = 0.02
 _MIN_ADVANCE_SECONDS = 2.0
 
-# Temperature-fallback schedule (OpenAI Whisper's robustness policy). The first
-# attempt is beam search at T=0 (precision); each fallback raises entropy so the
-# decoder can escape a degenerate or confidently-wrong path.
-_TEMPERATURE_SCHEDULE = (0.0, 0.2, 0.4, 0.6, 0.8)
-
-# Gate thresholds read off the score channel. avg log-prob below the floor =>
-# the decoder is unsure of this window; gzip compression ratio above the ceiling
-# => the text is repetitive/hallucinated (natural speech ~1.3-1.8, degenerate
-# loops >> 2.4). Either condition triggers a higher-temperature retry.
-_LOGPROB_THRESHOLD = -1.0
-_COMPRESSION_RATIO_THRESHOLD = 2.4
-
+# Beam search returns its top-N paths when num_hypotheses>1. We score all N
+# against each other (MBR) rather than trusting the single argmax path.
 _BEAM_SIZE = 5
+_NUM_HYPOTHESES = 5
 
 
-def _compression_ratio(text: str) -> float:
-    if not text:
-        return 0.0
-    data = text.encode("utf-8")
-    return len(data) / len(zlib.compress(data))
+def _consensus_index(texts: list[str]) -> int:
+    """Index of the minimum-Bayes-risk hypothesis.
+
+    Risk of hypothesis i = sum_j (1 - char_similarity(i, j)); minimising it is
+    equivalent to maximising total similarity to the rest of the beam. The
+    centroid hypothesis — the spelling the most beam paths agree on — wins,
+    so an isolated confidently-wrong path is rejected.
+    """
+    n = len(texts)
+    if n <= 1:
+        return 0
+    best_i = 0
+    best_score = -1.0
+    for i in range(n):
+        score = 0.0
+        for j in range(n):
+            if i == j:
+                continue
+            score += difflib.SequenceMatcher(None, texts[i], texts[j]).ratio()
+        if score > best_score:
+            best_score = score
+            best_i = i
+    return best_i
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -98,51 +104,29 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
-        # Temperature-fallback loop. Decode the window, score it off the score
-        # channel, and re-decode hotter until a trustworthy attempt is found or
-        # the schedule is exhausted (then keep the best-scoring attempt).
-        best = None  # (avg_logprob, res)
-        chosen = None
-        for temp in _TEMPERATURE_SCHEDULE:
-            if temp == 0.0:
-                res = generate(
-                    features,
-                    [sot_tokens],
-                    beam_size=_BEAM_SIZE,
-                    sampling_temperature=0.0,
-                    return_scores=True,
-                )[0]
-            else:
-                res = generate(
-                    features,
-                    [sot_tokens],
-                    beam_size=1,
-                    sampling_temperature=temp,
-                    return_scores=True,
-                )[0]
+        # Populate the N-best channel: beam search returns its top-N full paths
+        # in sequences_ids[0..N-1] (every prior iter read only [0]).
+        res = generate(
+            features,
+            [sot_tokens],
+            beam_size=_BEAM_SIZE,
+            num_hypotheses=_NUM_HYPOTHESES,
+            sampling_temperature=0.0,
+        )[0]
 
-            avg_logprob = res.scores[0] if res.scores else float("-inf")
-
-            token_ids = res.sequences_ids[0]
+        hyps = res.sequences_ids
+        texts: list[str] = []
+        for token_ids in hyps:
             text_tokens = [t for t in token_ids if t < timestamp_begin]
-            text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
-            comp_ratio = _compression_ratio(text)
+            texts.append(
+                tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
+            )
 
-            if best is None or avg_logprob > best[0]:
-                best = (avg_logprob, res)
-
-            if avg_logprob >= _LOGPROB_THRESHOLD and comp_ratio <= _COMPRESSION_RATIO_THRESHOLD:
-                chosen = res
-                break
-
-        if chosen is None:
-            chosen = best[1]
-
-        token_ids = chosen.sequences_ids[0]
-        text_tokens = [t for t in token_ids if t < timestamp_begin]
-        ts_tokens = [t for t in token_ids if t >= timestamp_begin]
-
-        text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
+        # MBR consensus: emit the centroid hypothesis, not beam[0].
+        idx = _consensus_index(texts)
+        chosen_ids = hyps[idx]
+        ts_tokens = [t for t in chosen_ids if t >= timestamp_begin]
+        text = texts[idx]
         if text:
             pieces.append(text)
 
