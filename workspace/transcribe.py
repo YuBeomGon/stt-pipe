@@ -59,6 +59,18 @@ _BEAM_SIZE = 5
 # axis during decode rather than post-hoc).
 _REPETITION_PENALTY = 1.1
 
+# Coverage lever for THIS parent's deletion collapse (del 0.76, length_ratio
+# 0.70). In <|notimestamps|> mode the decoder loses the timestamp anchor that
+# normally keeps long-form generation going across a full 30 s window, so it
+# early-commits to EOS partway through and most of the window is dropped. CT2
+# normalises each hypothesis log-prob by pow((5+len)/6, length_penalty); the
+# parent left this at the default 1.0 (neutral EOS tradeoff), so a too-short
+# path wins on marginal raw log-prob. alpha>1 rewards longer hypotheses,
+# pushing each window's beam to transcribe to the window edge before EOS —
+# directly attacking the deletion shoulder the parent's seam merge cannot
+# recover (you cannot stitch back text a window never emitted).
+_LENGTH_PENALTY = 1.4
+
 # Seam-merge guards (token-id units). A merge is only accepted when the longest
 # matching run is at least this long AND sits at the seam — near the tail of the
 # accumulated ids and the head of the new window. If the seam can't be located
@@ -128,6 +140,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             beam_size=_BEAM_SIZE,
             sampling_temperature=0.0,
             repetition_penalty=_REPETITION_PENALTY,
+            length_penalty=_LENGTH_PENALTY,
         )[0]
 
         # notimestamps => no <|t|> tokens, but special ids can still appear; keep
