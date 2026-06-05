@@ -60,11 +60,18 @@ _BEAM_SIZE = 5
 # tune aimed at that axis.
 _REPETITION_PENALTY = 1.1
 
-# Target waveform RMS (~-20 dBFS). Whisper's feature extractor normalises the
-# log-mel with a fixed affine and never compensates for input gain, so bringing
-# every file to a common absolute level puts the acoustic encoder at a
-# consistent operating point across the batch's ~15 dB cross-file gain spread.
-_TARGET_RMS = 0.1
+# Target waveform RMS (~-26 dBFS). REFINE tune of the loudness-norm parent
+# (iter_018/019 used 0.1 ≈ -20 dBFS, cer 0.1718, below the no-norm best 0.1629).
+# Whisper's feature extractor never compensates for input gain, so a common
+# absolute level still removes the batch's ~15 dB cross-file offset — but at
+# -20 dBFS the quietest phone-band files (rms_db_mean ≈ -41: 00003011051,
+# 02_4038) get ~+21 dB of gain, which lifts their noise floor (rms_db_p05 ≈
+# -68..-72) along with the speech and feeds phone-band noise into the encoder,
+# exactly where substitution (dominant axis, 57%) concentrates. Dropping the
+# target to ≈ -26 dBFS (the level of the batch's quietest normal-gain file)
+# keeps the offset removal while roughly halving the gain on those files,
+# limiting noise amplification.
+_TARGET_RMS = 0.05
 
 # Peak ceiling for the normalisation gain. The gain is capped so the loudest
 # sample never exceeds this, i.e. loudness normalisation can never introduce
