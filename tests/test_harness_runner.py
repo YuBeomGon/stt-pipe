@@ -2340,11 +2340,15 @@ def test_set_lost_race_reset_commits_champion_clean_tree(tmp_path):
     _init_repo(tmp_path)
     # an in-refine set with refines_used at the budget edge: a champion-beating
     # candidate that LOSES the gate → step_set(refine, beats=False) → reset.
+    # F1: budget is now spent only on a NON-improving (hold) refine, so the
+    # candidate's cer must equal the lineage best (0.16, no local gain → hold)
+    # to exhaust the last budget unit and close — a strict advance would no
+    # longer consume budget and would keep the set open.
     state = HarnessState(job_id="job", best_cer=0.20, best_hyp_id="champ",
                          set_id=1, set_phase="refine", set_best_cer=0.16,
                          set_best_hyp_id="prev", set_refines_used=2)
     cfg_, _ = _run_set_iter(
-        tmp_path, cand_body="def t():\n return 'LOSE'\n", cer=0.15, state=state,
+        tmp_path, cand_body="def t():\n return 'LOSE'\n", cer=0.16, state=state,
         max_refines=3,
         premap=json.dumps({"job_id": "peer", "cer": 0.10,
                            "champion_commit": "dead"}) + "\n")

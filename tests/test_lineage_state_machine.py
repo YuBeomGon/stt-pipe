@@ -57,12 +57,17 @@ def test_refine_improves_lineage_and_keeps_climbing() -> None:
     assert t.action == "advance"
     assert t.state.phase == "refine"
     assert t.state.best_cer == 0.176
-    assert t.state.refines_used == 1
+    # F1: a strictly-advancing refine does NOT consume the refine budget, so a
+    # monotonically-improving lineage is never cut mid-climb.
+    assert t.state.refines_used == 0
 
 
 def test_refine_budget_exhausted_closes() -> None:
-    s = SetState(set_id=1, phase="refine", best_cer=0.176, refines_used=3)
-    t = step_set(s, _ok(0.175, "advance", hyp_id="h5"), BUDGET)
+    # F1: budget is now spent only on non-improving (hold) refines, so the
+    # budget-exhaustion close is driven by a hold at the budget edge — NOT by an
+    # advance (an advance never closes on budget).
+    s = SetState(set_id=1, phase="refine", best_cer=0.176, refines_used=2)
+    t = step_set(s, _ok(0.176, "hold", hyp_id="h5"), BUDGET)
     assert t.action == "reset"
     assert t.state.close_reason == "refine_budget"
 
@@ -104,3 +109,61 @@ def test_transition_is_deterministic() -> None:
     s = SetState.new(set_id=1)
     o = _ok(0.190, "advance", hyp_id="h1")
     assert step_set(s, o, BUDGET).state == step_set(s, o, BUDGET).state
+
+
+def test_refine_strict_advance_does_not_consume_budget():
+    from harness.lineage import SetState, Outcome, step_set, SetBudget
+    budget = SetBudget(max_repairs=2, max_refines=3)
+    s = SetState(set_id=1, phase="refine", best_cer=0.20,
+                 best_hyp_id="seed", refines_used=2)   # one refine left under old rule
+    # a strict lineage advance (lower cer) must NOT consume the refine budget and
+    # must keep the set open to refine again.
+    out = Outcome(verify_ok=True, lineage_status="advance", cer=0.18,
+                  beats_champion=False, hyp_id="r3")
+    t = step_set(s, out, budget)
+    assert t.action == "advance"
+    assert t.state.phase == "refine"          # set still open (not closed)
+    assert t.state.refines_used == 2          # advance did NOT spend budget
+    assert t.state.best_cer == 0.18
+
+
+def test_refine_hold_still_consumes_budget_and_closes():
+    from harness.lineage import SetState, Outcome, step_set, SetBudget
+    budget = SetBudget(max_repairs=2, max_refines=3)
+    s = SetState(set_id=1, phase="refine", best_cer=0.20,
+                 best_hyp_id="seed", refines_used=2)
+    # a hold (no local gain) spends the last budget unit → set closes.
+    out = Outcome(verify_ok=True, lineage_status="hold", cer=0.20,
+                  beats_champion=False, hyp_id="r3")
+    t = step_set(s, out, budget)
+    assert t.action == "reset"
+    assert t.state.phase == "closed"
+    assert t.state.refines_used == 3
+
+
+def test_refine_monotonic_advances_run_past_old_budget_cap():
+    """F1 termination/freedom guard: a stream of strictly-advancing refines runs
+    well past the old max_refines cap without ever closing on budget, AND a
+    lineage that stops improving (hold) still terminates (reset)."""
+    from harness.lineage import SetState, Outcome, step_set, SetBudget
+    budget = SetBudget(max_repairs=2, max_refines=3)
+    s = SetState(set_id=1, phase="refine", best_cer=0.30, best_hyp_id="seed")
+    cer = 0.30
+    for i in range(10):                       # >> max_refines (3)
+        cer -= 0.01
+        out = Outcome(verify_ok=True, lineage_status="advance", cer=cer,
+                      beats_champion=False, hyp_id=f"r{i}")
+        t = step_set(s, out, budget)
+        assert t.action == "advance"          # never cut while improving
+        assert t.state.phase == "refine"
+        assert t.state.refines_used == 0      # advances are free
+        s = t.state
+    # improvement stops: holds now spend budget and the set MUST terminate.
+    for _ in range(budget.max_refines):
+        out = Outcome(verify_ok=True, lineage_status="hold", cer=cer,
+                      beats_champion=False, hyp_id="stall")
+        t = step_set(s, out, budget)
+        s = t.state
+    assert t.action == "reset"
+    assert t.state.phase == "closed"
+    assert t.state.close_reason == "refine_budget"

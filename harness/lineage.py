@@ -112,6 +112,15 @@ def step_set(state: SetState, outcome: Outcome, budget: SetBudget) -> Transition
             replace(state, repairs_used=state.repairs_used + 1), outcome)
 
     if state.phase == "refine":
+        if outcome.verify_ok and outcome.lineage_status == "advance":
+            # F1: a refine that STRICTLY advances the lineage does NOT consume the
+            # refine budget — budget exists to bound *unproductive* refining, so a
+            # monotonically-improving lineage is never cut mid-climb. Budget is
+            # spent only on hold / broken / dead_end below.
+            return Transition(
+                replace(state, best_cer=outcome.cer, best_hyp_id=outcome.hyp_id),
+                "advance",
+            )
         used = state.refines_used + 1
         if not outcome.verify_ok or outcome.lineage_status == "dead_end":
             # broken/catastrophic refine: roll back to lineage head, keep set
@@ -119,12 +128,6 @@ def step_set(state: SetState, outcome: Outcome, budget: SetBudget) -> Transition
             if used >= budget.max_refines:
                 return _close(replace(state, refines_used=used), "refine_budget")
             return Transition(replace(state, refines_used=used), "repair")
-        if outcome.lineage_status == "advance":
-            nxt = replace(state, refines_used=used, best_cer=outcome.cer,
-                          best_hyp_id=outcome.hyp_id)
-            if used >= budget.max_refines:
-                return _close(nxt, "refine_budget")
-            return Transition(nxt, "advance")
         # hold: no local gain — roll back candidate, retry refine until budget.
         if used >= budget.max_refines:
             return _close(replace(state, refines_used=used), "refine_budget")
