@@ -1327,25 +1327,43 @@ def _decide_iteration(config: RunnerConfig, state: HarnessState):
             override=f"set:{state.set_phase}",
         )
     parents: list[dict[str, Any]] = []
-    for e in pf.parents_for_mode(
-        portfolio, sched.chosen_mode, evaluated_index=state.evaluated_count + 1
-    ):
-        entry = dict(e)
-        diff_rel = entry.get("diff_path")
-        diff_text = ""
-        if diff_rel:
-            dp = config.repo_root / diff_rel
-            if dp.is_file():
-                diff_text = dp.read_text(encoding="utf-8")[:_PROMISING_DIFF_MAX_CHARS]
-        entry["diff"] = diff_text or "(diff unavailable)"
-        parents.append(entry)
-    # repair 인데 portfolio parent 가 없으면(=best 전 crash repair) 직전 실패 iter 를
-    # 합성 parent 로 잡는다. parents_for_mode('repair') 는 설계상 [] 이고, 실패 iter
-    # 포착은 runner 책임(portfolio.py 주석 참조).
-    if sched.chosen_mode == "repair" and not parents:
-        fail_parent = _last_failure_parent(config)
-        if fail_parent:
-            parents.append(fail_parent)
+    if (config.set_budget > 1 and state.set_phase == "refine"
+            and state.set_best_hyp_id):
+        # Refine parent = the lineage head itself (this worktree's HEAD), NOT a
+        # champion-family portfolio rotation (phase1 wart: parents_for_mode
+        # ["refine"] keys off global_best/near_best). The on-disk file already IS
+        # the lineage head; show its champion-delta as the parent diff so the
+        # prompt hint matches what the candidate actually edits.
+        diff = _run_git(config.repo_root,
+                        ["diff", f"{state.champion_ref}..HEAD", "--",
+                         config.allowed_path.as_posix()], check=False).stdout
+        parents.append({
+            "hyp_id": state.set_best_hyp_id,
+            "cer": state.set_best_cer,
+            "mode": "refine",
+            "diff": diff[:_PROMISING_DIFF_MAX_CHARS] or "(lineage head == champion)",
+            "harness_family_id": "lineage",
+        })
+    else:
+        for e in pf.parents_for_mode(
+            portfolio, sched.chosen_mode, evaluated_index=state.evaluated_count + 1
+        ):
+            entry = dict(e)
+            diff_rel = entry.get("diff_path")
+            diff_text = ""
+            if diff_rel:
+                dp = config.repo_root / diff_rel
+                if dp.is_file():
+                    diff_text = dp.read_text(encoding="utf-8")[:_PROMISING_DIFF_MAX_CHARS]
+            entry["diff"] = diff_text or "(diff unavailable)"
+            parents.append(entry)
+        # repair 인데 portfolio parent 가 없으면(=best 전 crash repair) 직전 실패 iter 를
+        # 합성 parent 로 잡는다. parents_for_mode('repair') 는 설계상 [] 이고, 실패 iter
+        # 포착은 runner 책임(portfolio.py 주석 참조).
+        if sched.chosen_mode == "repair" and not parents:
+            fail_parent = _last_failure_parent(config)
+            if fail_parent:
+                parents.append(fail_parent)
     return sched, parents
 
 
@@ -2245,11 +2263,16 @@ def run_iteration(
             outcome = Outcome(verify_ok=False, lineage_status=None, cer=None,
                               beats_champion=False, hyp_id=hyp_id)
             t = step_set(s, outcome, SetBudget(config.max_repairs, config.max_refines))
-            rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
-            commit_status = "repair_rollback"
             if t.action == "reset":
+                # set closed → drop the whole lineage back to the protected champion.
+                rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
                 gitops.restore_file_from_ref(repo_root, state.champion_ref, config.allowed_path)
                 commit_status = "reset"
+            else:  # "repair": keep the set alive, drop only the failed candidate
+                gitops.restore_lineage_head(repo_root, config.allowed_path)
+                rollback_paths(repo_root, [st for st in candidate_owned_statuses(
+                    git_status(repo_root), config) if st.untracked])
+                commit_status = "repair_rollback"
             _persist_set_state(state, t.state)
             result = IterationResult(
                 hyp_id=hyp_id,
@@ -2384,14 +2407,15 @@ def run_iteration(
         reason = lin.reason
     else:  # "repair" or "reset"
         reason = lin.reason
-        rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
         if t.action == "reset":
-            # restore workspace to champion (a code change vs the lineage HEAD)
-            # → commit it as a checkpoint so the tree is clean next iter.
+            rollback_paths(repo_root, candidate_owned_statuses(git_status(repo_root), config))
             gitops.restore_file_from_ref(repo_root, state.champion_ref, config.allowed_path)
             commit_status = "reset"
-        else:
-            commit_status = "repair_rollback"  # repair: tree already == HEAD, no commit
+        else:  # "repair"
+            gitops.restore_lineage_head(repo_root, config.allowed_path)
+            rollback_paths(repo_root, [st for st in candidate_owned_statuses(
+                git_status(repo_root), config) if st.untracked])
+            commit_status = "repair_rollback"
         decision_status = "reject"   # result/accounting status unchanged
 
     _persist_set_state(state, t.state)

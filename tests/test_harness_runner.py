@@ -11,6 +11,8 @@ import sys
 import shlex
 from pathlib import Path
 
+import pytest
+
 from harness.runner import (
     GitPathStatus,
     RunnerConfig,
@@ -1942,3 +1944,81 @@ def test_remove_ignored_poison_precise(tmp_path: Path) -> None:
     assert not (tmp_path / "runs/_summary/poison.txt").exists()
     assert not (tmp_path / "runs/rogue").exists()
     assert (tmp_path / "runs/_summary/keep.json").exists()   # not in list → survives
+
+
+@pytest.mark.worktree
+def test_job_runs_in_worktree_and_repair_targets_lineage_head(tmp_path):
+    """A job in a worktree: a kept lineage advance becomes the worktree HEAD; a
+    later verify-fail repair rolls back to THAT head, not champion (phase2)."""
+    import subprocess
+    from harness import gitops, runner
+    from harness.runner import RunnerConfig
+    from harness.state import HarnessState
+    from harness.verify import VerifyResult
+
+    def _git(root, *a):
+        return subprocess.run(["git", *a], cwd=root, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    _init_repo(tmp_path)                              # side effects only (returns None)
+    gitops.ensure_champion_ref(tmp_path, "champion")  # champion @ the init commit
+    wt = tmp_path / "wt-job1"
+    gitops.prepare_job_worktree(tmp_path, wt, "job/job1", "champion")
+
+    cfg_ = RunnerConfig(job_id="job1", repo_root=wt, set_budget=4, max_repairs=2,
+                        max_refines=3, commit_results=True)
+    state = HarnessState(job_id="job1", best_cer=0.20, best_hyp_id="champ")
+    state_path = wt / "runs/_summary/job1_state.json"
+
+    # iter1: explore worse-than-champion (0.30 > 0.20) but valid → lineage seed
+    # → advance; lineage head moves to a new worktree commit.
+    def cand_ok(prompt, out_dir):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "claude_stdout.txt").write_text(_VALID_META_STDOUT, encoding="utf-8")
+        (wt / "workspace/transcribe.py").write_text(
+            "def transcribe(a, sr):\n    return 'LINEAGE'\n", encoding="utf-8")
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    def verify_ok(_hyp):
+        return VerifyResult(ok=True, hyp_id=_hyp, out_dir=wt / "runs" / _hyp,
+                            report={"corpus_cer": 0.30,
+                                    "total_inference_time_s": 90.0}, per_file=[])
+
+    runner.run_iteration(cfg_, state, state_path, candidate_func=cand_ok,
+                         verify_func=verify_ok)
+    assert state.set_phase == "refine"
+    assert "LINEAGE" in (wt / "workspace/transcribe.py").read_text()
+    lineage_head = _git(wt, "rev-parse", "HEAD")
+
+    # iter2: a refine that breaks verify → repair rolls back to the lineage head
+    # (its committed content), NOT champion's seed.
+    def cand_break(prompt, out_dir):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "claude_stdout.txt").write_text(_VALID_META_STDOUT, encoding="utf-8")
+        (wt / "workspace/transcribe.py").write_text("BROKEN\n", encoding="utf-8")
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    def verify_fail(_hyp):
+        return VerifyResult(ok=False, hyp_id=_hyp, out_dir=wt / "runs" / _hyp,
+                            report=None, error="boom")
+
+    runner.run_iteration(cfg_, state, state_path, candidate_func=cand_break,
+                         verify_func=verify_fail)
+    assert "LINEAGE" in (wt / "workspace/transcribe.py").read_text()   # lineage head, not seed
+    assert _git(wt, "rev-parse", "HEAD") == lineage_head               # head unchanged
+
+
+def test_refine_parent_is_lineage_head_not_portfolio(tmp_path):
+    from harness import gitops
+    from harness.runner import RunnerConfig, _decide_iteration
+    from harness.state import HarnessState
+    _init_repo(tmp_path)                              # side effects only
+    gitops.ensure_champion_ref(tmp_path, "champion")
+    cfg_ = RunnerConfig(job_id="j", repo_root=tmp_path, set_budget=4)
+    st = HarnessState(job_id="j", set_phase="refine", set_best_hyp_id="h2",
+                      set_best_cer=0.18, evaluated_count=20, best_cer=0.2,
+                      best_hyp_id="champ")
+    sched, parents = _decide_iteration(cfg_, st)
+    assert sched.chosen_mode == "refine"
+    assert len(parents) == 1 and parents[0]["hyp_id"] == "h2"
+    assert parents[0]["harness_family_id"] == "lineage"
