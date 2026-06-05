@@ -2,6 +2,18 @@
 
 One-time operation. Writes ``baseline/target_cer.json`` and the artefact MUST
 NOT be re-measured/overwritten (`STT-PIPELINE-SPEC.md §7, §11`).
+
+The output file carries two distinct numbers:
+    - ``target_cer``  : the *manual* success goal (currently 0.10). Set once
+                       at measurement time via ``--target-cer``. Phase 3
+                       keep/revert is judged against this.
+    - ``baseline_cer``: the measured faster-whisper corpus_cer. Comparison
+                       anchor only; not a pass/fail threshold.
+
+If a future ambition change requires updating *only* ``target_cer`` without
+re-measuring the baseline, hand-edit the field with a clear commit message
+rather than re-running this script — re-running is refused while the output
+already exists, by design.
 """
 
 from __future__ import annotations
@@ -65,6 +77,45 @@ def _hf_revision(model_name: str) -> str | None:
         return None
 
 
+# Production "LEFT" (channel 0 = "_l", 상담사) faster-whisper decoding/VAD
+# params, lifted verbatim from stt-engine configs/domains/aig.yaml. SAME stock
+# base model (large-v3-turbo) — NOT the fine-tuned ct2 model — and decoding/VAD
+# only: no preprocess (speed/highpass), no postprocess/split/prompt_correct.
+# Used to re-anchor the baseline against a realistically-tuned decoder rather
+# than the bare beam=5 default.
+_PROD_LEFT_INITIAL_PROMPT = (
+    "이 내용은 보험 상담 전화 통화입니다. 주요 보험 용어는 AIG 손해보험, 보험료, "
+    "보험금, 보장개시일, 면책기간, 약관, 특약 등입니다."
+)
+_PROD_LEFT_DECODING = {
+    "language": "ko",
+    "task": "transcribe",
+    "beam_size": 10,
+    "best_of": 10,
+    "patience": 1.0,
+    "length_penalty": 1.0,
+    "repetition_penalty": 1.05,
+    "no_repeat_ngram_size": 5,
+    "suppress_blank": True,
+    "compression_ratio_threshold": 2.2,
+    "log_prob_threshold": -1.0,
+    "no_speech_threshold": 0.6,
+    "condition_on_previous_text": True,
+    "initial_prompt": _PROD_LEFT_INITIAL_PROMPT,
+    "word_timestamps": True,
+    "without_timestamps": False,
+    "chunk_length": 30,
+    "vad_filter": True,
+    "vad_parameters": {
+        "threshold": 0.5,
+        "min_speech_duration_ms": 400,
+        "max_speech_duration_s": float("inf"),
+        "min_silence_duration_ms": 1000,
+        "speech_pad_ms": 400,
+    },
+}
+
+
 def measure(
     batch: str,
     out_path: Path,
@@ -75,6 +126,7 @@ def measure(
     language: str = "ko",
     vad_filter: bool = True,
     target_cer: float = 0.10,
+    decoding_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if batch in _FORBIDDEN_BATCHES:
         raise SystemExit(f"refusing to measure baseline on holdout {batch!r}")
@@ -97,14 +149,15 @@ def measure(
     )
     model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
-    decoding_params = {
-        "language": language,
-        "task": "transcribe",
-        "beam_size": beam_size,
-        "vad_filter": vad_filter,
-        "without_timestamps": True,
-        "condition_on_previous_text": False,
-    }
+    if decoding_params is None:
+        decoding_params = {
+            "language": language,
+            "task": "transcribe",
+            "beam_size": beam_size,
+            "vad_filter": vad_filter,
+            "without_timestamps": True,
+            "condition_on_previous_text": False,
+        }
 
     per_file: list[dict[str, Any]] = []
     for wav_path, label_path in pairs:
@@ -195,10 +248,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-vad-filter", dest="vad_filter", action="store_false")
     parser.set_defaults(vad_filter=True)
     parser.add_argument(
+        "--preset",
+        choices=["default", "prod-left"],
+        default="default",
+        help=(
+            "default = bare beam=5 decoder (original sealed baseline). "
+            "prod-left = stt-engine 상담사(_l) faster-whisper decoding/VAD "
+            "params on the same stock base model (no pre/postprocess)."
+        ),
+    )
+    parser.add_argument(
         "--target-cer",
         type=float,
         default=0.10,
-        help="success goal (Phase 3 keep/revert is against this, not baseline_cer)",
+        help=(
+            "manual success goal sealed into target_cer.json (Phase 3 "
+            "keep/revert and success criterion). Independent from the "
+            "measured faster-whisper baseline_cer. Set once at initial "
+            "measurement; do not re-run this script to change it — "
+            "hand-edit target_cer in the sealed file instead."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -211,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
         beam_size=args.beam_size,
         vad_filter=args.vad_filter,
         target_cer=args.target_cer,
+        decoding_params=dict(_PROD_LEFT_DECODING) if args.preset == "prod-left" else None,
     )
     print(
         f"\ntarget_cer={result['target_cer']:.6f}  "

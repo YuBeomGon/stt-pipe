@@ -8,3 +8,4 @@ rapidfuzz==3.10.0
 huggingface_hub==0.25.2
 silero-vad==5.1
 pytest==8.3.3
+PyYAML==6.0.2

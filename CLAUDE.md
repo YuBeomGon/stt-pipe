@@ -1,37 +1,24 @@
 # CLAUDE.md
 
-기본 행동 규약은 [`AGENTS.md`](AGENTS.md) — 모든 에이전트 공통. 본 파일은 Claude
-Code 세션 특화 보충만.
+> **Candidate session gate**: 본 prompt 본문이
+> `=== BEGIN CANDIDATE PROFILE ===` 로 시작하면 (= `claude -p` 가
+> `harness.runner.build_candidate_prompt` 결과를 받은 경우), **본 CLAUDE.md
+> 전체를 무시한다**. Candidate 의 행동은 prompt 안의 profile
+> ([`harness/prompts/candidate.md`](harness/prompts/candidate.md)) 와 그 뒤에
+>이어지는 runtime 데이터만 따른다.
+>
+> 본 파일은 *interactive 운영자* (사람이 `claude` 를 직접 띄운 세션) 한정.
+> 자세한 출처: [`docs/CANDIDATE-CONTEXT.md`](docs/CANDIDATE-CONTEXT.md).
+
+기본 행동 규약 + 권한 표 + 정보 출처 + Phase 별 행동은 [`AGENTS.md`](AGENTS.md).
+본 파일은 interactive 운영자 세션 한정 보충.
 
 ---
 
-## 1. Phase 3 호출
+## 채팅 응답 스타일 (운영자 interactive 한정)
 
-`/autoresearch` 호출 형태·운영 절차는 [`docs/PHASE3-PLAN.md §2`](docs/PHASE3-PLAN.md).
-산출물 위치는 PHASE3-PLAN §5.
-
----
-
-## 2. 채팅 응답 스타일
-
-- 채팅 응답은 **짧고 간결하게**. 장황한 설명·중복 요약·불필요한 머리말 금지.
+- 응답은 **짧고 간결**. 장황한 설명·중복 요약·불필요한 머리말 금지.
 - 한 줄로 끝낼 수 있으면 한 줄로. 결정·결과·다음 한 단계만.
-- **이 규칙은 채팅 응답 한정**. 코드·문서(`docs/`, `README.md`, 코드 주석 등) 작성
-  시는 명세대로 충실히. 본 규칙을 코드·문서에 끌어다 적용하지 말 것.
-
----
-
-## 3. 슬래시 커맨드
-
-- `/autoresearch` — 메인 루프
-- `/autoresearch:plan` — 4 종 입력 검증·구체화 (본 루프 진입 전 권장)
-- `/autoresearch:evals` — 과거 runs 분석
-
----
-
-## 4. 디버깅 시
-
-- 가설이 깨지면 `runs/<hyp_id>/diagnosis_report.json` 의 focus file 요약을 먼저 보고,
-  필요하면 `per_file.jsonl` / `_telemetry/` 로 내려간다.
-- `judge/` 본문 의심되면 *제안만* — 사람 확인 없이 편집 X (평가자 보호).
-- holdout (0813) 은 어떤 디버깅 단계에서도 건드리지 않는다.
+- **이 규칙은 interactive 운영자 채팅 한정**. 코드·문서 작성 (`docs/`,
+  `README.md`, 코드 주석 등) 또는 candidate session (`claude -p`) 응답에는
+  적용 X.

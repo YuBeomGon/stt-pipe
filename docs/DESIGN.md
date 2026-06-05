@@ -1,12 +1,12 @@
 # AIG STT — 설계 문서
 
-> **목적**: `STT-PIPELINE-SPEC.md` 의 문제를 `uditgoenka/autoresearch` 로 풀어
-> faster-whisper baseline에 견주는 corpus_cer을 자동 진화로 달성한다.
+> **목적**: `STT-PIPELINE-SPEC.md` 의 문제를 repository 내부 `harness/` controller로
+> 풀어 사람이 정한 `target_cer` 까지 corpus_cer 을 자동 진화로 낮춘다.
 >
 > 본 문서는 도메인 명세(문제 정의)는 다루지 않는다 — *어떻게 구축하고 어떻게
 > 돌릴지* 만 다룬다.
-> `SELF-EVOLVE-HARNESS-SPEC.md` 는 참고용 일반 원리이며, 이 저장소의 정본 규칙은
-> `STT-PIPELINE-SPEC.md` 와 본 문서에 둔다.
+> 문서별 정본 위치는 [`SSOT.md`](SSOT.md)를 따른다. `SELF-EVOLVE-HARNESS-SPEC.md` 는
+> 참고용 일반 원리이며, `AUTORESEARCH.md` 는 historical 조사 기록이다.
 
 ---
 
@@ -16,12 +16,20 @@
 |------|------|----------|------|
 | **Phase 1 — Harness 구축** | 골격·환경·judge·baseline·σ 측정 | **OFF** (자유롭게 수정) | 사람 |
 | **Phase 2 — 평가 인프라** | `analyze_run.py`·`evaluate_holdout.py`·REPORT 템플릿 | OFF | 사람 |
-| **Phase 3 — Autoresearch 실행 + 분석** | autoresearch 가 transcribe.py 진화 + 잡 종료 후 Phase 2 도구로 평가 | **ON** (holdout chmod + baseline-relative verify) | 에이전트 + 사람(분석) |
+| **Phase 3 — 자체 Harness 실행 + 분석** | `harness/` 가 후보 검증·채택·기록을 통제 + 잡 종료 후 Phase 2 도구로 평가 | **ON** — holdout chmod 000, workspace 정적 검사, `harness/guards.py` 수치 가드, protected 영역 편집 제한 | harness + 사람(분석) |
 
 **왜 분리**:
 - Phase 1 가드레일 켜면 셋업 자체가 막힘 (judge 작성 중 holdout 접근, 초기 스텁이 가드 위반).
 - 평가 인프라(Phase 2) 를 잡 *전* 에 만들지 않으면, 잡 후 관측한 결과에 분석을 reverse-fit 할 위험.
-- Phase 3 진입 시점에 가드레일 *일괄 활성화* 후 에이전트에 넘긴다.
+- Phase 3 진입 시점에 가드레일 *일괄 활성화* 후 자체 harness가 검증·판정한다.
+
+**왜 자체 harness**:
+- 외부 autoresearch는 반복 주체일 뿐, 이 프로젝트의 keep/reject/success 정책을
+  코드로 소유하지 못한다.
+- 필요한 통제는 `workspace/transcribe.py` 표면 제한, guard 판정, best 상태,
+  rollback, history 기록이다.
+- 따라서 controller 로직은 `harness/`에 두고, `scripts/`는 사람이 실행하는
+  thin entrypoint로 제한한다.
 
 ---
 
@@ -32,10 +40,13 @@ aig/
 ├── docs/
 │   ├── STT-PIPELINE-SPEC.md     # 도메인 명세 (변경 금지)
 │   ├── DESIGN.md                # 본 문서
+│   ├── SSOT.md                  # 문서 정본 지도
+│   ├── AUTORESEARCH.md          # autoresearch 조사 기록 (historical)
 │   ├── PHASE1-PLAN.md           # Harness 구축 절차
 │   ├── PHASE2-PLAN.md           # 평가 인프라 구축 절차
-│   ├── PHASE3-PLAN.md           # autoresearch 실행 + 분석 절차
-│   ├── PHASE3-LOOP.md           # Phase 3 loop / agent architecture Mermaid
+│   ├── PHASE3-PLAN.md           # 자체 harness 실행 + 분석 절차
+│   ├── PHASE3-STATUS.md         # Phase 3 DoD 체크 상태
+│   ├── PHASE3-LOOP.md           # Phase 3 loop Mermaid (보조)
 │   ├── templates/REPORT.md      # Phase 3 보고 양식 (Phase 2 에서 생성)
 │   └── SELF-EVOLVE-HARNESS-SPEC.md # 참고용 일반 하네스 원리
 ├── data/
@@ -47,17 +58,35 @@ aig/
 ├── .cache/
 │   └── ct2_models/whisper-large-v3-turbo/   # CT2 변환 캐시
 ├── workspace/
-│   └── transcribe.py            # ← autoresearch 가 만질 유일한 파일
+│   └── transcribe.py            # ← 후보가 수정하는 유일한 파일
 ├── frozen/
+│   ├── __init__.py
 │   └── asr_backend.py           # CT2 + whisper-large-v3-turbo 봉인 (Phase 3 편집 금지)
 ├── judge/
 │   ├── __init__.py
 │   ├── normalize.py             # §5.1 정규화
 │   ├── metrics.py               # corpus_cer + edit ops + guards
 │   ├── pairing.py               # label-driven _l 페어링
+│   ├── diagnosis.py             # 11파일 summary + focus 결합 → diagnosis_report.json
 │   └── evaluate.py              # entry point: run → score_report.json + diagnosis_report.json
+├── harness/
+│   ├── guards.py                # Phase 3 수치 가드 (산술/catastrophic/runtime/quality)
+│   ├── history.py               # HISTORY.md append
+│   ├── policy.py                # keep/reject/success + micro_bank 판정
+│   ├── scheduler.py             # iteration mode 결정 (explore/refine/combine/ablate/repair/plateau) — base schedule + override precedence + discovery floor
+│   ├── portfolio.py             # 후보 bank (global_best/family_best/metric_best/near_best/micro_bank/rejected_promising) + parents_for_mode
+│   ├── signature.py             # diff feature 추출 → harness_signature + family(Jaccard) 군집
+│   ├── cooldown.py              # 반복 실패 family/signature soft 경고 (현재 reject-only soft MVP)
+│   ├── config.py               # keep/banking threshold 등 상수
+│   ├── state.py                 # best/iteration 상태
+│   ├── verify.py                # judge 실행 + guard 적용
+│   └── runner.py                # loop orchestration + prompt 빌드 + mode/parent 주입
 ├── scripts/
-│   ├── verify.sh                # autoresearch Verify 명령 (Phase 3 진입 시 가드 추가)
+│   ├── evolve.py                # harness.runner thin CLI
+│   ├── verify.sh                # 사람이 실행하는 현재 후보 평가 entrypoint
+│   ├── verify_check.py          # harness.guards compatibility wrapper
+│   ├── swap_verify.sh           # legacy/autoresearch 운영 잔재 — 정리 대상
+│   ├── swap_claude.sh           # legacy/autoresearch 운영 잔재 — 정리 대상
 │   ├── build_audio_profile.py   # 0715 audio-only profile 생성 (Silero VAD)
 │   ├── measure_baseline.py      # faster-whisper 1회 측정
 │   ├── measure_sigma.py         # 대표 파일 3회 반복 → σ proxy
@@ -72,18 +101,29 @@ aig/
 │       └── AIG_녹취반출_20250715.json  # 0715 audio-only 특성 (Phase 1 산출).
 │                                        # 0813 (holdout) 는 Phase 3 *전* 생성 X
 ├── runs/
-│   ├── <hyp_id>/                # autoresearch iteration별 산출물
+│   ├── <hyp_id>/                # harness iteration별 산출물
 │   │   ├── score_report.json
 │   │   ├── per_file.jsonl
 │   │   ├── diagnosis_report.json # LLM 추론용 11파일 summary + focus 최대 2개
 │   │   └── _telemetry/
 │   │       ├── <file_id>.jsonl   # 정본 segment telemetry (optional)
 │   │       └── <file_id>.srt     # JSONL 에서 일방향 변환된 사람용 view
-│   └── _summary/                # Phase 3 종료 시 산출 (REPORT.md, HOLDOUT.md)
+│   └── _summary/                # harness 전용 HISTORY/state + 종료 산출
+├── .claude/                    # legacy/autoresearch guard 자산 — 정리 대상
+│   ├── settings.json           # tool permissions allowlist (Edit/Write 대상 제한)
+│   ├── hooks/                  # PreToolUse 훅 — judge/, frozen/, baseline/,
+│   │                            # assets/, 보호 scripts 편집 거부 (ENV 우회 불가)
+│   └── ...
+├── .claude.alt/                # legacy/autoresearch guard 자산 — 정리 대상
+├── .ckignore                   # legacy context 읽기 차단 패턴 — 정리 대상
 ├── tests/
 ├── pyproject.toml or requirements.txt
 └── README.md
 ```
+
+> `.claude/` / `.claude.alt/` / `.ckignore` / swap 스크립트는 autoresearch 중심
+> 운영에서 생긴 자산이다. 자체 harness 전환 뒤 폐기 또는 archive 여부는
+> `PHASE3-STATUS.md`에서 추적한다.
 
 ---
 
@@ -159,7 +199,7 @@ python -m judge.evaluate \
 3. per-file CER + 가드 산출 → `score_report.json` 작성
 4. 11파일 전체의 profile summary 와 focus file 최대 2개를 결합해
    `diagnosis_report.json` 작성
-5. **마지막 줄에 `corpus_cer` 한 숫자 print** (autoresearch Verify 가 파싱)
+5. **마지막 줄에 `corpus_cer` 한 숫자 print** (CLI 호환용)
 
 `transcribe(audio, sr) -> str` 계약은 유지한다. pipeline 이 coverage 를 보고하고 싶으면
 judge 가 설정한 `ASR_TELEMETRY_DIR`, `ASR_TELEMETRY_FILE_ID` 를 사용해
@@ -188,12 +228,12 @@ def to_storage_view(np_array): ...                      # numpy → ctranslate2.
 
 - 봉인: 모델 이름, 변환 캐시 경로, device, compute_type
 - workspace 자유: decoding_kwargs (beam, temperature, fallback, sampling 등 전부)
-- 추가 보호: Phase 3 verify 가 workspace 에 `import ctranslate2` / `import transformers` / `from_pretrained` / `Whisper(` 중 어느 패턴이라도 출현 시 fail (PHASE3 §1.2)
+- 추가 보호: Phase 3 verify 가 workspace 에 `import ctranslate2` / `import transformers` / `from_pretrained` / `Whisper(` 중 어느 패턴이라도 출현 시 fail (PHASE3-PLAN §5)
 
 ### 2.7 초기 transcribe 스텁 (`workspace/transcribe.py`)
 
 가장 단순한 호출 — frozen helper 3 개만 사용, chunking 없이 1 회.
-30 초 초과 long-form 은 깨질 거고, **그게 autoresearch 가 풀어야 할 출발점**.
+30 초 초과 long-form 은 깨질 거고, **그게 Phase 3 후보 탐색의 출발점**.
 
 ```python
 from frozen.asr_backend import load, generate, to_storage_view
@@ -204,8 +244,8 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
     ...
 ```
 
-스텁 작성 기준: *돌아가기만* 하면 됨. CER 점수는 나쁠 거고, 그래야 autoresearch
-가 개선 여지를 갖는다.
+스텁 작성 기준: *돌아가기만* 하면 됨. CER 점수는 나쁠 거고, 그래야 Phase 3
+탐색이 개선 여지를 갖는다.
 
 ### 2.8 Verify 스크립트 (`scripts/verify.sh`)
 
@@ -324,7 +364,7 @@ lexical sort. 한 번 결정되면 noise_floor.json 에 박혀 잡 동안 고정
 §0 참조.
 
 요점만:
-- 진입 시점: Phase 1 DoD 통과 직후, autoresearch 잡 *전*
+- 진입 시점: Phase 1 DoD 통과 직후, Phase 3 잡 *전*
 - 산출물: `scripts/analyze_run.py`, `scripts/evaluate_holdout.py`, `docs/templates/REPORT.md`
 - 평가 8 개 축 (A 결과 / B 하네스 구멍 / C 에이전트 시야 / D 탐색 다양성 / E 메트릭 적절성 / F 비용 / G Attribution / H Reasoning 품질)
 - 합성 데이터로 smoke test — 실제 잡 결과 없이 분석 도구 검증
@@ -333,16 +373,17 @@ lexical sort. 한 번 결정되면 noise_floor.json 에 박혀 잡 동안 고정
 
 ---
 
-## 4. Phase 3 — Autoresearch 실행 + 분석
+## 4. Phase 3 — 자체 Harness 실행 + 분석
 
 상세는 [`PHASE3-PLAN.md`](PHASE3-PLAN.md). 정본으로 둔다.
 
 요점만:
 - 진입 시점: Phase 1 + Phase 2 DoD 통과 직후
-- 진입 직전 일괄 활성화: holdout chmod, verify baseline-relative policy
-- `workspace/transcribe.py` 만 scope, primary metric 은 `corpus_cer`
-- 결정 = autoresearch (keep/revert), hard-fail 은 무효 후보만 즉시 ROLLBACK
-- 잡 종료 후 Phase 2 도구로 평가 — REPORT.md + HOLDOUT.md
+- 진입 직전: holdout 봉인 → protected 영역 확인 → 정상 verify/smoke. PHASE3-PLAN §3.
+- 후보 표면은 `workspace/transcribe.py` 하나다.
+- primary metric 은 `corpus_cer`.
+- 결정 = `harness/` policy. hard-fail 은 무효 후보 reject/rollback.
+- 잡 종료 후 Phase 2 도구로 평가 — REPORT.md + HOLDOUT.md.
 
 ---
 
@@ -351,9 +392,13 @@ lexical sort. 한 번 결정되면 noise_floor.json 에 박혀 잡 동안 고정
 - GPU 사양·메모리: large-v3-turbo float16 + faster-whisper 동시 적재 가능한지
 - Python 버전, ctranslate2 버전 호환성
 - 데이터 실제 절대경로 — `ASR_RAW_DATA_ROOT` 설정 여부
-- autoresearch 의 노이즈 σ 임계 지원 여부 (PHASE3 §1.2)
-- autoresearch 의 파일 접근 권한 / 디렉토리 제한 메커니즘 (PHASE3 §3)
+- 자체 harness runner의 후보 생성 인터페이스
+- `harness/policy.py`의 provisional σ fallback 기본값 확정
 - 25 iter 총 소요 시간 추정 (per-iter verify 시간 측정 후)
+- legacy autoresearch 자산의 폐기 또는 archive 방식
+
+**결정됨**:
+- 외부 autoresearch 중심 운영 대신 repository 내부 `harness/` controller로 전환.
 
 ---
 
@@ -367,3 +412,6 @@ lexical sort. 한 번 결정되면 noise_floor.json 에 박혀 잡 동안 고정
 - holdout 을 `workspace/`, `judge/`, prompt 에서 *언급* (실수로 참조 가능)
 - judge 와 transcribe 가 같은 정규화 모듈을 import 하지 않고 각자 구현
 - 8 개 축을 단일 점수로 환원해 자동 판정 — 사람 판단 항목은 사람이 채움
+- 외부 loop의 Scope 또는 hook을 운영 통제의 정본으로 삼기
+- `scripts/`에 controller 상태 전이 로직을 계속 누적
+- `scripts/swap_verify.sh` 또는 `scripts/swap_claude.sh` 를 새 운영 경로에 다시 포함

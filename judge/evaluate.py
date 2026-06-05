@@ -47,7 +47,13 @@ def _load_transcribe(spec: str) -> Callable[[np.ndarray, int], str]:
 
 
 def _read_coverage(telemetry_dir: Path, file_id: str) -> float | None:
-    """Sum ``end - start`` over entries in the sidecar JSONL, if present."""
+    """Sum segment durations from the sidecar JSONL, if present.
+
+    Canonical field names are ``start_s`` / ``end_s`` (`STT-PIPELINE-SPEC.md
+    §10.2`). Older sidecars used ``start`` / ``end``; we accept them as a
+    fallback so legacy telemetry isn't silently dropped, but new emitters
+    should write the ``_s`` suffix.
+    """
     path = telemetry_dir / f"{file_id}.jsonl"
     if not path.is_file():
         return None
@@ -59,8 +65,8 @@ def _read_coverage(telemetry_dir: Path, file_id: str) -> float | None:
                 if not line:
                     continue
                 obj = json.loads(line)
-                start = obj.get("start")
-                end = obj.get("end")
+                start = obj.get("start_s", obj.get("start"))
+                end = obj.get("end_s", obj.get("end"))
                 if start is None or end is None:
                     continue
                 total += max(0.0, float(end) - float(start))

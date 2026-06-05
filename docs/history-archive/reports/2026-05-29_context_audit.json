@@ -1,0 +1,38 @@
+{
+  "produced_at": "2026-05-29T10:28:32.084777+00:00",
+  "probe_cmd": "claude -p --disable-slash-commands --strict-mcp-config \n  --disallowedTools=Bash,WebFetch,WebSearch,Task",
+  "cwd": "/data/MyProject/side/evolve/aig",
+  "candidate_returncode": 0,
+  "parsed_fields": {
+    "CWD": "/data/MyProject/side/evolve/aig",
+    "CLAUDE_MD_LOADED": "YES",
+    "CLAUDE_MD_FIRST_50": "> **Candidate session gate**: 본 prompt 본문이",
+    "AGENTS_MD_LOADED": "NO",
+    "SETTINGS_JSON_VISIBLE": "NO",
+    "HOOKS_FIRED_AT_START": "NO",
+    "PLUGIN_AUTO_INJECTED": "NONE",
+    "ENV_USER_EMAIL_VISIBLE": "YES",
+    "ENV_CURRENT_DATE_VISIBLE": "YES",
+    "GIT_STATUS_VISIBLE": "YES",
+    "GIT_RECENT_COMMITS_COUNT": "5",
+    "SKILLS_AVAILABLE_COUNT": "0",
+    "MCP_SERVERS_VISIBLE": "NONE"
+  },
+  "missing_keys": [],
+  "leaks_detected": [
+    {
+      "key": "ENV_USER_EMAIL_VISIBLE",
+      "label": "Operator email PII",
+      "observed": "YES",
+      "rationale": "Minor PII leak into candidate session."
+    },
+    {
+      "key": "GIT_RECENT_COMMITS_COUNT",
+      "label": "Git recent commits visible",
+      "observed": "5",
+      "rationale": "Past iter commit subjects (e.g. 'iter9: keep ...') reveal harness verdicts and previous attempt outcomes — undermines A' recent-iter table compression."
+    }
+  ],
+  "raw_stderr": "",
+  "raw_stdout": "CWD: /data/MyProject/side/evolve/aig\nCLAUDE_MD_LOADED: YES\nCLAUDE_MD_FIRST_50: > **Candidate session gate**: 본 prompt 본문이\n> `---\nAGENTS_MD_LOADED: NO\nSETTINGS_JSON_VISIBLE: NO\nHOOKS_FIRED_AT_START: NO\nPLUGIN_AUTO_INJECTED: NONE\nENV_USER_EMAIL_VISIBLE: YES\nENV_CURRENT_DATE_VISIBLE: YES\nGIT_STATUS_VISIBLE: YES\nGIT_RECENT_COMMITS_COUNT: 5\nSKILLS_AVAILABLE_COUNT: 0\nMCP_SERVERS_VISIBLE: NONE\n\nAUDIT-DONE\n"
+}

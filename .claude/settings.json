@@ -1,0 +1,80 @@
+{
+  "permissions": {
+    "allow": [],
+    "deny": [
+      "Edit(./judge/**)",
+      "Write(./judge/**)",
+      "MultiEdit(./judge/**)",
+      "Edit(./frozen/**)",
+      "Write(./frozen/**)",
+      "MultiEdit(./frozen/**)",
+      "Edit(./baseline/**)",
+      "Write(./baseline/**)",
+      "MultiEdit(./baseline/**)",
+      "Edit(./assets/**)",
+      "Write(./assets/**)",
+      "MultiEdit(./assets/**)",
+      "Edit(./scripts/swap_verify.sh)",
+      "Edit(./scripts/swap_claude.sh)",
+      "Edit(./scripts/seal_holdout.sh)",
+      "Edit(./scripts/evaluate_holdout.py)",
+      "Edit(./scripts/verify.sh)",
+      "Edit(./scripts/verify.sh.alt)",
+      "Edit(./scripts/verify_check.py)",
+      "Write(./scripts/swap_verify.sh)",
+      "Write(./scripts/swap_claude.sh)",
+      "Write(./scripts/seal_holdout.sh)",
+      "Write(./scripts/evaluate_holdout.py)",
+      "Write(./scripts/verify.sh)",
+      "Write(./scripts/verify.sh.alt)",
+      "Write(./scripts/verify_check.py)",
+      "Read(./data/raw/wav/AIG_녹취반출_20250813/**)",
+      "Read(./data/raw/label/AIG_녹취반출_20250813/**)",
+      "Edit(./data/raw/wav/AIG_녹취반출_20250813/**)",
+      "Edit(./data/raw/label/AIG_녹취반출_20250813/**)",
+      "Read(./harness/**)",
+      "Read(./judge/**)",
+      "Read(./baseline/**)",
+      "Read(./runs/**)",
+      "Read(./frozen/**)",
+      "Read(./docs/**)",
+      "Read(./.claude/**)",
+      "Read(./scripts/**)",
+      "Read(./tests/**)",
+      "Bash(bash ./scripts/swap_verify.sh*)",
+      "Bash(bash ./scripts/swap_claude.sh*)",
+      "Bash(bash scripts/swap_verify.sh*)",
+      "Bash(bash scripts/swap_claude.sh*)",
+      "Bash(./scripts/swap_verify.sh*)",
+      "Bash(./scripts/swap_claude.sh*)",
+      "Bash(chmod*data/raw/wav/AIG_녹취반출_20250813*)",
+      "Bash(chmod*data/raw/label/AIG_녹취반출_20250813*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/restrict_workspace.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/block_swap_and_seal.py"
+          }
+        ]
+      }
+    ]
+  },
+  "_doc": "Phase 3 active. Activated via `bash scripts/swap_claude.sh` (사람 전용). `.claude.alt/` <-> `.claude/`. AUTORESEARCH.md §6/§7 함의에 따라 우리 scope 가드 4 layer 중 layer 3.",
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": false
+  }
+}

@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Restrict test collection to tests/ — keeps pytest from walking data/raw/
+# whose holdout subdirectories are chmod 000 (sealed during Phase 3) and
+# raise PermissionError on stat during recursive collection.
+testpaths = ["tests"]

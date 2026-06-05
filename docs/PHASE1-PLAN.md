@@ -1,7 +1,7 @@
 # Phase 1 — Harness 구축 플랜
 
 > **범위**: `DESIGN.md` 의 Phase 1 만. 가드레일은 전부 OFF 상태로 골격·judge·baseline·σ
-> 까지 완성하는 것이 목표. Phase 2 (평가 인프라) / Phase 3 (autoresearch 실행 + 분석) 은 별도 플랜.
+> 까지 완성하는 것이 목표. Phase 2 (평가 인프라) / Phase 3 (자체 harness 실행 + 분석) 은 별도 플랜.
 
 작업 순서는 **의존 관계 기반**. judge 가 모든 측정의 기반이므로 가장 먼저, 그 다음
 스텁, baseline, σ 순.
@@ -409,7 +409,7 @@ audio profile 생성 후 최종 verify 에서 확인한다.
 **검증**:
 - exit code 0
 - corpus_cer ≤ 1.5 정도 (말도 안 되게 큰 값이면 정규화/페어링 의심)
-- per_file 12 행
+- per_file 11 행 (`pair_batch(skip_empty_labels=True)` 기본값으로 degenerate label 1 개 자동 스킵 후)
 - hallucination_hits 들이 산출됨
 
 ---
@@ -464,7 +464,7 @@ audio-only 원칙. 필요하면 별도 `assets/label_profile/<batch>.json` 으�
 
 ### 7.3 검증
 
-- per_file 12 행 (0715)
+- per_file 11 행 (0715, degenerate label 자동 스킵 적용)
 - duration_s 합산이 11 페어 wav 의 librosa.get_duration 합과 일치
 - speech_segments 가 [0, duration_s] 안에 들어옴
 - profile 생성 후 `bash scripts/verify.sh` 재실행 시 `diagnosis_report.json` 에
@@ -577,4 +577,4 @@ SPEC §6.1 의 representative-file proxy 옵션. 정직하게 *근사* 임을 �
 ## 다음 단계
 
 Phase 1 DoD 전부 통과 → [`PHASE2-PLAN.md`](PHASE2-PLAN.md) (평가 인프라 구축) →
-[`PHASE3-PLAN.md`](PHASE3-PLAN.md) (autoresearch 실행 + 분석).
+[`PHASE3-PLAN.md`](PHASE3-PLAN.md) (자체 harness 실행 + 분석).
