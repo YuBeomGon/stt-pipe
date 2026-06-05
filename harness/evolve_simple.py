@@ -127,7 +127,12 @@ def _write_state(cfg_: SimpleConfig, archive: list[arch.ArchiveRecord]) -> None:
     state = {
         "job_id": cfg_.job_id,
         "iterations": len(archive),
-        "best_hyp_id": best.id if best else None,
+        # NOTE: the verify report for candidate <cid> lives at
+        # runs/<job_id>/<cid>/score_report.json (run_verify is called with
+        # hyp_id=f"{job_id}/{cid}"). scripts/evaluate_holdout._best_eval_run
+        # resolves the anchor as runs/<best_hyp_id>/score_report.json, so the
+        # state field MUST carry the job-qualified id, not the bare cid.
+        "best_hyp_id": f"{cfg_.job_id}/{best.id}" if best else None,
         "best_cer": best.cer if best else None,
         "updated_at": datetime.now(UTC).isoformat(),
     }
@@ -299,12 +304,75 @@ def run_job(cfg_: SimpleConfig) -> str | None:
         # _maybe_holdout dedups per best id so unchanged-best iters are no-ops.
         if cfg_.holdout_every and cfg_.holdout_every > 0 \
                 and (iteration + 1) % cfg_.holdout_every == 0:
-            _maybe_holdout(cfg_, iteration=iteration, archive=archive)
+            peek = _maybe_holdout(cfg_, iteration=iteration, archive=archive)
+            if peek is not None:
+                best = arch.best_record(archive)
+                line = (
+                    f"iter {iteration:03d} | HOLDOUT-PEEK | best="
+                    f"{best.id if best else '—'} | hold={peek:.4f}"
+                )
+                print(line)
+                _write_log(cfg_, {
+                    "iter": iteration, "event": "holdout_peek",
+                    "best_id": best.id if best else None,
+                    "holdout": peek,
+                })
     # Default behavior: always evaluate the holdout once at job end on the final
     # best (dedup makes this a no-op if a K>0 peek already covered this best id).
-    _maybe_holdout(cfg_, iteration=start + cfg_.iters - 1, archive=archive)
+    job_end_iter = start + cfg_.iters - 1
+    holdout_cer = _maybe_holdout(cfg_, iteration=job_end_iter, archive=archive)
     best = arch.best_record(archive)
+    # Job-end summary (spec §8): report in-loop best cer AND holdout cer
+    # together. If a K>0 mid-run peek already covered this best id, _maybe_holdout
+    # returns None (dedup); recover the recorded cer from the sidecar so the
+    # summary still shows hold=<cer>.
+    if best is not None and holdout_cer is None:
+        holdout_cer = _holdout_cer_for(cfg_, best.id)
+    _emit_job_summary(cfg_, iteration=job_end_iter, best=best, holdout=holdout_cer)
     return best.id if best else None
+
+
+def _holdout_cer_for(cfg_: SimpleConfig, hyp_id: str) -> float | None:
+    """Look up the recorded holdout cer for hyp_id from the sidecar (most recent
+    matching row), or None if not present."""
+    sidecar = cfg_.summary_dir / f"{cfg_.job_id}_holdout.jsonl"
+    if not sidecar.is_file():
+        return None
+    found: float | None = None
+    for line in sidecar.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("hyp_id") == hyp_id:
+            found = row.get("holdout_cer")
+    return found
+
+
+def _emit_job_summary(cfg_: SimpleConfig, iteration: int, best, holdout) -> None:
+    """Emit a one-line job-end summary reporting the final in-loop best cer AND
+    the holdout cer together (spec §8), and append it to <job>_log.jsonl."""
+    if best is None:
+        line = f"job {cfg_.job_id} | DONE | no scored candidate"
+        print(line)
+        _write_log(cfg_, {
+            "iter": iteration, "event": "job_end", "best_id": None,
+            "best_cer": None, "holdout": None,
+        })
+        return
+    best_str = f"{best.cer:.4f}" if best.cer is not None else "n/a"
+    hold_str = f"{holdout:.4f}" if holdout is not None else "n/a"
+    line = (
+        f"job {cfg_.job_id} | DONE | best={best.id} | "
+        f"cer={best_str} | hold={hold_str}"
+    )
+    print(line)
+    _write_log(cfg_, {
+        "iter": iteration, "event": "job_end", "best_id": best.id,
+        "best_cer": best.cer, "holdout": holdout,
+    })
 
 
 def _invoke_holdout(cfg_: SimpleConfig, best_id: str) -> float | None:
@@ -350,17 +418,26 @@ def _invoke_holdout(cfg_: SimpleConfig, best_id: str) -> float | None:
     return _read_json(reports[-1]).get("holdout_cer")
 
 
-def _maybe_holdout(cfg_: SimpleConfig, iteration: int, archive) -> None:
+def _maybe_holdout(cfg_: SimpleConfig, iteration: int, archive) -> float | None:
     """Evaluate the holdout on the CURRENT best and record it to the
     <job>_holdout.jsonl sidecar (read by scripts/archive_summary.py).
 
     Each best id is evaluated at most once (dedup), so repeated calls while best
     is unchanged are cheap no-ops. Holdout cer is recorded for REPORTING ONLY —
     nothing here advances best.txt or feeds selection.
+
+    The holdout must transcribe with the BEST candidate's code, not the stub:
+    run_iter restores workspace/transcribe.py to the committed stub after every
+    iteration, so we re-materialize the best snapshot into the workspace before
+    invoking the holdout and restore the stub again afterwards.
+
+    Returns the holdout corpus_cer (or None) for the current best so callers can
+    surface it in the per-iter / job-end log; returns None on a dedup no-op or
+    when there is no best yet.
     """
     best = arch.best_record(archive)
     if best is None:
-        return
+        return None
     sidecar = cfg_.summary_dir / f"{cfg_.job_id}_holdout.jsonl"
     already: set[str | None] = set()
     if sidecar.is_file():
@@ -371,14 +448,20 @@ def _maybe_holdout(cfg_: SimpleConfig, iteration: int, archive) -> None:
                 except json.JSONDecodeError:
                     pass
     if best.id in already:
-        return  # only evaluate each new best once
-    holdout_cer = _invoke_holdout(cfg_, best.id)
+        return None  # only evaluate each new best once
+    repo = cfg_.repo_root
+    arch.materialize_parent(cfg_.job_dir, best.id, repo / cfg_.allowed_path)
+    try:
+        holdout_cer = _invoke_holdout(cfg_, best.id)
+    finally:
+        _restore(repo, cfg_.allowed_path)
     cfg_.summary_dir.mkdir(parents=True, exist_ok=True)
     with sidecar.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps({
             "iter": iteration, "hyp_id": best.id,
             "in_loop_cer": best.cer, "holdout_cer": holdout_cer,
         }, ensure_ascii=False) + "\n")
+    return holdout_cer
 
 
 def _restore(repo_root: Path, allowed_path: Path) -> None:

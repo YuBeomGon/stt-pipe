@@ -88,19 +88,30 @@ def test_run_iter_always_appends_and_keeps_if_better(tmp_path, monkeypatch):
     assert arch.read_best(job_dir) == rec.id    # first scored -> best
     # workspace restored to committed stub
     assert "return ''" in (repo / "workspace" / "transcribe.py").read_text()
-    # state file written with best_hyp_id
+    # state file written with job-qualified best_hyp_id (Fix 2): the verify
+    # report lives at runs/<job>/<cid>/score_report.json, and evaluate_holdout
+    # resolves the anchor as runs/<best_hyp_id>/score_report.json — so the state
+    # field must carry "<job>/<cid>", not the bare cid.
     state = json.loads((job_dir.parent / "_summary" / "job_state.json").read_text())
-    assert state["best_hyp_id"] == rec.id
+    assert state["best_hyp_id"] == f"job/{rec.id}"
     assert state["best_cer"] == 0.15
 
 
-def _seed_best(tmp_path: Path) -> Path:
-    """Create a job dir with one scored record + best.txt (no real corpus)."""
+def _seed_best(tmp_path: Path, best_body: str = "def transcribe(a, s):\n    return 'best'\n") -> Path:
+    """Create a job dir with one scored record + best.txt + the best snapshot
+    (runs/job/0000/transcribe.py) so _maybe_holdout can materialize it. The
+    workspace stub differs from best_body so tests can detect materialization."""
     job_dir = tmp_path / "runs" / "job"
     arch.append_record(job_dir, arch.ArchiveRecord(
         id="0000", parents=[], cer=0.15, status="scored", hypothesis="h",
         what_i_learned="l", fingerprint=["t"], score_report=None, ts="t"))
     arch.write_best(job_dir, "0000")
+    (job_dir / "0000").mkdir(parents=True, exist_ok=True)
+    (job_dir / "0000" / "transcribe.py").write_text(best_body, encoding="utf-8")
+    ws = tmp_path / "workspace"
+    ws.mkdir(parents=True, exist_ok=True)
+    (ws / "transcribe.py").write_text("def transcribe(a, s):\n    return 'stub'\n",
+                                      encoding="utf-8")
     return job_dir
 
 
@@ -155,6 +166,121 @@ def test_holdout_never_influences_best_selection(tmp_path, monkeypatch):
     es._maybe_holdout(cfg, iteration=0, archive=archive)
     assert arch.read_best(tmp_path / "runs" / "job") == "0000"
     assert arch.best_record(arch.load_archive(tmp_path / "runs" / "job")).id == "0000"
+
+
+def test_maybe_holdout_materializes_best_before_invoke_and_restores(tmp_path, monkeypatch):
+    """Fix 1: the holdout must transcribe with the BEST candidate's code, not the
+    stub that run_iter leaves in the workspace. _maybe_holdout must materialize
+    the best snapshot into workspace/transcribe.py BEFORE invoking the holdout,
+    and restore the committed stub AFTER."""
+    repo = _git_repo(tmp_path)
+    # seed best with a DISTINCT body so we can tell best vs committed stub
+    job_dir = repo / "runs" / "job"
+    arch.append_record(job_dir, arch.ArchiveRecord(
+        id="0000", parents=[], cer=0.15, status="scored", hypothesis="h",
+        what_i_learned="l", fingerprint=["t"], score_report=None, ts="t"))
+    arch.write_best(job_dir, "0000")
+    (job_dir / "0000").mkdir(parents=True, exist_ok=True)
+    best_body = "def transcribe(a, s):\n    return 'BEST'\n"
+    (job_dir / "0000" / "transcribe.py").write_text(best_body, encoding="utf-8")
+
+    ws_file = repo / "workspace" / "transcribe.py"
+    seen = {}
+
+    def fake_invoke(cfg_, best_id):
+        # at invoke time the workspace MUST hold the best snapshot, not the stub
+        seen["at_invoke"] = ws_file.read_text(encoding="utf-8")
+        return 0.16
+    monkeypatch.setattr(es, "_invoke_holdout", fake_invoke)
+
+    cfg = es.SimpleConfig(job_id="job", repo_root=repo, holdout_every=1)
+    archive = arch.load_archive(job_dir)
+    es._maybe_holdout(cfg, iteration=0, archive=archive)
+
+    assert seen["at_invoke"] == best_body            # materialized best at invoke
+    # restored to the committed stub afterwards
+    assert "return ''" in ws_file.read_text(encoding="utf-8")
+
+
+def test_maybe_holdout_restores_even_if_invoke_raises(tmp_path, monkeypatch):
+    """Fix 1: restore must happen in a finally — even if the holdout raises."""
+    repo = _git_repo(tmp_path)
+    job_dir = repo / "runs" / "job"
+    arch.append_record(job_dir, arch.ArchiveRecord(
+        id="0000", parents=[], cer=0.15, status="scored", hypothesis="h",
+        what_i_learned="l", fingerprint=["t"], score_report=None, ts="t"))
+    arch.write_best(job_dir, "0000")
+    (job_dir / "0000").mkdir(parents=True, exist_ok=True)
+    (job_dir / "0000" / "transcribe.py").write_text(
+        "def transcribe(a, s):\n    return 'BEST'\n", encoding="utf-8")
+
+    def boom(cfg_, best_id):
+        raise RuntimeError("holdout exploded")
+    monkeypatch.setattr(es, "_invoke_holdout", boom)
+
+    cfg = es.SimpleConfig(job_id="job", repo_root=repo, holdout_every=1)
+    archive = arch.load_archive(job_dir)
+    try:
+        es._maybe_holdout(cfg, iteration=0, archive=archive)
+    except RuntimeError:
+        pass
+    # workspace restored to the committed stub despite the exception
+    assert "return ''" in (repo / "workspace" / "transcribe.py").read_text(encoding="utf-8")
+
+
+def test_maybe_holdout_returns_cer(tmp_path, monkeypatch):
+    """Fix 3 plumbing: _maybe_holdout returns the holdout cer for the current
+    best (None on dedup no-op)."""
+    _seed_best(tmp_path)
+    cfg = es.SimpleConfig(job_id="job", repo_root=tmp_path, holdout_every=1)
+    monkeypatch.setattr(es, "_invoke_holdout", lambda cfg_, best_id: 0.16)
+    archive = arch.load_archive(tmp_path / "runs" / "job")
+    assert es._maybe_holdout(cfg, iteration=0, archive=archive) == 0.16
+    # second call dedups -> returns None
+    assert es._maybe_holdout(cfg, iteration=1, archive=archive) is None
+
+
+def test_job_end_log_reports_in_loop_and_holdout_cer(tmp_path, monkeypatch):
+    """Fix 3: the job-end summary log line reports in-loop best cer AND holdout
+    cer together, and a job_end row carrying the holdout lands in <job>_log.jsonl."""
+    repo = _git_repo(tmp_path)
+    stub = repo / "stub.py"
+    stub.write_text(
+        "import pathlib\n"
+        "p = pathlib.Path('workspace/transcribe.py')\n"
+        "p.write_text('def transcribe(a, s):\\n    return \\'hi\\'\\n')\n"
+        "print('```yaml\\ncapability_investigated: a\\nwhat_i_learned: b\\n"
+        "hypothesis: c\\nfingerprint: [t]\\n```')\n"
+    )
+
+    class FakeVR:
+        def __init__(self):
+            self.ok, self.report, self.error = True, {"corpus_cer": 0.18}, None
+    monkeypatch.setattr(es, "run_verify", lambda cfg: FakeVR())
+    monkeypatch.setattr(es, "_invoke_holdout", lambda cfg_, best_id: 0.21)
+    monkeypatch.setenv("EVOLVE_NO_HARDEN_CLAUDE", "1")
+
+    cfg = es.SimpleConfig(job_id="job", repo_root=repo,
+                          candidate_cmd=f"{sys.executable} {stub}",
+                          iters=1, explore=0.0, parent_policy="best",
+                          holdout_every=0)
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        es.run_job(cfg)
+    out = buf.getvalue()
+    # one-line summary shows both numbers together
+    assert "cer=0.1800" in out
+    assert "hold=0.2100" in out
+    # job_end row in the log jsonl carries the holdout cer
+    log_rows = [json.loads(l) for l in
+                (repo / "runs" / "_summary" / "job_log.jsonl")
+                .read_text().splitlines() if l.strip()]
+    job_end = [r for r in log_rows if r.get("event") == "job_end"]
+    assert len(job_end) == 1
+    assert job_end[0]["best_cer"] == 0.18
+    assert job_end[0]["holdout"] == 0.21
 
 
 def test_run_job_default_evaluates_holdout_only_at_job_end(tmp_path, monkeypatch):
