@@ -125,3 +125,32 @@ def test_promote_to_champion_cas_loses_when_champion_moved(repo: Path, tmp_path)
     lost = gitops.promote_to_champion(repo, "champion", src,
             Path("workspace/transcribe.py"), expected_old=stale_old, message="b2")
     assert lost is None
+
+
+def test_rewind_to_prior_lineage_head_resets_head_and_tree(repo: Path, tmp_path) -> None:
+    """A candidate committed as a checkpoint (HEAD) is rewound to the prior
+    lineage head: HEAD moves back one commit AND the working tree matches it
+    (clean), so the next ensure_worktree_ready passes."""
+    import subprocess
+    from harness import gitops
+
+    def _git(root, *a):
+        return subprocess.run(["git", *a], cwd=root, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    rel = Path("workspace/transcribe.py")
+    prior_head = _git(repo, "rev-parse", "HEAD")
+    prior_body = (repo / rel).read_text(encoding="utf-8")
+
+    # commit a candidate checkpoint on top (HEAD advances).
+    (repo / rel).write_text("CANDIDATE\n", encoding="utf-8")
+    _git(repo, "add", "--", rel.as_posix())
+    _git(repo, "commit", "-qm", "iter1: lineage_advance cand")
+    assert _git(repo, "rev-parse", "HEAD") != prior_head
+
+    gitops.rewind_to_prior_lineage_head(repo)
+
+    assert _git(repo, "rev-parse", "HEAD") == prior_head        # HEAD back one commit
+    assert (repo / rel).read_text(encoding="utf-8") == prior_body  # tree restored
+    status = _git(repo, "status", "--porcelain")
+    assert status == ""                                          # clean tree

@@ -71,6 +71,17 @@ def restore_lineage_head(repo_root: Path, rel_path: Path) -> None:
     _git(repo_root, ["restore", "--source", "HEAD", "--", rel_path.as_posix()])
 
 
+def rewind_to_prior_lineage_head(repo_root: Path) -> None:
+    """Rewind HEAD one commit (to the PRIOR lineage head) and match the working
+    tree to it — clean. Used on a lost-race ``repair``: the candidate was already
+    committed as a ``lineage_advance`` checkpoint (HEAD), but the re-decided set
+    step rejected it as not even a local gain, so it must not remain the lineage
+    head. ``--hard`` is safe because a phase1.5 checkpoint commits exactly one
+    file (workspace/transcribe.py); there is nothing else in the tree to lose.
+    Leaves HEAD == worktree so the next ensure_worktree_ready passes."""
+    _git(repo_root, ["reset", "--hard", "HEAD~1"])
+
+
 def list_worktrees(repo_root: Path) -> list[str]:
     """Return the filesystem paths of all linked worktrees (porcelain parse)."""
     out = _git(repo_root, ["worktree", "list", "--porcelain"]).stdout
