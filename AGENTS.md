@@ -20,7 +20,7 @@ baseline time budget 안에 들어야 한다. faster-whisper `baseline_cer` 은 
 >
 > Phase 1·2 (셋업 / 평가 인프라 구축) 에서는 사람 또는 사람이 명시 지시한
 > 에이전트가 `judge/`, `frozen/`, `scripts/`, `docs/`, `tests/`, `workspace/`,
-> `assets/` 를 자유롭게 작성·수정한다. Phase 3 진입 시점 ([`docs/PHASE3-PLAN.md §3`](docs/PHASE3-PLAN.md))
+> `assets/` 를 자유롭게 작성·수정한다. Phase 3 진입 시점 ([`docs/archive/PHASE3-PLAN.md §3`](docs/archive/PHASE3-PLAN.md))
 > 에 본 표의 제한이 *일괄 활성화* 된다.
 
 | 영역 | Phase 3 권한 |
@@ -75,13 +75,13 @@ holdout 이름·경로 참조 금지의 핵심은 **read access** 다. 다음 �
 
 1. [`docs/SSOT.md`](docs/SSOT.md) — 문서별 정본 지도
 2. [`docs/STT-PIPELINE-SPEC.md`](docs/STT-PIPELINE-SPEC.md) — 도메인 명세 (정본)
-3. [`docs/DESIGN.md`](docs/DESIGN.md) — 시스템 설계
-4. [`docs/PHASE1-PLAN.md`](docs/PHASE1-PLAN.md) — Harness 구축
-5. [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md) — 평가 인프라 구축
-6. [`docs/PHASE3-PLAN.md`](docs/PHASE3-PLAN.md) — 자체 harness 실행 + 분석
-7. [`docs/PHASE3-STATUS.md`](docs/PHASE3-STATUS.md) — Phase 3 DoD 체크 상태
+3. [`docs/archive/DESIGN.md`](docs/archive/DESIGN.md) — 시스템 설계
+4. [`docs/archive/PHASE1-PLAN.md`](docs/archive/PHASE1-PLAN.md) — Harness 구축
+5. [`docs/archive/PHASE2-PLAN.md`](docs/archive/PHASE2-PLAN.md) — 평가 인프라 구축
+6. [`docs/archive/PHASE3-PLAN.md`](docs/archive/PHASE3-PLAN.md) — 자체 harness 실행 + 분석
+7. [`docs/archive/PHASE3-STATUS.md`](docs/archive/PHASE3-STATUS.md) — Phase 3 DoD 체크 상태
 8. [`README.md`](README.md) — 사람용 진입점
-9. [`docs/SELF-EVOLVE-HARNESS-SPEC.md`](docs/SELF-EVOLVE-HARNESS-SPEC.md) — 참고용. 정본 승격 X
+9. [`docs/archive/SELF-EVOLVE-HARNESS-SPEC.md`](docs/archive/SELF-EVOLVE-HARNESS-SPEC.md) — 참고용. 정본 승격 X
 
 명세 본문의 라벨 문장을 prompt/후처리에 직접 주입 금지 (SPEC §11).
 
@@ -95,9 +95,9 @@ holdout 이름·경로 참조 금지의 핵심은 **read access** 다. 다음 �
 
 ## 5. Phase 별 행동 규약
 
-- **Phase 1** — Harness 구축 (사람 주도, 가드레일 OFF). 절차: [`docs/PHASE1-PLAN.md`](docs/PHASE1-PLAN.md). 에이전트는 지시 받은 부분 보조만.
-- **Phase 2** — 평가 인프라 구축 (사람 주도, 가드레일 OFF). 절차: [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md). `analyze_run.py` / `evaluate_holdout.py` / REPORT 템플릿.
-- **Phase 3** — 자체 harness 실행 + 분석 (controller 자동, 가드레일 ON). 절차: [`docs/PHASE3-PLAN.md`](docs/PHASE3-PLAN.md). 후보 표면은 `workspace/transcribe.py` 만 수정.
+- **Phase 1** — Harness 구축 (사람 주도, 가드레일 OFF). 절차: [`docs/archive/PHASE1-PLAN.md`](docs/archive/PHASE1-PLAN.md). 에이전트는 지시 받은 부분 보조만.
+- **Phase 2** — 평가 인프라 구축 (사람 주도, 가드레일 OFF). 절차: [`docs/archive/PHASE2-PLAN.md`](docs/archive/PHASE2-PLAN.md). `analyze_run.py` / `evaluate_holdout.py` / REPORT 템플릿.
+- **Phase 3** — 자체 harness 실행 + 분석 (controller 자동, 가드레일 ON). 절차: [`docs/archive/PHASE3-PLAN.md`](docs/archive/PHASE3-PLAN.md). 후보 표면은 `workspace/transcribe.py` 만 수정.
 
 ---
 
@@ -105,14 +105,14 @@ holdout 이름·경로 참조 금지의 핵심은 **read access** 다. 다음 �
 
 `bash scripts/verify.sh` → 마지막 줄에 `corpus_cer` 한 숫자. Phase 3 에서는
 `harness/guards.py` 기준 hard-fail 위반 시 exit 1 → reject/rollback. 자세히는
-[`PHASE3-PLAN.md`](docs/PHASE3-PLAN.md).
+[`PHASE3-PLAN.md`](docs/archive/PHASE3-PLAN.md).
 
 `scripts/verify.sh` 는 사람이 직접 실행할 수 있는 평가 entrypoint다. 수치 가드는
 `harness/guards.py`가 담당한다. 과거 `verify.sh.alt` / swap 구조는 자체 harness
-전환 과정의 정리 대상으로 [`docs/PHASE3-STATUS.md`](docs/PHASE3-STATUS.md)에서 추적한다.
+전환 과정의 정리 대상으로 [`docs/archive/PHASE3-STATUS.md`](docs/archive/PHASE3-STATUS.md)에서 추적한다.
 
 `.claude/` / `.claude.alt/` / swap 스크립트는 autoresearch 운영 잔재다. 자체
-harness 전환 뒤 폐기 또는 archive 여부는 [`docs/PHASE3-STATUS.md`](docs/PHASE3-STATUS.md)
+harness 전환 뒤 폐기 또는 archive 여부는 [`docs/archive/PHASE3-STATUS.md`](docs/archive/PHASE3-STATUS.md)
 에서 추적한다.
 
 ---

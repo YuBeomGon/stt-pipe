@@ -8,7 +8,7 @@
 >이어지는 runtime 데이터만 따른다.
 >
 > 본 파일은 *interactive 운영자* (사람이 `claude` 를 직접 띄운 세션) 한정.
-> 자세한 출처: [`docs/CANDIDATE-CONTEXT.md`](docs/CANDIDATE-CONTEXT.md).
+> 자세한 출처: [`docs/archive/CANDIDATE-CONTEXT.md`](docs/archive/CANDIDATE-CONTEXT.md).
 
 기본 행동 규약 + 권한 표 + 정보 출처 + Phase 별 행동은 [`AGENTS.md`](AGENTS.md).
 본 파일은 interactive 운영자 세션 한정 보충.

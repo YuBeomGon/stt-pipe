@@ -420,9 +420,9 @@ parent 재료가 된다.
 
 ## 10. 설계 긴장점 (현재 고민 중인 지점)
 
-이 문서를 읽고 방향을 정하기 위한 메모. 상세는
-[`reviews/2026-06-04-evolve-design-review.md`](reviews/2026-06-04-evolve-design-review.md)
-및 [`proposals/2026-06-04-explore-block-speciation.md`](proposals/2026-06-04-explore-block-speciation.md).
+이 문서를 읽고 방향을 정하기 위한 메모. (배경 상세는 `archive/reviews/2026-06-04-
+evolve-design-review.md`, `archive/proposals/2026-06-04-explore-block-speciation.md`
+— archive 이므로 의존하지 말고 참고만. 현행 방향은 `deep-research-report.md`.)
 
 1. **explore 앵커링(F2).** 모든 mode 가 on-disk 챔피언 위에서 편집을 시작한다(§3 불변식).
    explore 도 마찬가지라 "발산"이 아니라 incumbent 변형이 되기 쉽다. → 현재는 explore

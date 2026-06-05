@@ -11,7 +11,7 @@ historical 문서로 보존한다.
 정본:
 - 문서 지도·SSOT — [`docs/SSOT.md`](docs/SSOT.md)
 - 도메인 정의·정규화·가드 — [`docs/STT-PIPELINE-SPEC.md`](docs/STT-PIPELINE-SPEC.md)
-- 시스템 설계·디렉토리·3 단계 구조 — [`docs/DESIGN.md`](docs/DESIGN.md)
+- 시스템 설계·디렉토리·3 단계 구조 — [`docs/archive/DESIGN.md`](docs/archive/DESIGN.md)
 
 ---
 
@@ -35,15 +35,15 @@ pip install -r requirements.txt
 
 | 단계 | 무엇 | 어디 |
 |------|------|------|
-| Phase 1 | Harness 구축 (사람) | [`docs/PHASE1-PLAN.md`](docs/PHASE1-PLAN.md) |
-| Phase 2 | 평가 인프라 구축 (사람) | [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md) |
-| Phase 3 | 자체 harness 실행 + 분석 | [`docs/PHASE3-PLAN.md`](docs/PHASE3-PLAN.md) |
+| Phase 1 | Harness 구축 (사람) | [`docs/archive/PHASE1-PLAN.md`](docs/archive/PHASE1-PLAN.md) |
+| Phase 2 | 평가 인프라 구축 (사람) | [`docs/archive/PHASE2-PLAN.md`](docs/archive/PHASE2-PLAN.md) |
+| Phase 3 | 자체 harness 실행 + 분석 | [`docs/archive/PHASE3-PLAN.md`](docs/archive/PHASE3-PLAN.md) |
 
 ---
 
 ## Phase 3 진입 → 본 잡 → 종료
 
-각 단계의 *의미*·*실패 모드*·*해석* 은 [`docs/PHASE3-PLAN.md §3`](docs/PHASE3-PLAN.md)
+각 단계의 *의미*·*실패 모드*·*해석* 은 [`docs/archive/PHASE3-PLAN.md §3`](docs/archive/PHASE3-PLAN.md)
 참조. 본 섹션은 copy-paste 가능한 실행 시퀀스만.
 
 ### 1. 진입 가드
@@ -150,13 +150,13 @@ python3 scripts/evaluate_holdout.py --unseal
 |------|------|
 | [`docs/SSOT.md`](docs/SSOT.md) | 문서별 정본 책임 지도 |
 | [`docs/STT-PIPELINE-SPEC.md`](docs/STT-PIPELINE-SPEC.md) | 문제 정의·정규화·가드 (정본) |
-| [`docs/DESIGN.md`](docs/DESIGN.md) | 시스템 설계 (3 단계 구조, 디렉토리) |
-| [`docs/PHASE1-PLAN.md`](docs/PHASE1-PLAN.md) | Harness 구축 단계별 |
-| [`docs/PHASE2-PLAN.md`](docs/PHASE2-PLAN.md) | 평가 인프라 구축 단계별 |
-| [`docs/PHASE3-PLAN.md`](docs/PHASE3-PLAN.md) | 자체 harness 실행 + 분석 절차 |
-| [`docs/PHASE3-STATUS.md`](docs/PHASE3-STATUS.md) | Phase 3 DoD 체크 상태 |
-| [`docs/PHASE3-LOOP.md`](docs/PHASE3-LOOP.md) | Phase 3 루프/노출/판정 구조 Mermaid |
-| [`docs/AUTORESEARCH.md`](docs/AUTORESEARCH.md) | 이전 autoresearch 조사 기록 (historical) |
-| [`docs/SELF-EVOLVE-HARNESS-SPEC.md`](docs/SELF-EVOLVE-HARNESS-SPEC.md) | 참고용 일반 하네스 원리 (정본 아님) |
+| [`docs/archive/DESIGN.md`](docs/archive/DESIGN.md) | 시스템 설계 (3 단계 구조, 디렉토리) |
+| [`docs/archive/PHASE1-PLAN.md`](docs/archive/PHASE1-PLAN.md) | Harness 구축 단계별 |
+| [`docs/archive/PHASE2-PLAN.md`](docs/archive/PHASE2-PLAN.md) | 평가 인프라 구축 단계별 |
+| [`docs/archive/PHASE3-PLAN.md`](docs/archive/PHASE3-PLAN.md) | 자체 harness 실행 + 분석 절차 |
+| [`docs/archive/PHASE3-STATUS.md`](docs/archive/PHASE3-STATUS.md) | Phase 3 DoD 체크 상태 |
+| [`docs/archive/PHASE3-LOOP.md`](docs/archive/PHASE3-LOOP.md) | Phase 3 루프/노출/판정 구조 Mermaid |
+| [`docs/archive/AUTORESEARCH.md`](docs/archive/AUTORESEARCH.md) | 이전 autoresearch 조사 기록 (historical) |
+| [`docs/archive/SELF-EVOLVE-HARNESS-SPEC.md`](docs/archive/SELF-EVOLVE-HARNESS-SPEC.md) | 참고용 일반 하네스 원리 (정본 아님) |
 | [`AGENTS.md`](AGENTS.md) | 에이전트 공통 규약 |
 | [`CLAUDE.md`](CLAUDE.md) | Claude Code 보충 |
