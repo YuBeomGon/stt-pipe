@@ -1,21 +1,25 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Silence-aware (energy-VAD) segmentation. The previous pipeline blind-strided
-the signal in fixed 30s windows: it *did* tile the whole recording (no raw
-samples skipped), yet still scored deletion-heavy (del 80%, length_ratio 0.65)
-with a high repeated-text rate (0.36). Re-diagnosis: those deletions are not
-dropped audio — they are *within-window under-generation*. A 30s window cut at
-an arbitrary sample lands mid-utterance and hands Whisper a dense, boundary-
-split span, which on this Korean call-center audio collapses into repetition
-and early EOS, emitting far less text than the span contains.
+Context-conditioned decoding. Coverage is no longer the binding constraint:
+the silence-aligned segmentation already lifted length_ratio to ~0.93 with the
+deletion axis collapsed, and the error profile flipped — substitution now
+dominates (53% sub >> del/ins). That axis is not about *whether* text is
+emitted but *what* token gets recognized: domain vocabulary (insurance /
+call-center jargon, proper nouns) and phone-band-degraded words that Whisper
+resolves to a plausible-but-wrong neighbour.
 
-So the binding mechanism is *where* we cut, not whether we cover. This rewrites
-segmentation: a cheap numpy energy VAD finds silence runs and we tile the whole
-signal with speech-aligned chunks (≤28s) whose boundaries fall at the centre of
-a silence gap whenever one exists within reach. Each decode call then sees a
-self-contained, silence-bounded span instead of a mid-word fragment, which is
-the structural fix for collapse-driven deletion. Coverage is still total (the
-chunks partition [0, len) exactly); only the boundary placement changes.
+Every prior pipeline decoded each chunk **stateless** — the `prompts` argument
+to generate() was always the same fixed `[SOT, lang, task, notimestamps]`
+prefix, so each generate() call started cold with zero lexical context. That
+throws away Whisper's context channel. This rewrite makes decoding *stateful*:
+each chunk is primed with the tail of the running transcript, injected through
+the `<|startofprev|>` token convention that Whisper's decoder uses for
+"condition on previous text". Priming biases the decoder toward vocabulary it
+has already committed to in this very call — the same speaker, the same domain
+terms — which is the structural lever over substitution, not coverage.
+
+Context is *sliding* (only the previous chunk's text, capped in tokens), not
+accumulated, so a single mis-decode cannot propagate unboundedly down the file.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -36,6 +40,10 @@ _MAX_CHUNK_SECONDS = 28.0
 _FRAME_MS = 30.0
 # Minimum silence-run length that qualifies as a safe cut point.
 _MIN_SILENCE_S = 0.35
+# Whisper's decoder context is 448 tokens; reserve roughly half for the prompt
+# so the generated continuation still has room. Cap the carried-over context
+# well under that so priming can never starve generation.
+_MAX_CONTEXT_TOKENS = 180
 
 
 def _silence_aligned_bounds(audio: np.ndarray, sr: int) -> list[tuple[int, int]]:
@@ -91,16 +99,23 @@ def _silence_aligned_bounds(audio: np.ndarray, sr: int) -> list[tuple[int, int]]
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
+    tokenizer = processor.tokenizer
 
-    prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
+    sot_prefix = tokenizer.convert_tokens_to_ids(
         ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
     )
+    startofprev = tokenizer.convert_tokens_to_ids("<|startofprev|>")
 
     # A chunk shorter than this is sub-100ms of real signal — only silence
     # hallucination lives there.
     min_samples = sr // 10
 
     texts: list[str] = []
+    # Token ids of the previous chunk's transcript, used to prime the next
+    # decode through the <|startofprev|> context channel. Sliding (last chunk
+    # only), capped, so a single bad decode cannot propagate down the file.
+    prev_context_ids: list[int] = []
+
     for start, end in _silence_aligned_bounds(audio, sr):
         chunk = audio[start:end]
         if len(chunk) < min_samples:
@@ -113,16 +128,24 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
+        if prev_context_ids:
+            prompt = [startofprev] + prev_context_ids + sot_prefix
+        else:
+            prompt = list(sot_prefix)
+
         results = generate(
             features,
-            [prompt_tokens],
+            [prompt],
             beam_size=1,
             sampling_temperature=0.0,
         )
 
         token_ids = results[0].sequences_ids[0]
-        text = processor.tokenizer.decode(token_ids, skip_special_tokens=True)
+        text = tokenizer.decode(token_ids, skip_special_tokens=True)
         if text.strip():
             texts.append(text.strip())
+            # Carry this chunk's text (tail only) as context for the next one.
+            ctx = tokenizer.encode(text.strip(), add_special_tokens=False)
+            prev_context_ids = ctx[-_MAX_CONTEXT_TOKENS:]
 
     return " ".join(texts)
