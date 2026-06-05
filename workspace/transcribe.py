@@ -10,12 +10,18 @@ pipelines never touched: the *prompt grammar*. Every earlier iteration passed
 only the bare ``[<|startoftranscript|>, <|ko|>, <|transcribe|>]`` SOT
 sequence. But the decoder also accepts a ``<|startofprev|>`` prefix carrying
 arbitrary previous-text tokens (Whisper's `condition_on_previous_text` /
-`initial_prompt` mechanism). We use it two ways per window:
+`initial_prompt` mechanism). We use it for a single, *static* purpose:
 
-  1. a static **domain glossary** (insurance call-center vocabulary) so
-     substitution-prone terms are biased toward the correct spelling;
-  2. the **rolling tail** of the transcript so far, so a term recognised in
-     one window primes its recurrence in the next.
+  - a **domain glossary** (insurance call-center vocabulary) so
+    substitution-prone terms are biased toward the correct spelling.
+
+The parent additionally fed the **rolling tail** of its own transcript back
+into the prompt each window. That regressed the dominant axis (substitution
+0.55 → 0.64): a mis-recognised token in one window re-primes the same wrong
+spelling in the next — Whisper's documented `condition_on_previous_text`
+error-propagation failure (HF leaves it off by default for this reason). We
+drop the self-feedback and keep the prompt context *fixed* to the glossary, so
+it biases toward in-domain terms without compounding the decoder's own errors.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -35,7 +41,7 @@ _TIME_PRECISION = 0.02
 _MIN_ADVANCE_SECONDS = 2.0
 
 # The decoder reserves ~224 positions for the previous-text prompt. Stay well
-# under so the glossary + rolling tail never crowd out the audio decode.
+# under so the glossary never crowds out the audio decode.
 _MAX_PREV_TOKENS = 200
 
 # Insurance call-center domain glossary. These are the terms the phone-band
@@ -64,10 +70,13 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
 
     glossary_tokens = tokenizer.encode(_GLOSSARY, add_special_tokens=False)
 
-    pieces: list[str] = []
-    # Rolling text context: glossary first, then the most recent transcript.
-    rolling_tokens: list[int] = list(glossary_tokens)
+    # Static prompt context: the domain glossary, fixed for every window. No
+    # rolling transcript tail (see module docstring — it propagated substitution
+    # errors across windows).
+    prev_context = glossary_tokens[-_MAX_PREV_TOKENS:]
+    prompt_tokens = [prev_id, *prev_context, *sot_tokens]
 
+    pieces: list[str] = []
     cursor = 0
     while cursor < n_samples:
         chunk = audio[cursor : cursor + win_samples]
@@ -79,11 +88,6 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             return_tensors="np",
         )
         features = to_storage_view(inputs.input_features)
-
-        # Prime the decoder with <|startofprev|> + (glossary + rolling tail),
-        # capped so the audio decode keeps its positions.
-        prev_context = rolling_tokens[-_MAX_PREV_TOKENS:]
-        prompt_tokens = [prev_id, *prev_context, *sot_tokens]
 
         res = generate(
             features,
@@ -99,8 +103,6 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
         if text:
             pieces.append(text)
-            # Carry this window's text forward as conditioning for the next.
-            rolling_tokens.extend(text_tokens)
 
         advance_seconds = _WINDOW_SECONDS
         if ts_tokens:
