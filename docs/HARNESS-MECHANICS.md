@@ -142,17 +142,37 @@ flowchart TD
     A[iter 시작: on-disk = 커밋된 챔피언 C] --> B[candidate 가 transcribe.py 편집]
     B --> C2["candidate.diff = git diff -- transcribe.py<br/>(작업트리 vs index, index==HEAD==챔피언)<br/>⇒ 사실상 '챔피언 C → 후보' diff"]
     C2 --> D{keep?}
-    D -->|keep/success| E["commit -m 'iterN: keep hyp'<br/>staged: transcribe.py, HISTORY.md,<br/>decisions.jsonl, candidate_meta.jsonl, state.json<br/>⇒ on-disk = 새 챔피언"]
-    D -->|reject| F["rollback_paths:<br/>git restore -- transcribe.py (tracked)<br/>git clean -fd (untracked)<br/>⇒ on-disk = 기존 챔피언 C 복귀"]
+    D -->|keep/success| E["commit -m 'iterN: keep hyp'<br/>staged: workspace/transcribe.py 만<br/>(metadata 는 디스크에 durable, git 미추적)<br/>⇒ on-disk = 새 챔피언"]
+    D -->|reject| F["rollback_paths:<br/>git restore -- transcribe.py (tracked)<br/>os.remove/rmtree (untracked, 정밀) +<br/>remove_ignored_poison (ignored runs/)<br/>⇒ on-disk = 기존 챔피언 C 복귀"]
     E --> G[다음 iter: on-disk = 새 챔피언]
     F --> G
 ```
 
 **불변식: on-disk `transcribe.py` == 마지막 commit(챔피언).**
 - `ensure_worktree_ready`(331) 가 iter 시작 시 이를 강제 — 더러우면 잡 중단.
-- reject 의 `rollback_paths`(345) 가 이를 유지 — `git restore`(tracked) + `git clean -fd`
-  (untracked).
-- keep 의 `commit_iteration`(1783) 이 새 챔피언으로 갱신.
+- reject 의 `rollback_paths` 가 이를 유지 — `git restore`(tracked) + 정밀 파일 삭제
+  (`os.remove`/`shutil.rmtree`, untracked). `git clean` 은 더 이상 쓰지 않는다(phase1.5).
+- keep 의 `commit_iteration` 이 새 챔피언으로 갱신 — **`workspace/transcribe.py` 만** 스테이징.
+
+**commit 정책 (phase1.5 — `runs/` off-git).** `runs/` 는 이제 전부 gitignore 된다.
+run metadata(`state`/`portfolio`/`decisions`/`candidate_meta`/`HISTORY`)는 atomic
+write(`HarnessState.save`/`Portfolio.save` 의 tmp + `os.replace`) 와 append(jsonl /
+`HISTORY.md`)로 **디스크에 durable 하게** 남고, git commit 은 **code checkpoint 전용** —
+code-advancing status(`keep`/`success`/`lineage_advance`/`reset`)에서만 `workspace/transcribe.py`
+하나를 커밋한다(`reject`/`repair_rollback`/`abort` 는 no-op). 이로써 per-iter
+metadata-commit churn 이 사라진다(HARNESS-REDESIGN §80). resume 은 디스크 파일만으로
+충분하다(`load_or_init_state`).
+
+scope 위반 탐지는 두 surface 로 나뉜다. **tracked surface**(`baseline/`, `docs/`, 임의의
+추적 경로) 에 대한 후보 쓰기는 종전 그대로 `git status --porcelain --untracked-files=all`
+로 잡힌다(`--ignored` 는 붙이지 **않는다** — 붙이면 `runs/` 아래 기존 ignored 파일이 전부
+나열돼 매 iter false-reject 가 된다). **ignored `runs/` surface** — 후보가
+`runs/_summary/`(metadata poison) 나 엉뚱한 top-level `runs/<dir>` 에 쓰는 것 — 은 git
+이 더 이상 못 보므로, iter 마다 그 두 surface 만 떠서 비교하는 pre/post 파일시스템
+스냅샷 diff(`snapshot_ignored_surface`/`diff_ignored_surface`)로 탐지한다. 위반 시
+rollback 은 어긋난 경로만 정밀하게 파일시스템에서 지운다(`os.remove`/`shutil.rmtree`,
+ignored 쪽은 `remove_ignored_poison`) — **절대 `git clean` 을 쓰지 않는다** (무관한
+untracked 파일을 함께 지우던 실제 사고를 제거).
 
 **`candidate.diff` 의 base 는 항상 HEAD(=챔피언).** (runner.py 1472:
 `git diff -- workspace/transcribe.py`. index 는 항상 깨끗하므로 HEAD 기준과 동일.)
@@ -488,9 +508,12 @@ audio 없이 결정적 단위테스트(`tests/test_lineage_state_machine.py`).
 
 - HEAD(작업 브랜치) = **현재 lineage head**. 별도 `champion` ref(`gitops.py`) = 마지막 승격 코드.
   `reset` 시 `restore_file_from_ref(champion)`, `promote` 시 commit 후 `advance_champion_ref(HEAD)`.
-- `commit_iteration` 은 **미변경**(metadata-off-git 은 phase1.5 로 보류). status:
-  `lineage_advance`(set 내부 체크포인트, **portfolio pool-inert** — global_best 미오염), `keep`/
-  `success`(승격), `reject`(repair/reset).
+- `commit_iteration` 은 **code-only commit**(phase1.5). code-advancing status
+  (`lineage_advance`(set 내부 체크포인트, **portfolio pool-inert** — global_best 미오염), `keep`/
+  `success`(승격), `reset`(워크트리를 챔피언으로 복원하는 code checkpoint))에서만
+  `workspace/transcribe.py` 를 커밋한다. `repair_rollback` 은 lineage head(== 현재 HEAD)로만
+  되돌리므로 트리가 이미 깨끗 → no-commit. (`IterationResult.status` 는 `run_job` 회계상
+  여전히 `keep`/`success`/`lineage_advance`/`reject` 를 쓰고, commit 여부와 분리돼 있다.)
 - set 진행상태는 `HarnessState.set_*`(set_id/set_phase/set_best_cer/…) + `champion_ref` 로 영속 →
   중단 후 resume 가능.
 
@@ -503,5 +526,5 @@ closed 면(= 새 set 의 첫 seed iter) override 안 함 → 그 seed mode 는 s
 ### 12.5 phase1 범위 밖 (HARNESS-REDESIGN 후속)
 
 worktree·병렬 잡·branch protection·CI marker·`git archive` 패키징·archive/islands·portfolio
-`job_best` 전면분리·metadata-off-git(phase1.5)·cooldown normalize. (§10-1/2/4 의 explore 앵커링·
-diff base·구 explore-ratio 는 set 경로와 별개로 남아 있음.)
+`job_best` 전면분리·cooldown normalize. (metadata-off-git 은 phase1.5 로 **완료** — §3 commit
+정책 참고.) (§10-1/2/4 의 explore 앵커링·diff base·구 explore-ratio 는 set 경로와 별개로 남아 있음.)

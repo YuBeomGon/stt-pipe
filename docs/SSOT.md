@@ -39,7 +39,7 @@
 | 잡 회고 | [`retrospectives/`](retrospectives/) | 잡 종료 후 1개. 다음 잡 설계 토대 |
 | 세션 인계 메모 | [`status/`](status/) | 날짜별 스냅샷 |
 | 종료 후 종합 리포트 | [`reports/`](reports/) | `<job_id>_<KIND>_<YYYY-MM-DD>` |
-| 현재 잡 iteration 로그 | [`../runs/_summary/HISTORY.md`](../runs/_summary/HISTORY.md) | 잡 단위 reset (현재 git 추적 — 리팩토링서 파일전용 전환 예정) |
+| 현재 잡 iteration 로그 | [`../runs/_summary/HISTORY.md`](../runs/_summary/HISTORY.md) | 잡 단위 reset (phase1.5 이후 git 미추적 — append-only 로 디스크에 durable) |
 | 과거 잡 narrative 아카이브 | [`history-archive/`](history-archive/) | `HISTORY.<job_id>.md` 등. 다음 잡 anchoring 방지 |
 
 > 위 폴더(proposals/reviews/reports/retrospectives/status)의 **과거 기록은
@@ -58,8 +58,8 @@
 | `frozen/` | 고정 ASR backend |
 | `workspace/` | 후보 파이프라인 표면 (`transcribe(audio, sr) -> str`) |
 | `baseline/` | 봉인된 target/baseline/noise floor |
-| `runs/<hyp_id>/` | iteration별 평가 산출물 + `candidate_meta.json` / `.err` |
-| `runs/_summary/` | harness 전용 누적 — `<job_id>_state.json`, `<job_id>_portfolio.json`, `<job_id>_decisions.jsonl`, `<job_id>_candidate_meta.jsonl`, `HISTORY.md` (현재 잡 한정), `JOB_DONE.lock` |
+| `runs/<hyp_id>/` | iteration별 평가 산출물 + `candidate_meta.json` / `.err` (phase1.5: `runs/` 전부 gitignore) |
+| `runs/_summary/` | harness 전용 누적 — `<job_id>_state.json`, `<job_id>_portfolio.json`, `<job_id>_decisions.jsonl`, `<job_id>_candidate_meta.jsonl`, `HISTORY.md` (현재 잡 한정), `JOB_DONE.lock`. phase1.5: git 미추적이며 atomic write/append 로 디스크에 durable; 후보가 여기 쓰는 poison 은 `run_iteration` 의 pre/post 스냅샷 diff 로 탐지 |
 | `docs/reports/` | analyze_run / evaluate_holdout 의 잡별 산출물 |
 | `docs/proposals/` | harness 변경 RFC (채택 후 정본 갱신 + historical) |
 | `docs/history-archive/` | 잡 종료 후 `runs/_summary/HISTORY.md` 를 `HISTORY.<job_id>.md` 로 이동 → 다음 잡은 빈 HISTORY 부터 시작 (잡 단위 ablation 보호) |
@@ -103,3 +103,11 @@ proposal 은 *결정 이력* 이지 운영 정본이 아니다.
   `superpowers/plans/2026-06-05-harness-lineage-set-phase1.md`,
   `reviews/2026-06-05-lineage-set-phase1-plan-review.md`. metadata-off-git 은 phase1.5 로 보류.
   동작 지도 = `HARNESS-MECHANICS.md` §12.
+- **2026-06-05 metadata-off-git phase1.5** (구현 완료, `refactor-harness` 브랜치) — `runs/`
+  전부 gitignore; metadata(state/portfolio/decisions/candidate_meta/HISTORY)는 atomic
+  write/append 로 디스크에 durable, git commit 은 code checkpoint 전용
+  (`keep`/`success`/`lineage_advance`/`reset`). ignored `runs/` 의 scope-violation 탐지는
+  per-iter pre/post 파일시스템 스냅샷 diff(`git status --ignored` 아님), rollback 은 정밀
+  파일 삭제(`git clean` 아님). per-iter metadata-commit churn + git-clean collateral 제거.
+  계획 = `superpowers/plans/2026-06-05-phase1.5-metadata-off-git.md`, 근거 = `HARNESS-REDESIGN.md`
+  §80. 동작 지도 = `HARNESS-MECHANICS.md` §3.
