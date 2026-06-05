@@ -73,13 +73,8 @@ def _init_repo(root: Path) -> None:
     (root / "workspace").mkdir()
     (root / "baseline").mkdir()
     (root / "runs/_summary").mkdir(parents=True)
-    # Mirror production .gitignore so runs/<hyp_id>/ artifacts (candidate.diff,
-    # candidate_meta.json, claude_stdout.txt, score_report.json, …) don't
-    # surface as untracked and trip disallowed_candidate_paths.
-    (root / ".gitignore").write_text(
-        "runs/*\n!runs/_summary/\n",
-        encoding="utf-8",
-    )
+    # phase1.5: runs/ fully ignored — metadata is durable-on-disk + untracked.
+    (root / ".gitignore").write_text("runs/\n", encoding="utf-8")
     (root / "workspace/transcribe.py").write_text(
         "def transcribe(audio, sr):\n    return ''\n",
         encoding="utf-8",
@@ -100,8 +95,7 @@ def _init_repo(root: Path) -> None:
     )
     (root / "runs/_summary/HISTORY.md").write_text("# history\n", encoding="utf-8")
     subprocess.run(
-        ["git", "add", ".gitignore", "workspace/transcribe.py", "baseline",
-         "runs/_summary/HISTORY.md"],
+        ["git", "add", ".gitignore", "workspace/transcribe.py", "baseline"],
         cwd=root,
         check=True,
     )
@@ -482,8 +476,9 @@ def test_step1_decision_trace_committed_and_survives_next_iter(tmp_path: Path) -
         _candidate("results = generate(features, beam_size=5)"), _verifier(0.40),
     )
     assert r1.status == "keep"
-    assert _tracked(tmp_path, "runs/_summary/job_decisions.jsonl")
-    assert _tracked(tmp_path, "runs/_summary/job_portfolio.json")
+    assert (tmp_path / "runs/_summary/job_decisions.jsonl").is_file()
+    assert (tmp_path / "runs/_summary/job_portfolio.json").is_file()
+    assert not _tracked(tmp_path, "runs/_summary/job_decisions.jsonl")  # durable but untracked
 
     # iter 2 — worse cer → reject. ensure_worktree_ready 가 깨지지 않아야 한다
     # (decisions/portfolio 가 iter1 커밋에 들어가 working tree clean).
@@ -518,6 +513,79 @@ def test_step1_decision_trace_committed_and_survives_next_iter(tmp_path: Path) -
         ["git", "status", "--porcelain"], cwd=tmp_path, capture_output=True, text=True
     ).stdout.strip()
     assert porcelain == "", f"dirty tree: {porcelain}"
+
+
+def test_scope_violation_summary_poison_caught_by_snapshot(tmp_path: Path) -> None:
+    """phase1.5: with runs/ gitignored, git can't see a candidate write into
+    runs/_summary/ — the snapshot diff must catch it, reject the iter, remove the
+    poison, and NOT touch an unrelated stray file or the pre-existing archive."""
+    _init_repo(tmp_path)   # .gitignore = runs/ after Task 4 Step 1
+    # pre-existing ignored files (the '2584 class' in miniature)
+    arch = tmp_path / "runs/_archive/old"
+    arch.mkdir(parents=True)
+    (arch / "a.json").write_text("a\n", encoding="utf-8")
+    # An unrelated repo file that must survive the reject's rollback (collateral-
+    # damage guard). Committed (tracked-clean) so the pre-candidate
+    # ensure_worktree_ready gate — unchanged on the tracked surface by phase1.5 —
+    # does not reject the iter for a pre-existing top-level untracked file. The
+    # untracked-stray survival itself is covered precisely by the unit tests
+    # test_rollback_paths_removes_only_listed_untracked / remove_ignored_poison.
+    (tmp_path / "operator_scratch.txt").write_text("DO NOT DELETE\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "operator_scratch.txt"], cwd=tmp_path, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "operator scratch"], cwd=tmp_path, check=True,
+        capture_output=True,
+    )
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    state = HarnessState(job_id="job")
+    state_path = tmp_path / "runs/_summary/job_state.json"
+
+    def candidate(_prompt: str, out_dir: Path):
+        (tmp_path / "runs/_summary/poison.txt").write_text("evil\n", encoding="utf-8")
+        _write_valid_meta(out_dir)
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    result = run_iteration(config, state, state_path, candidate, lambda _h: None)
+    assert result.status == "reject"
+    assert not (tmp_path / "runs/_summary/poison.txt").exists()    # poison removed
+    assert (tmp_path / "operator_scratch.txt").exists()           # stray survived
+    assert (tmp_path / "runs/_archive/old/a.json").exists()       # archive untouched
+
+
+def test_scope_violation_clean_iter_not_rejected_with_populated_archive(
+    tmp_path: Path,
+) -> None:
+    """REGRESSION for the 2584-file bug: a CLEAN candidate iter (writes only its
+    own workspace + runs/<hyp>/) must NOT be rejected even when runs/_archive/ is
+    heavily populated before the candidate runs."""
+    _init_repo(tmp_path)
+    arch = tmp_path / "runs/_archive"
+    for i in range(60):                            # many pre-existing ignored files
+        d = arch / f"job_{i}"
+        d.mkdir(parents=True)
+        (d / "score.json").write_text(f"{i}\n", encoding="utf-8")
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    state = HarnessState(job_id="job")
+    state_path = tmp_path / "runs/_summary/job_state.json"
+
+    def candidate(_prompt: str, out_dir: Path):
+        (tmp_path / "workspace/transcribe.py").write_text(
+            "def transcribe(a, sr):\n    return 'ok'\n", encoding="utf-8")
+        _write_valid_meta(out_dir)
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    def verifier(hyp_id: str) -> VerifyResult:
+        out_dir = tmp_path / "runs" / hyp_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        report = {"corpus_cer": 0.40, "total_inference_time_s": 90.0}
+        (out_dir / "score_report.json").write_text(json.dumps(report), encoding="utf-8")
+        return VerifyResult(ok=True, hyp_id=hyp_id, out_dir=out_dir,
+                            report=report, per_file=[])
+
+    result = run_iteration(config, state, state_path, candidate, verifier)
+    assert result.status in ("keep", "success")    # ← NOT a false scope reject
 
 
 # ----------------------------------------------------------------------- #

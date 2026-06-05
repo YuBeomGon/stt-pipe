@@ -1988,6 +1988,10 @@ def run_iteration(
     hyp_id = f"{config.job_id}_iter_{state.iteration:03d}"
     out_dir = repo_root / config.runs_dir / hyp_id
     ensure_worktree_ready(config)
+    # phase1.5: snapshot the ignored surface (runs/_summary/ files + top-level
+    # runs/<dir> names) BEFORE the candidate runs, so post-candidate / post-verify
+    # diffs surface candidate writes git can no longer see (runs/ is gitignored).
+    ignored_before = snapshot_ignored_surface(repo_root)
 
     # Build the prompt BEFORE creating out_dir — otherwise the just-created
     # empty current-iter directory would be matched by _recent_iters's glob
@@ -2124,9 +2128,22 @@ def run_iteration(
 
     statuses = git_status(repo_root)
     disallowed = disallowed_candidate_paths(statuses, config)
-    if disallowed:
+    ignored_poison = diff_ignored_surface(
+        ignored_before, snapshot_ignored_surface(repo_root), hyp_id
+    )
+    if disallowed or ignored_poison:
+        # Revert the candidate's tracked surface AND the precise tracked-violation
+        # paths; remove the diff-flagged ignored poison via the filesystem. All
+        # three lists are exactly the candidate's own writes — never an unrelated
+        # untracked file (phase1.5 collateral-damage fix).
         rollback_paths(repo_root, candidate_owned_statuses(statuses, config))
-        paths = ", ".join(str(status.path) for status in disallowed)
+        rollback_paths(repo_root, disallowed)
+        remove_ignored_poison(repo_root, ignored_poison)
+        paths = ", ".join(
+            str(p) for p in (
+                [s.path for s in disallowed] + ignored_poison
+            )
+        )
         result = IterationResult(
             hyp_id=hyp_id,
             status="reject",
@@ -2174,9 +2191,18 @@ def run_iteration(
     # a poisoned HISTORY could be committed by commit_iteration.
     post_verify_statuses = git_status(repo_root)
     post_violations = disallowed_post_verify_paths(post_verify_statuses, config, hyp_id)
-    if post_violations:
+    post_ignored_poison = diff_ignored_surface(
+        ignored_before, snapshot_ignored_surface(repo_root), hyp_id
+    )
+    if post_violations or post_ignored_poison:
         rollback_paths(repo_root, candidate_owned_statuses(post_verify_statuses, config))
-        paths = ", ".join(str(status.path) for status in post_violations)
+        rollback_paths(repo_root, post_violations)
+        remove_ignored_poison(repo_root, post_ignored_poison)
+        paths = ", ".join(
+            str(p) for p in (
+                [s.path for s in post_violations] + post_ignored_poison
+            )
+        )
         result = IterationResult(
             hyp_id=hyp_id,
             status="reject",
