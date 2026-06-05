@@ -55,11 +55,20 @@ _BEAM_SIZE = 5
 # Take the full beam N-best so the rescorer has hypotheses to choose among.
 _NUM_HYPOTHESES = 5
 
-# Weight on a single in-lexicon match, in avg-logprob units. avg_logprob on
-# phone-band Korean windows sits in roughly [-1.0, -0.2], so LAMBDA=0.15 lets a
-# domain-term match override a beam-rank inversion of comparable magnitude
-# without letting term-count alone dominate the acoustic likelihood.
-_LEXICON_LAMBDA = 0.15
+# Acoustic-tie gate, in avg-logprob units. REFINE on iter_064: the soft additive
+# score (avg_logprob + LAMBDA*hits, LAMBDA=0.15) let a single distinct domain
+# term swing 0.15 — far larger than the >=95%-correlated beams' actual avg_logprob
+# spread (~0.01-0.05) — so the rerank effectively ALWAYS picked the max-domain-
+# term hypothesis, even one acoustically worse because it SUBSTITUTED a domain
+# term where a non-domain word belonged (a substitution INJECTED on the dominant
+# 57% axis, the structural source of the 0.1766 regression vs best 0.1629).
+# Replace the soft score with a hard gate: only hypotheses whose avg_logprob is
+# within EPSILON of the top beam compete on distinct lexicon hits. The lexicon
+# can then only arbitrate genuine acoustic ties — exactly the phone-band
+# confusions where 보험 and 보훔 are near-equiprobable — and can never override a
+# clearly-better acoustic path. EPSILON=0.04 sits just above the typical
+# inter-beam spread, so the gate is otherwise inert and beam[0] wins.
+_LEXICON_EPSILON = 0.04
 
 # Fixed Korean insurance / call-center domain lexicon. These are exactly the
 # substitution-prone terms whose distinguishing high-frequency consonant cues
@@ -119,19 +128,25 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             return_scores=True,
         )[0]
 
-        # Lexicon-guided rescoring over the N-best. Decode each hypothesis to
-        # text, score it as avg_logprob + LAMBDA * lexicon_hits, and pick the
-        # argmax. Falls back to beam[0] when no hypothesis contains a domain
-        # term (the rescorer is then inert and the decoder's own ranking wins).
+        # Lexicon-guided selection over the N-best as an EPSILON-gated acoustic
+        # tiebreak. Only hypotheses whose avg_logprob is within _LEXICON_EPSILON
+        # of the top beam are eligible; among those, prefer the most distinct
+        # domain terms, breaking ties by avg_logprob. A hypothesis the decoder
+        # ranks clearly lower acoustically can never be promoted just for
+        # containing more domain terms, so the lexicon arbitrates only genuine
+        # phone-band ties and cannot inject a domain-term substitution.
+        scores = res.scores if res.scores else [0.0] * len(res.sequences_ids)
+        top_score = max(scores)
         best_idx = 0
-        best_combined = float("-inf")
+        best_key = (-1, float("-inf"))
         for i, token_ids in enumerate(res.sequences_ids):
+            if scores[i] < top_score - _LEXICON_EPSILON:
+                continue
             text_tokens = [t for t in token_ids if t < timestamp_begin]
             text_i = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
-            avg_logprob = res.scores[i] if res.scores else 0.0
-            combined = avg_logprob + _LEXICON_LAMBDA * _lexicon_hits(text_i)
-            if combined > best_combined:
-                best_combined = combined
+            key = (_lexicon_hits(text_i), scores[i])
+            if key > best_key:
+                best_key = key
                 best_idx = i
 
         token_ids = res.sequences_ids[best_idx]
