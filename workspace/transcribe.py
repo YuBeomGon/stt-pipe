@@ -1,12 +1,16 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Long-form windowing pipeline: Whisper's feature extractor pads/truncates to a
-single 30-second mel window, so feeding a multi-minute call in one shot drops
-everything past 0:30. We slice the waveform into consecutive 30s windows and
-decode the per-window transcripts, then concatenate. To stay within GPU memory
-(a several-minute call yields ~10+ windows; decoding all of them in one batched
-``generate`` call exhausts CUDA memory), windows are decoded in small fixed-size
-batches rather than one giant batch.
+Silence-aware long-form windowing. Whisper's feature extractor pads/truncates
+to a single 30-second mel window, so a multi-minute call must be sliced. The
+prior pipeline cut on a blind 30s grid, which slices straight through whatever
+word/utterance happens to straddle each 30s mark — corrupting the tail of one
+window and the head of the next and feeding the dominant deletion axis. The
+ledger (iter_003) established that any window <=30s zero-pads to the full mel
+for free, so the *cut placement* is an unconstrained knob. We use it: an RMS
+envelope is computed from the waveform and each boundary is snapped to the
+quietest frame in the last few seconds before the 30s ceiling, so cuts land in
+pauses between utterances rather than inside speech. Variable-length windows
+(<=30s) are still decoded in small fixed-size batches to bound GPU memory.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -20,22 +24,56 @@ from frozen.asr_backend import generate, load, to_storage_view
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 
-# Whisper's mel front-end is fixed at 30 seconds; one chunk == one window.
+# Whisper's mel front-end is fixed at 30 seconds: hard ceiling per window.
 _WINDOW_SECONDS = 30
-# Cap concurrent windows per generate() call so GPU memory stays bounded
-# regardless of call length (the all-at-once batch OOM'd on long calls).
+# How far back from the 30s ceiling to hunt for a silent cut point. A cut is
+# therefore always placed in [ceiling-search, ceiling], i.e. a 25-30s window.
+_CUT_SEARCH_SECONDS = 5
+# RMS envelope hop (20ms frames) — fine enough to find inter-utterance pauses,
+# coarse enough that the whole envelope is cheap on a 40-minute call.
+_ENERGY_HOP_SECONDS = 0.02
+# Cap concurrent windows per generate() call so GPU memory stays bounded.
 _MAX_WINDOWS_PER_BATCH = 4
+
+
+def _silence_aware_windows(audio: np.ndarray, sr: int) -> list[np.ndarray]:
+    """Slice audio into <=30s windows, snapping each cut to a local energy min."""
+    max_win = _WINDOW_SECONDS * sr
+    n = len(audio)
+    if n <= max_win:
+        return [audio]
+
+    hop = max(1, int(_ENERGY_HOP_SECONDS * sr))
+    n_frames = n // hop
+    frames = audio[: n_frames * hop].reshape(n_frames, hop).astype(np.float64)
+    energy = np.sqrt(np.mean(frames * frames, axis=1))
+
+    search = _CUT_SEARCH_SECONDS * sr
+    windows: list[np.ndarray] = []
+    start = 0
+    while start < n:
+        if start + max_win >= n:
+            windows.append(audio[start:n])
+            break
+        ceiling = start + max_win
+        lo = ceiling - search
+        f_lo, f_hi = lo // hop, ceiling // hop
+        local = energy[f_lo:f_hi]
+        # Cut at the quietest frame in the search band (a pause); fall back to
+        # the hard ceiling if that band is empty.
+        cut = (f_lo + int(np.argmin(local))) * hop if local.size else ceiling
+        if cut <= start:
+            cut = ceiling
+        windows.append(audio[start:cut])
+        start = cut
+    return windows
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
 
     audio = np.asarray(audio).reshape(-1)
-    window = _WINDOW_SECONDS * sr
-
-    # Consecutive non-overlapping 30s windows. The feature extractor zero-pads
-    # the final short window up to 30s on its own.
-    chunks = [audio[start : start + window] for start in range(0, len(audio), window)]
+    chunks = _silence_aware_windows(audio, sr)
     if not chunks:
         chunks = [audio]
 
@@ -52,26 +90,15 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         ]
         batch = to_storage_view(np.stack(feats, axis=0))
 
+        # Modest beam decode with no length/anti-loop biases: this iteration
+        # tests the segmentation mechanism in isolation, so the scoring-side
+        # knobs the incumbent stacked (length_penalty/patience/ngram) are
+        # stripped back to a neutral search.
         results = generate(
             batch,
             [prompt_tokens] * len(batch_chunks),
-            # Coverage/deletion is the dominant axis (length_ratio ~0.65, del
-            # 82%) and it is uniform across all files: systemic early-EOS
-            # under-generation, beams finish on EOS before the window tail is
-            # decoded. length_penalty already biases scoring toward longer
-            # hypotheses, but pushing it harder at iter_008 doubled
-            # hallucination (0.09->0.18) — it rewards length blindly. patience
-            # attacks the same axis from the SEARCH side instead of the scoring
-            # side: beam search keeps expanding until beam_size*patience
-            # finished hypotheses exist, so one beam hitting EOS early no longer
-            # ends the search — longer completions that cover the tail get a
-            # chance to surface, with no extra length-score bias to invite
-            # hallucination.
             beam_size=2,
-            length_penalty=1.2,
-            patience=2.0,
             sampling_temperature=0.0,
-            no_repeat_ngram_size=5,
         )
 
         for r in results:
