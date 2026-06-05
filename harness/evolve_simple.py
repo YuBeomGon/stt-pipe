@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -255,6 +256,36 @@ def run_iter(
     _write_state(cfg_, archive)
     _emit_log(cfg_, iteration, mode, parent, rec, kept=kept, holdout=None)
     return rec
+
+
+def _targets_claude(candidate_cmd: str) -> bool:
+    """True when the candidate CLI is actually `claude` (basename of argv[0]).
+
+    The hardening bypass only matters for a real `claude -p` invocation —
+    `harden_candidate_cmd` is a no-op for any other command, so the production
+    bypass gate is spurious for stub/non-claude candidate commands."""
+    parts = shlex.split(candidate_cmd)
+    return bool(parts) and Path(parts[0]).name == "claude"
+
+
+def run_job(cfg_: SimpleConfig) -> str | None:
+    """Run exactly cfg_.iters iterations. Returns the best id (or None)."""
+    if _targets_claude(cfg_.candidate_cmd):
+        cc.check_bypass_in_production(cfg_.iters, commit_results=False)
+    archive = arch.load_archive(cfg_.job_dir)
+    start = len(archive)
+    for i in range(cfg_.iters):
+        run_iter(cfg_, iteration=start + i, archive=archive)
+        if cfg_.holdout_every and arch.read_best(cfg_.job_dir):
+            # holdout cadence handled by run_job (Task 8 wires the actual call)
+            _maybe_holdout(cfg_, iteration=start + i, archive=archive)
+    best = arch.best_record(archive)
+    return best.id if best else None
+
+
+def _maybe_holdout(cfg_: SimpleConfig, iteration: int, archive) -> None:
+    """Placeholder hook — Task 8 implements the holdout invocation cadence."""
+    return None
 
 
 def _restore(repo_root: Path, allowed_path: Path) -> None:
