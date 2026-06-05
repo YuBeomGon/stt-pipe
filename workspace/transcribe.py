@@ -25,10 +25,16 @@ poison the prior — directly answering iter_072's propagation failure mode.
 Two further guards keep the bank clean. A window whose text fails a gzip
 compression-ratio check (degenerate/looping) is emitted for coverage but its
 tokens are *not* contributed to the bank, so a hallucinated window cannot seed
-future priors. ``repetition_penalty`` is left neutral (1.0): iter_074 showed
-the penalty acts over the carried prompt span and suppresses re-emission of the
-primed tokens — the exact opposite of what a biasing bank wants, since a term
-in the bank *should* be re-emitted when the audio supports it.
+future priors. ``repetition_penalty`` is lifted off neutral to 1.1: iter_074
+established it acts over the carried ``<|startofprev|>`` span, and the parent
+left it at 1.0 on the premise that a banked term *should* re-emit freely. But
+the lineage's regression (hal 0.27->0.45 across iters 099-101) shows the bank
+drives far more *spurious* re-emission than helpful re-emission — the decoder
+drifts into emitting banked tokens the current window does not acoustically
+support. A mild 1.1 penalty taxes that drift while leaving genuine acoustic
+evidence strong enough to re-emit a truly-spoken term, rebalancing the prime
+toward precision against the dominant substitution axis without re-injecting
+the insertions/hallucinations the neutral setting let through.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -50,6 +56,13 @@ _TIME_PRECISION = 0.02
 _MIN_ADVANCE_SECONDS = 2.0
 
 _BEAM_SIZE = 5
+
+# Penalty applied by CT2 against any token id already present in the sequence —
+# and the bank-primed <|startofprev|> span IS part of that sequence (iter_074).
+# Lifted slightly above neutral so the decoder is taxed for drifting into
+# re-emitting banked tokens the current window does not support (the lineage's
+# hal regression) while real acoustic evidence still overrides the penalty.
+_REPETITION_PENALTY = 1.1
 
 # Global term-bank parameters. A text token must be decoded at least
 # _BANK_MIN_COUNT times across prior windows before it is eligible to prime
@@ -132,6 +145,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             [prompt],
             beam_size=_BEAM_SIZE,
             sampling_temperature=0.0,
+            repetition_penalty=_REPETITION_PENALTY,
             return_scores=True,
         )[0]
 
