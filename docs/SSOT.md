@@ -51,7 +51,7 @@
 
 | 영역 | 책임 |
 |------|------|
-| `harness/` | Phase 3 controller 로직: guards(수치 가드), verify(judge 실행+guard), policy(keep/reject/micro_bank + **promotion/lineage 두 비교**), **scheduler**(mode 결정), **portfolio**(후보 bank + parent 선택), **signature**(diff→family), **cooldown**(반복실패 soft 경고), **lineage**(bounded-set 상태기계), **gitops**(champion ref 헬퍼), **config**(threshold 상수), state, history, runner. **simple-evolve 라인**: `candidate_cli`(runner 에서 lift 한 독립형 candidate CLI 계층 — `claude -p` hardening + stdout/stderr/diff capture + YAML metadata parse; runner import 안 함) |
+| `harness/` | Phase 3 controller 로직: guards(수치 가드), verify(judge 실행+guard), policy(keep/reject/micro_bank + **promotion/lineage 두 비교**), **scheduler**(mode 결정), **portfolio**(후보 bank + parent 선택), **signature**(diff→family), **cooldown**(반복실패 soft 경고), **lineage**(bounded-set 상태기계), **gitops**(champion ref 헬퍼), **config**(threshold 상수), state, history, runner. **simple-evolve 라인**: `candidate_cli`(runner 에서 lift 한 독립형 candidate CLI 계층 — `claude -p` hardening + stdout/stderr/diff capture + YAML metadata parse; runner import 안 함), `archive`(flat never-pruned 후보 archive — `ArchiveRecord` schema + append-only `archive.jsonl` + `best.txt` cache + parent materialize; 절대 prune/rollback 안 함) |
 | `harness/prompts/candidate.md` | candidate runtime profile — runner 가 매 iter inline |
 | `scripts/` | 사람이 실행하는 thin CLI 또는 일회성 운영 명령 (`evolve.py`, `analyze_run.py`, `evaluate_holdout.py`, `audit_candidate_context.py` 등) |
 | `judge/` | 평가 산출: score, per-file, diagnosis |
