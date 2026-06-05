@@ -56,10 +56,17 @@ _HOP_S = 0.010
 # A silence run must span at least this long to count as a cut-eligible gap —
 # bridges over the brief intra-word stops that energy alone would flag.
 _MIN_SILENCE_S = 0.30
-# Silence threshold: frames quieter than this percentile of the call's own RMS
-# envelope are treated as non-speech. Relative (not absolute dB) so it adapts to
-# each call's gain — the diagnosis shows rms_db_mean spanning -26..-41 dB.
-_SILENCE_PERCENTILE = 25.0
+# Silence threshold anchored to the call's SPEECH level, not a quantile of the
+# whole envelope. A fixed percentile (iter_093) is silence-ratio-dependent: the
+# eval calls span silence_ratio 6%..25%, so the 25th-percentile RMS migrates —
+# on low-silence calls it lands inside speech energy and marks quiet-but-voiced
+# frames (low-energy Korean particles / sentence-final endings) as silence,
+# admitting mid-utterance cuts. Instead take a robust loud reference (the
+# 95th-percentile RMS ≈ the speech mode) and place the floor a fixed fraction
+# below it: this still adapts to each call's gain but is pinned RELATIVE TO
+# SPEECH, so it does not drift into voiced frames as the silence ratio varies.
+# 0.12 ≈ -18 dB below the speech peak — only genuinely quiet frames qualify.
+_SILENCE_SPEECH_FRACTION = 0.12
 
 
 def _frame_rms(audio: np.ndarray, sr: int) -> tuple[np.ndarray, np.ndarray, int]:
@@ -86,7 +93,8 @@ def _silence_gaps(audio: np.ndarray, sr: int) -> list[int]:
     if rms.shape[0] == 0:
         return []
 
-    thr = np.percentile(rms, _SILENCE_PERCENTILE)
+    speech_ref = np.percentile(rms, 95.0)
+    thr = speech_ref * _SILENCE_SPEECH_FRACTION
     silent = rms <= thr
     min_silent_frames = max(1, int(_MIN_SILENCE_S / _HOP_S))
 
