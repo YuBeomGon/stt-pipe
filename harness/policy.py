@@ -121,3 +121,28 @@ def decide_candidate(
         threshold=threshold,
         reason=f"not enough improvement: Δcer {delta:.6f} < {threshold:.6f}",
     )
+
+
+def decide_promotion(
+    report: dict[str, Any],
+    baseline: dict[str, Any],
+    champion_cer: float | None,
+    sigma: float | None,
+    sigma_is_provisional: bool = False,
+    config: PolicyConfig | None = None,
+) -> Decision:
+    """Promotion gate: does this candidate beat the global champion?
+
+    Identical semantics to the legacy ``decide_candidate`` — the global champion
+    *is* the historical "best_cer". Named separately (HARNESS-REDESIGN §74) so the
+    runner can pair it with ``decide_lineage_progress`` (the in-set comparison)
+    and the two roles read distinctly.
+    """
+    return decide_candidate(
+        report=report,
+        baseline=baseline,
+        best_cer=champion_cer,
+        sigma=sigma,
+        sigma_is_provisional=sigma_is_provisional,
+        config=config,
+    )
