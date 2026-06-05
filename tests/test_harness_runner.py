@@ -25,11 +25,14 @@ from harness.runner import (
     _recent_iters,
     build_candidate_prompt,
     candidate_owned_statuses,
+    diff_ignored_surface,
     disallowed_candidate_paths,
     parse_candidate_metadata,
+    remove_ignored_poison,
     run_candidate_command,
     run_iteration,
     run_job,
+    snapshot_ignored_surface,
 )
 from harness.state import HarnessState
 from harness.verify import VerifyResult, check_workspace_static
@@ -1761,3 +1764,73 @@ def test_set_promotes_when_beating_champion(tmp_path, monkeypatch):
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
                           check=True, capture_output=True, text=True).stdout.strip()
     assert champ == head                   # champion ref advanced to promoted commit
+
+
+def test_snapshot_diff_flags_only_new_summary_and_dirs(tmp_path: Path) -> None:
+    """phase1.5 snapshot guard: a pre-existing populated runs/_archive/ + prior
+    runs/_summary/ files are NOT flagged; only files the candidate creates/edits
+    under runs/_summary/ this iter, or a new top-level runs/<dir> that isn't the
+    current hyp dir, are flagged."""
+    from harness.runner import snapshot_ignored_surface, diff_ignored_surface
+    summary = tmp_path / "runs/_summary"
+    summary.mkdir(parents=True)
+    (summary / "HISTORY.md").write_text("# h\n", encoding="utf-8")
+    (summary / "job_state.json").write_text("{}\n", encoding="utf-8")
+    archive = tmp_path / "runs/_archive/old_job"   # 'the 2584-file class'
+    archive.mkdir(parents=True)
+    (archive / "a.json").write_text("a\n", encoding="utf-8")
+    (tmp_path / "runs/job_iter_001").mkdir()       # current hyp dir (allowed)
+
+    before = snapshot_ignored_surface(tmp_path)
+    # candidate poison: edits HISTORY.md, drops a new file in _summary/, and
+    # creates a rogue top-level runs/ dir. Also legitimately fills its hyp dir.
+    (summary / "HISTORY.md").write_text("# h\nPOISON\n", encoding="utf-8")
+    (summary / "poison.txt").write_text("evil\n", encoding="utf-8")
+    (tmp_path / "runs/rogue").mkdir()
+    (tmp_path / "runs/rogue/x").write_text("x\n", encoding="utf-8")
+    (tmp_path / "runs/job_iter_001/out.json").write_text("ok\n", encoding="utf-8")
+    after = snapshot_ignored_surface(tmp_path)
+
+    flagged = {str(p) for p in diff_ignored_surface(before, after, "job_iter_001")}
+    assert "runs/_summary/HISTORY.md" in flagged    # modified metadata
+    assert "runs/_summary/poison.txt" in flagged    # new metadata file
+    assert "runs/rogue" in flagged                  # rogue top-level runs/ dir
+    assert "runs/_archive/old_job/a.json" not in flagged  # ← pre-existing ignored
+    assert "runs/_summary/job_state.json" not in flagged  # ← unchanged metadata
+    assert "runs/job_iter_001/out.json" not in flagged    # ← current hyp dir OK
+    assert "runs/job_iter_001" not in flagged
+
+
+def test_snapshot_diff_clean_iter_not_flagged(tmp_path: Path) -> None:
+    """A clean candidate iter (writes only into its own runs/<hyp>/) flags
+    nothing, even with a heavily populated runs/_archive/ present before."""
+    from harness.runner import snapshot_ignored_surface, diff_ignored_surface
+    (tmp_path / "runs/_summary").mkdir(parents=True)
+    (tmp_path / "runs/_summary/HISTORY.md").write_text("# h\n", encoding="utf-8")
+    archive = tmp_path / "runs/_archive"
+    for i in range(50):                              # many pre-existing ignored files
+        d = archive / f"job_{i}"
+        d.mkdir(parents=True)
+        (d / "score.json").write_text(f"{i}\n", encoding="utf-8")
+    (tmp_path / "runs/job_iter_002").mkdir()
+
+    before = snapshot_ignored_surface(tmp_path)
+    (tmp_path / "runs/job_iter_002/out.json").write_text("ok\n", encoding="utf-8")
+    after = snapshot_ignored_surface(tmp_path)
+    assert diff_ignored_surface(before, after, "job_iter_002") == []
+
+
+def test_remove_ignored_poison_precise(tmp_path: Path) -> None:
+    from harness.runner import remove_ignored_poison
+    (tmp_path / "runs/_summary").mkdir(parents=True)
+    (tmp_path / "runs/_summary/poison.txt").write_text("p\n", encoding="utf-8")
+    (tmp_path / "runs/rogue").mkdir(parents=True)
+    (tmp_path / "runs/rogue/x").write_text("x\n", encoding="utf-8")
+    (tmp_path / "runs/_summary/keep.json").write_text("keep\n", encoding="utf-8")
+    remove_ignored_poison(tmp_path, [
+        Path("runs/_summary/poison.txt"),
+        Path("runs/rogue"),
+    ])
+    assert not (tmp_path / "runs/_summary/poison.txt").exists()
+    assert not (tmp_path / "runs/rogue").exists()
+    assert (tmp_path / "runs/_summary/keep.json").exists()   # not in list → survives

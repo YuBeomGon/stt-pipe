@@ -422,6 +422,67 @@ def candidate_owned_statuses(
     return owned
 
 
+def snapshot_ignored_surface(repo_root: Path) -> dict[str, Any]:
+    """Cheap snapshot of the IGNORED surface a candidate could poison: every file
+    under runs/_summary/ (as {relpath: (mtime_ns, size)}) plus the set of existing
+    top-level runs/<dir> names. This is O(metadata) — runs/_summary/ holds ~5
+    files/job — NOT an O(repo) walk, and it deliberately ignores runs/_archive/
+    and prior runs/<hyp>/ contents (the ~2584-file class): those dirs are listed
+    only by name at the top level, and a name present in both snapshots is never a
+    diff. Used to detect candidate writes git can no longer see once runs/ is
+    gitignored (phase1.5)."""
+    summary = repo_root / "runs" / "_summary"
+    files: dict[str, tuple[int, int]] = {}
+    if summary.is_dir():
+        for p in summary.rglob("*"):
+            if p.is_file():
+                st = p.stat()
+                rel = p.resolve().relative_to(repo_root.resolve()).as_posix()
+                files[rel] = (st.st_mtime_ns, st.st_size)
+    runs = repo_root / "runs"
+    top_dirs: set[str] = set()
+    if runs.is_dir():
+        top_dirs = {child.name for child in runs.iterdir() if child.is_dir()}
+    return {"summary_files": files, "top_dirs": top_dirs}
+
+
+def diff_ignored_surface(
+    before: dict[str, Any], after: dict[str, Any], hyp_id: str
+) -> list[Path]:
+    """Return the repo-relative ignored-surface paths the candidate created or
+    modified this iter: any new/changed file under runs/_summary/, plus any new
+    top-level runs/<dir> that is NOT the current runs/<hyp_id>/. Pre-existing
+    files/dirs (identical in both snapshots) are never returned, so the ~2584
+    pre-existing ignored files never false-reject (phase1.5)."""
+    flagged: list[Path] = []
+    before_files: dict[str, tuple[int, int]] = before["summary_files"]
+    after_files: dict[str, tuple[int, int]] = after["summary_files"]
+    for rel, meta in after_files.items():
+        if before_files.get(rel) != meta:        # new or (mtime/size) changed
+            flagged.append(Path(rel))
+    new_dirs = after["top_dirs"] - before["top_dirs"]
+    for name in sorted(new_dirs):
+        if name == hyp_id:                        # the candidate's own dir — allowed
+            continue
+        flagged.append(Path("runs") / name)
+    return flagged
+
+
+def remove_ignored_poison(repo_root: Path, paths: list[Path]) -> None:
+    """Precise filesystem delete of exactly the diff-flagged ignored poison paths
+    (os.remove / rmtree) — never git clean. Collateral-free: only the listed paths
+    are removed (phase1.5)."""
+    for rel in paths:
+        target = repo_root / rel
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target, ignore_errors=True)
+        elif target.exists() or target.is_symlink():
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
