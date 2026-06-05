@@ -53,3 +53,14 @@ verify 중 scope 위반: docs/superpowers/plans/2026-06-05-phase1.5-metadata-off
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 6 · phase3_015_iter_006 · cer=NA (ΔNA) · reject
+
+### 관찰
+score_report 없음
+
+### 분석
+candidate scope 위반: docs/superpowers/plans/2026-06-05-phase2-3-worktree-parallel-promotion.md
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
