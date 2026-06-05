@@ -55,20 +55,17 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         results = generate(
             batch,
             [prompt_tokens] * len(batch_chunks),
-            beam_size=1,
+            # Coverage/deletion is the dominant axis (length_ratio ~0.65, del
+            # 81%) and it is uniform across all files, not just looping ones:
+            # under greedy decode the model loops then emits EOS early and drops
+            # the window tail. beam_size>1 escapes that greedy loop-then-EOS
+            # trap, and length_penalty>1 favors longer hypotheses, recovering
+            # the deleted tail directly. Both knobs were inert under the prior
+            # greedy config. Beam search now carries repetition control, so the
+            # inherited n-gram block can stay narrow without taxing coverage.
+            beam_size=2,
+            length_penalty=1.2,
             sampling_temperature=0.0,
-            # Anti-loop block widened further along the dominant deletion axis.
-            # The n-gram block is a coverage/anti-loop tradeoff knob: a small n
-            # also forbids natural recurring Korean n-grams (back-channel /
-            # honorific clusters), knocking the greedy decoder off-track and
-            # deepening deletion. The ledger shows this is monotone — n=3 gave
-            # cer 0.4318 (len 0.62), n=4 gave 0.4198 (len 0.63), each step
-            # toward plain greedy (0.4128, len 0.65) as fewer legitimate tokens
-            # are suppressed. The genuine repetition-collapse loops on the
-            # repeated_text files repeat whole clauses (>=5 subword tokens), so
-            # widening to n=5 still catches the real loop while sparing natural
-            # 4-grams — keeping the block's benefit on the looping files without
-            # taxing coverage on the clean ones.
             no_repeat_ngram_size=5,
         )
 
