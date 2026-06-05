@@ -1,9 +1,12 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-Windowed segmentation: the audio is split into fixed 30-second frames, each
-frame is decoded through the frozen Whisper backend, and the partial texts are
-concatenated. This recovers the tail of long-form 0715 calls that the original
-single-window stub silently truncated (a pure deletion failure).
+Timestamp-guided sliding window: instead of slicing the audio at blind 30 s
+boundaries (which cut words/utterances mid-stream and trigger boundary
+deletions + repetition collapse), we let the decoder emit timestamp tokens and
+advance the window cursor by the *actually-consumed* span. This is Whisper's
+native long-form algorithm and it is content-adaptive — each window ends on a
+decoder-chosen boundary, so the next window resumes cleanly instead of in the
+middle of a token.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
@@ -17,56 +20,69 @@ from frozen.asr_backend import generate, load, to_storage_view
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 
-# Whisper's receptive field is a fixed 30 s mel window; longer audio must be
-# fed as multiple windows.
-_WINDOW_SECONDS = 30
-# Decode windows in batches so the GPU stays busy and we keep within budget
-# instead of paying per-window launch latency on dozens of frames.
-_BATCH = 8
-
-
-def _window_bounds(n_samples: int, win: int) -> list[tuple[int, int]]:
-    if n_samples <= 0:
-        return [(0, 0)]
-    return [(s, min(s + win, n_samples)) for s in range(0, n_samples, win)]
+# Whisper's receptive field is a fixed 30 s mel window.
+_WINDOW_SECONDS = 30.0
+# Each timestamp token quantises time in 0.02 s steps (`<|0.00|>`..`<|30.00|>`).
+_TIME_PRECISION = 0.02
+# If the decoder's last timestamp advances less than this, treat the window as
+# untrustworthy and fall back to a full-window jump so the cursor never stalls.
+_MIN_ADVANCE_SECONDS = 2.0
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
     model, processor = load()
+    tokenizer = processor.tokenizer
 
     audio = np.asarray(audio, dtype=np.float32)
+    n_samples = audio.shape[0]
     win_samples = int(_WINDOW_SECONDS * sr)
-    bounds = _window_bounds(audio.shape[0], win_samples)
 
-    prompt_tokens = processor.tokenizer.convert_tokens_to_ids(
-        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN, "<|notimestamps|>"]
+    # Timestamp tokens occupy the top of the vocab, starting at `<|0.00|>`.
+    timestamp_begin = tokenizer.convert_tokens_to_ids("<|0.00|>")
+
+    prompt_tokens = tokenizer.convert_tokens_to_ids(
+        # Note: NO <|notimestamps|> — we want the timestamp channel back.
+        ["<|startoftranscript|>", _LANGUAGE_TOKEN, _TASK_TOKEN]
     )
 
     pieces: list[str] = []
-    for batch_start in range(0, len(bounds), _BATCH):
-        batch_bounds = bounds[batch_start : batch_start + _BATCH]
-        chunks = [audio[s:e] for s, e in batch_bounds]
+    cursor = 0
+    while cursor < n_samples:
+        chunk = audio[cursor : cursor + win_samples]
+        chunk_seconds = chunk.shape[0] / sr
 
-        # The processor pads/truncates each chunk to the fixed 30 s mel window,
-        # so stacking gives a clean (N, n_mels, n_frames) feature batch.
         inputs = processor(
-            chunks,
+            [chunk],
             sampling_rate=sr,
             return_tensors="np",
         )
         features = to_storage_view(inputs.input_features)
 
-        results = generate(
+        res = generate(
             features,
-            [prompt_tokens] * len(chunks),
+            [prompt_tokens],
             beam_size=1,
             sampling_temperature=0.0,
-        )
+        )[0]
+        token_ids = res.sequences_ids[0]
 
-        for res in results:
-            token_ids = res.sequences_ids[0]
-            pieces.append(
-                processor.tokenizer.decode(token_ids, skip_special_tokens=True).strip()
-            )
+        # Split the decoder output into text tokens and timestamp tokens.
+        text_tokens = [t for t in token_ids if t < timestamp_begin]
+        ts_tokens = [t for t in token_ids if t >= timestamp_begin]
 
-    return " ".join(p for p in pieces if p)
+        text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
+        if text:
+            pieces.append(text)
+
+        # Advance the cursor by the span the decoder actually consumed: the
+        # last emitted timestamp. If it gives no usable boundary, jump a full
+        # window so we never loop on the same audio.
+        advance_seconds = _WINDOW_SECONDS
+        if ts_tokens:
+            last_ts = (ts_tokens[-1] - timestamp_begin) * _TIME_PRECISION
+            if last_ts >= _MIN_ADVANCE_SECONDS:
+                advance_seconds = min(last_ts, chunk_seconds)
+
+        cursor += max(1, int(advance_seconds * sr))
+
+    return " ".join(pieces)
