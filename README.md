@@ -134,6 +134,78 @@ python3 scripts/evaluate_holdout.py --unseal
 
 ---
 
+## set 모드 · worktree · 병렬 · gated promotion (phase1.5 / 2 / 3)
+
+기본 single-shot 루프 위에 얹힌 진화 모드. 설계 상세는
+[`docs/HARNESS-MECHANICS.md`](docs/HARNESS-MECHANICS.md) §3(commit 정책)·§12(set),
+동작/튜닝 백로그는
+[`docs/proposals/2026-06-05-phase2-backlog-findings.md`](docs/proposals/2026-06-05-phase2-backlog-findings.md).
+
+요약:
+- **phase1.5 — metadata off-git.** `runs/` 전부 gitignore. git commit 은 **코드
+  checkpoint 전용**(`keep`/`success`/`lineage_advance`/`reset`), metadata
+  (state/portfolio/decisions/candidate_meta/HISTORY)는 atomic/append 로 디스크에 durable.
+  scope 가드는 tracked 표면=평범한 `git status`, ignored `runs/` 표면=후보 전/후
+  **filesystem 스냅샷 diff**(`git status --ignored` 아님 — 기존 ignored 파일 오탐 방지).
+  rollback 은 정확한 fs delete(`git clean` 금지).
+- **phase1 set — `--set-budget N`(>1).** champion 보다 나쁜 explore 를 버리지 않고
+  bounded set(explore→repair/refine, budget = explore 1 + repair ≤2 + refine ≤3)으로
+  육성. `champion` 은 별도 git ref(승격 코드), HEAD 는 lineage head.
+- **phase3 — gated promotion.** 승격은 직렬 gate 경유: `.git/champion_promote.lock`
+  (`fcntl.flock`) → live champion CER 재검증 → `git update-ref` **CAS** 로 champion 에
+  `transcribe.py` 만 splice. 기록은 `runs/_summary/promotion_map.jsonl`.
+- **phase2 — worktree + 병렬.** 잡마다 champion 에서 worktree cut → 격리 실행, 공유
+  champion 승격은 위 gate 로 직렬화 → 동시 잡 안전.
+
+### 사전 준비 (fresh 시작)
+
+```bash
+# champion ref 를 시작 코드(예: stub commit)로, promotion_map 초기화,
+# workspace 를 동일 코드로 맞추고 commit (HEAD==시작코드 라야 ensure_worktree_ready 통과)
+git branch -f champion <start-commit>
+rm -f runs/_summary/promotion_map.jsonl
+git restore --source=champion -- workspace/transcribe.py
+git add workspace/transcribe.py && git commit -m "chore: reset workspace to start code"
+# job-id 재사용 시 직전 state 가 있으면 resume 됨 → fresh 면 새 id 쓰거나 state 이동:
+#   mv runs/_summary/<job>_*  runs/_archive/   (또는 새 --job-id)
+```
+
+> `runs/` 가 gitignore 라, 위 §1 진입가드의 `git checkout -- runs/_summary/HISTORY.md`
+> 같은 git 기반 정리는 더 이상 통하지 않는다(파일이 untracked). 정리는 `rm` 으로.
+
+### A. 단일 lane (기존 방식 + gate 자동 적용)
+
+```bash
+python3 scripts/evolve.py \
+  --job-id phase3_017 \
+  --iters 10 \
+  --candidate-cmd "claude -p" \
+  --commit-results \
+  --set-budget 4
+```
+
+`--set-budget >1` 이면 set 육성이 켜지고 (`--commit-results` 필수), 승격은 자동으로
+gate(flock + 재검증 + CAS-splice)를 거친다. worktree·병렬 미사용 — 메인 repo 에서 직접.
+
+### B. worktree + 병렬 (launcher)
+
+```bash
+python3 scripts/launch_parallel.py \
+  --job-ids phase3_017,phase3_018 \
+  --iters 10 \
+  --candidate-cmd "claude -p" \
+  --set-budget 4 \
+  --concurrency 2
+```
+
+- 잡마다 `../wt-<job_id>` worktree 를 champion 에서 cut. (`--worktree-root` 로 위치 변경.)
+- `--concurrency N`: 동시 실행 잡 수. GPU runtime cap = `baseline × 7`(`RUNTIME_HARD_MULTIPLIER`)
+  이라 동시 verify 경합에는 여유가 있으나, **진짜 제약은 `claude -p` N 배 rate**(세션/토큰
+  한도). 처음엔 `--concurrency 1`(worktree+gate 만 검증) 또는 `2` 권장.
+- 끝나면 worktree 정리: `git worktree remove ../wt-<job_id>` (브랜치 `job/<job_id>` 는 보존).
+
+---
+
 ## 절대 금지
 
 요약만 — 전체 목록은 [`docs/STT-PIPELINE-SPEC.md §11`](docs/STT-PIPELINE-SPEC.md).
@@ -149,6 +221,8 @@ python3 scripts/evaluate_holdout.py --unseal
 | 문서 | 용도 |
 |------|------|
 | [`docs/SSOT.md`](docs/SSOT.md) | 문서별 정본 책임 지도 |
+| [`docs/HARNESS-MECHANICS.md`](docs/HARNESS-MECHANICS.md) | 루프 동작지도 (§3 commit 정책, §12 set 모드) |
+| [`docs/proposals/2026-06-05-phase2-backlog-findings.md`](docs/proposals/2026-06-05-phase2-backlog-findings.md) | 라이브 검증 발견사항·튜닝 백로그 (F1/F2) |
 | [`docs/STT-PIPELINE-SPEC.md`](docs/STT-PIPELINE-SPEC.md) | 문제 정의·정규화·가드 (정본) |
 | [`docs/archive/DESIGN.md`](docs/archive/DESIGN.md) | 시스템 설계 (3 단계 구조, 디렉토리) |
 | [`docs/archive/PHASE1-PLAN.md`](docs/archive/PHASE1-PLAN.md) | Harness 구축 단계별 |
