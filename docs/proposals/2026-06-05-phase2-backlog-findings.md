@@ -113,6 +113,70 @@ parent로 주입; 플랜 "Decision: the Phase-1 refine-parent wart" 절 + Task 2
 
 ---
 
+## F3 — lost-race → reset/repair 가 HEAD 와 워크트리를 어긋나게 둔다 (dirty-tree 크래시) **[버그]**
+
+**관찰:** phase3_017 라이브(단일 lane, set_budget 4)에서 iter5 가 시작하자마자
+`ensure_worktree_ready: workspace/transcribe.py is already dirty before candidate generation`
+로 크래시. 조사 결과 `workspace/transcribe.py == stub(champion)` 인데 `HEAD == iter4 "keep" 커밋`
+→ 둘이 어긋나(dirty) 다음 iter 진입 가드가 거부.
+
+**근거 (코드 경로):**
+- promote 경로는 gate 가 splice 할 `source_commit` 이 필요해서 **gate 실행 전에** candidate 를
+  `commit_iteration(commit_status="keep")` 로 커밋한다 → HEAD 가 candidate 로 전진.
+- 그 다음 `promotion.try_promote` 가 LOST → lost-race 재결정(`harness/runner.py` 의
+  lost-race 분기, gate 호출 직후): `Outcome(beats_champion=False)` 로 `step_set` 재호출 →
+  iter4 는 refine 3번째라 `t2.action == "reset"`(set 닫힘) → `restore_file_from_ref(champion)`
+  로 **워크트리만 champion(stub)으로 되돌리고 commit 하지 않음**.
+- 결과: `HEAD = iter4(candidate)`, `workspace = champion(stub)` → dirty → 다음 iter 크래시.
+
+**놓친 이유:** 단위테스트는 lost-race → **advance**(워크트리 == HEAD 유지) 만 커버했고,
+lost-race → **reset/repair**(이미 커밋된 candidate 를 롤백) 는 안 봄.
+
+**심각도:** 튜닝 아님, **실제 버그**. promote 가 gate 에서 지고(=A-vs-B 동시 race, 또는 F4 처럼
+시드 불일치) 그 set 이 reset 으로 닫히는 모든 경우에 발생. 병렬(phase2-3 본래 목적)에서 정상적으로
+일어나는 lost-race 에서도 터짐.
+
+**제안 (Fix A):**
+- lost-race 의 `reset` 분기: champion 복원 후 `commit_iteration("reset", …)` 추가 →
+  HEAD == workspace (phase1.5 의 "reset = code checkpoint" 규칙과 일치).
+- lost-race 의 `repair` 분기: 이 경우 candidate 가 이미 HEAD 라 `restore_lineage_head` 가
+  HEAD 로 복원(=candidate 유지)되어 트리는 깨끗하나 semantics 가 애매 — lost-race 에서
+  `repair` 가 실제로 나오는지(보통 advance/reset) 확인하고, 나오면 HEAD 를 직전 lineage head
+  로 맞추도록 처리.
+- 회귀 테스트: lost-race → reset 후 `git status` 깨끗 + 다음 iter `ensure_worktree_ready`
+  통과 assert.
+
+**상태:** 미구현. **버그(우선).**
+
+---
+
+## F4 — gated promotion 시드가 "champion ≈ baseline 파이프라인" 을 가정 (stub-start 에서 거짓)
+
+**관찰:** champion 을 stub(실측 CER ~0.41)으로 리셋한 뒤 fresh 실행했는데, `run_job` 부트스트랩이
+`seed_champion_cer(baseline_cer=0.1714)` 로 `promotion_map.jsonl` 을 시드 → gate 의 기준
+CER(0.1714)이 champion **코드**(stub 0.41)와 불일치. 결과: 모든 후보(0.39~0.45)가 gate 에서
+패배 → champion 영원히 못 전진 + 개선되는 iter 마다 promote→gate→LOST 깔때기 → **F3 를 매 iter
+유발**.
+
+**근거:** `harness/promotion.py:seed_champion_cer` 는 부트스트랩 champion 의 CER 이
+`baseline/target_cer.json:baseline_cer` 와 같다고 가정(I3 fix). stub 챔피언에선 거짓 —
+stub 의 실측 CER 은 ~0.41(phase3_017 iter1 이 측정한 값)이지 0.1714 가 아님. 또한 in-process
+gate(`decide_promotion(champion_cer=state.best_cer)`, `record_best` 로 드리프트)와 splice
+gate(`live_champion_cer`, 시드 0.1714 고정)가 **서로 다른 기준**을 써서 단일 lane 에서 이중 gate
+불일치.
+
+**제안 (Fix B, 택1/조합):**
+- stub-start 면 `promotion_map` 을 **champion 의 실측 CER**(stub 이면 ~0.41)로 시드, 또는
+  bootstrap 시 시드 생략(첫 후보가 promote 되도록 — 레거시 동작).
+- `state.best_cer` 도 동일 값으로 시드해 in-process gate 와 splice gate 기준을 일치.
+- 일반화: 시드 출처를 "champion ref 가 실제로 내는 CER"로 (필요시 champion 1회 측정), baseline_cer
+  하드코딩 대신.
+
+**상태:** 미구현. 설계 결정. (당장 라이브 재현만 하려면 운영자가 `promotion_map` 을 champion 실측
+CER 로 수동 시드.)
+
+---
+
 ## (참고) 이미 다른 문서가 추적 중 — 여기서 중복 안 함
 
 - **refine-parent wart** (refine 프롬프트 parent 힌트가 lineage head가 아니라 champion-family를
