@@ -360,3 +360,42 @@ class Portfolio:
         if len(self.near_best) > _NEAR_BEST_MAX:
             self.near_best = self.near_best[:_NEAR_BEST_MAX]
         return True
+
+    def register_lineage_survivor(
+        self,
+        *,
+        hyp_id: str,
+        iteration: int,
+        report: dict[str, Any],
+        harness_family_id: str,
+        diff_path: str | None,
+        factor: float = _NEAR_BEST_FACTOR,
+    ) -> bool:
+        """F2: explicitly preserve a closed set's near-champion lineage best as a
+        parent. Unlike the incidental reset-iter near_best capture, this uses the
+        set's RECORDED lineage best (its own hyp_id/report/diff), so a mid-set best
+        that was later slightly regressed is not lost. Only retained when within
+        global_best CER × factor — keeps the C2/C1 guard against far-from-champion
+        pool pollution. Returns True if retained. diff_path must point at the
+        survivor's own runs/<hyp>/candidate.diff so the parent hint is non-empty."""
+        entry = _entry(
+            hyp_id, iteration, "lineage_survivor", report,
+            harness_signature="",
+            harness_family_id=harness_family_id,
+            self_declared_family_id=None,
+            fingerprint=None,
+            mode="refine",
+            diff_path=diff_path,
+        )
+        if entry["cer"] is None:
+            return False
+        if factor == _NEAR_BEST_FACTOR:
+            return self._retain_near_best(entry)
+        # honor a custom factor by temporarily comparing against the explicit cut.
+        gb = global_best_entry(self)
+        ref = gb.get("cer") if gb else None
+        if not isinstance(ref, (int, float)):
+            return False
+        if entry["cer"] > ref * factor:
+            return False
+        return self._retain_near_best(entry)

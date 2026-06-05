@@ -326,3 +326,39 @@ def test_lineage_advance_does_not_touch_any_pool() -> None:
     assert p.family_best == before_family    # F1 not added
     assert p.near_best == before_near        # 0.170 not banked
     assert updated == []                     # no slot updated
+
+
+def test_register_lineage_survivor_adds_near_best_with_diff_path() -> None:
+    from harness.portfolio import Portfolio
+    p = Portfolio(job_id="job", global_best="champ")
+    # a global best entry must exist for the near-best cutoff to resolve.
+    p.family_best["f0"] = {"hyp_id": "champ", "cer": 0.16,
+                           "harness_family_id": "f0",
+                           "axis_metric": {}}
+    survivor_report = {"corpus_cer": 0.17, "total_inference_time_s": 90.0,
+                       "error_breakdown": {"del_ratio": 0.1, "sub_ratio": 0.1},
+                       "hallucination_hit_rate": 0.0}
+    added = p.register_lineage_survivor(
+        hyp_id="job_iter_009", iteration=9, report=survivor_report,
+        harness_family_id="lineage",
+        diff_path="runs/job_iter_009/candidate.diff", factor=1.20)
+    assert added is True
+    hyps = {e["hyp_id"] for e in p.near_best}
+    assert "job_iter_009" in hyps
+    entry = next(e for e in p.near_best if e["hyp_id"] == "job_iter_009")
+    assert entry["diff_path"] == "runs/job_iter_009/candidate.diff"
+    assert entry["harness_family_id"] == "lineage"
+
+
+def test_register_lineage_survivor_skips_far_from_champion() -> None:
+    from harness.portfolio import Portfolio
+    p = Portfolio(job_id="job", global_best="champ")
+    p.family_best["f0"] = {"hyp_id": "champ", "cer": 0.16,
+                           "harness_family_id": "f0", "axis_metric": {}}
+    far_report = {"corpus_cer": 0.40, "total_inference_time_s": 90.0}
+    added = p.register_lineage_survivor(
+        hyp_id="job_iter_009", iteration=9, report=far_report,
+        harness_family_id="lineage",
+        diff_path="runs/job_iter_009/candidate.diff", factor=1.20)
+    assert added is False
+    assert all(e["hyp_id"] != "job_iter_009" for e in p.near_best)
