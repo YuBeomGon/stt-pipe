@@ -1981,6 +1981,36 @@ def _persist_decision(
 _CODE_CHECKPOINT_STATUSES = ("keep", "success", "lineage_advance", "reset")
 
 
+def _register_lineage_survivor(config: RunnerConfig, state: HarnessState) -> None:
+    """F2: on set close (reset), preserve the set's near-champion lineage best as
+    a parent. Best effort — never raises into the commit/close path. Uses the
+    set's RECORDED best (state.set_best_*), reading its own runs/<hyp>/ report +
+    diff, so a mid-set best is preserved even if the reset candidate regressed."""
+    try:
+        if not state.set_best_hyp_id:
+            return
+        out_dir = config.repo_root / config.runs_dir / state.set_best_hyp_id
+        report = _read_score_report(out_dir)
+        if not report:
+            return
+        diff_path = (
+            config.runs_dir / state.set_best_hyp_id / "candidate.diff"
+        ).as_posix()
+        portfolio_path = (
+            config.repo_root / config.summary_dir / f"{config.job_id}_portfolio.json"
+        )
+        from harness.portfolio import Portfolio
+        portfolio = Portfolio.load(portfolio_path)
+        portfolio.job_id = config.job_id
+        added = portfolio.register_lineage_survivor(
+            hyp_id=state.set_best_hyp_id, iteration=state.iteration,
+            report=report, harness_family_id="lineage", diff_path=diff_path)
+        if added:
+            portfolio.save(portfolio_path)
+    except Exception:
+        return
+
+
 def commit_iteration(
     config: RunnerConfig,
     state_path: Path,
@@ -2536,6 +2566,15 @@ def run_iteration(
         # the code commit is a no-op and only _persist_decision runs.
         commit_iteration(config, state_path, final_status, hyp_id,
                          state.iteration, reason=reason)
+        # F2: a set closes via reset in BOTH the direct (t.action=="reset") and the
+        # lost-race (t2.action=="reset") arms; both converge on final_status=="reset"
+        # here, AFTER _persist_set_state has copied the closed set's RECORDED best
+        # onto state.set_best_*. Register that near-champion lineage best as a parent
+        # survivor so a cultivated-but-unpromoted lineage can still be reused as a
+        # combine/refine parent. Complements the active-set refine-parent HEAD
+        # injection in _decide_iteration: active set → HEAD; closed set → pool.
+        if final_status == "reset":
+            _register_lineage_survivor(config, state)
     return result
 
 

@@ -2396,3 +2396,48 @@ def test_set_lost_race_repair_rewinds_to_prior_head(tmp_path):
     assert _clean(tmp_path)
     assert state.best_cer == 0.20                                 # loser not banked
     ensure_worktree_ready(RunnerConfig(job_id="job", repo_root=tmp_path, set_budget=4))
+
+
+@pytest.mark.worktree
+@pytest.mark.promotion
+def test_set_close_reset_registers_lineage_survivor(tmp_path):
+    """F2: when a set closes via reset and its RECORDED lineage best is within
+    near-champion factor, that lineage best is registered into the portfolio
+    near_best pool with a diff_path pointing at its own candidate.diff."""
+    from harness.runner import RunnerConfig
+    from harness.state import HarnessState
+    _init_repo(tmp_path)
+    # a global_best must exist in the portfolio for the near-best cutoff to resolve
+    # (in a real run a prior promotion seeds it). Seed a champion family_best entry.
+    portfolio_path = tmp_path / "runs/_summary/job_portfolio.json"
+    portfolio_path.parent.mkdir(parents=True, exist_ok=True)
+    portfolio_path.write_text(json.dumps({
+        "job_id": "job", "global_best": "champ",
+        "family_best": {"f0": {"hyp_id": "champ", "cer": 0.16,
+                               "harness_family_id": "f0", "axis_metric": {}}},
+    }), encoding="utf-8")
+    # set in refine at budget edge; the incoming candidate is WORSE than the
+    # lineage best (0.18 > 0.17) → a 'hold' that spends the last refine unit and
+    # closes the set via reset WITHOUT replacing the recorded lineage best. The
+    # recorded best (job_iter_008, 0.17) must survive into the pool.
+    state = HarnessState(job_id="job", best_cer=0.16, best_hyp_id="champ",
+                         set_id=1, set_phase="refine", set_best_cer=0.17,
+                         set_best_hyp_id="job_iter_008", set_refines_used=2)
+    # the lineage best's run dir + diff must exist for diff_path to be meaningful.
+    survivor_dir = tmp_path / "runs/job_iter_008"
+    survivor_dir.mkdir(parents=True, exist_ok=True)
+    (survivor_dir / "candidate.diff").write_text("--- a\n+++ b\n", encoding="utf-8")
+    (survivor_dir / "score_report.json").write_text(
+        json.dumps({"corpus_cer": 0.17, "total_inference_time_s": 90.0}),
+        encoding="utf-8")
+    _run_set_iter(
+        tmp_path, cand_body="def t():\n return 'HOLD'\n", cer=0.18, state=state,
+        max_refines=3,
+        premap=json.dumps({"job_id": "peer", "cer": 0.10,
+                           "champion_commit": "dead"}) + "\n")
+    assert state.set_phase == "idle"                 # set closed (reset)
+    assert state.set_best_hyp_id == "job_iter_008"   # recorded best preserved
+    pf = json.loads(portfolio_path.read_text())
+    near = {e["hyp_id"]: e for e in pf.get("near_best", [])}
+    assert "job_iter_008" in near
+    assert near["job_iter_008"]["diff_path"] == "runs/job_iter_008/candidate.diff"
