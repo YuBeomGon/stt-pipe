@@ -51,7 +51,7 @@
 
 | 영역 | 책임 |
 |------|------|
-| `harness/` | Phase 3 controller 로직: guards(수치 가드), verify(judge 실행+guard), policy(keep/reject/micro_bank), **scheduler**(mode 결정), **portfolio**(후보 bank + parent 선택), **signature**(diff→family), **cooldown**(반복실패 soft 경고), **config**(threshold 상수), state, history, runner |
+| `harness/` | Phase 3 controller 로직: guards(수치 가드), verify(judge 실행+guard), policy(keep/reject/micro_bank + **promotion/lineage 두 비교**), **scheduler**(mode 결정), **portfolio**(후보 bank + parent 선택), **signature**(diff→family), **cooldown**(반복실패 soft 경고), **lineage**(bounded-set 상태기계), **gitops**(champion ref 헬퍼), **config**(threshold 상수), state, history, runner |
 | `harness/prompts/candidate.md` | candidate runtime profile — runner 가 매 iter inline |
 | `scripts/` | 사람이 실행하는 thin CLI 또는 일회성 운영 명령 (`evolve.py`, `analyze_run.py`, `evaluate_holdout.py`, `audit_candidate_context.py` 등) |
 | `judge/` | 평가 산출: score, per-file, diagnosis |
@@ -96,3 +96,10 @@
 
 지금 진행 중인 대규모 리팩토링 설계 = `HARNESS-REDESIGN.md` (§2 현행 정본).
 proposal 은 *결정 이력* 이지 운영 정본이 아니다.
+
+- **2026-06-05 lineage-set phase1** (구현 중, `refactor-harness` 브랜치) — `decide_promotion`/
+  `decide_lineage_progress` 두 비교 + bounded-set 상태기계(`lineage.py`) + `champion` ref
+  (`gitops.py`), `--set-budget` opt-in. C2(explore 1-shot 사망) 해소. 계획·리뷰:
+  `superpowers/plans/2026-06-05-harness-lineage-set-phase1.md`,
+  `reviews/2026-06-05-lineage-set-phase1-plan-review.md`. metadata-off-git 은 phase1.5 로 보류.
+  동작 지도 = `HARNESS-MECHANICS.md` §12.

@@ -437,9 +437,9 @@ evolve-design-review.md`, `archive/proposals/2026-06-04-explore-block-speciation
 3. **explore 1-shot 사망(C2 의 본질).** explore 가 새 구조를 내면 보통 챔피언보다 나쁘다
    (예 0.41 ≫ best×1.20=0.185). policy 는 reject, runner 는 **챔피언으로 rollback**(§3),
    near_best 컷 밖이라 parent 로도 안 남는다. → 다음 refine 은 그 explore 결과가 아니라
-   다시 챔피언 위에서 돈다. "explore→refine 육성 블록"을 하려면 **나쁜 구조를 디스크에
-   유지(rollback 안 함)** 해야 하는데, 그것이 §3 불변식과 reject 경로 ~10곳·resume 을
-   건드린다 — 이것이 보류된 보호-블록의 실제 작업량.
+   다시 챔피언 위에서 돈다. **→ §12 의 lineage-set(phase1) 로 해소** — `--set-budget>1`
+   이면 나쁜 explore 를 rollback 하지 않고 디스크에 유지해 refine 으로 육성한다. legacy
+   single-shot(`--set-budget 1`, 기본)은 위 동작 그대로.
 
 4. **구 explore-ratio 경로(§4.2 참고)와 scheduler 의 이중성** — 정리 대상(dead code 가능).
 
@@ -455,3 +455,53 @@ stub 부터 DIVERGE-강화 explore 로 90 iter(사용자 중단). best `0.15854`
 - 개선은 전부 refine/repair(0.15914·0.15904·0.15854). **iter8 이후 explore 는 best 0회.**
 - 시사: 정체 주원인은 "explore 부족"이 아니라 정체 구간에 exploit 이 안 도는 것 +
   diversity_stall 과튜닝. (보호-블록보다 스케줄러 균형이 더 싼 레버일 수 있음.)
+
+---
+
+## 12. lineage set (phase1, `--set-budget`)
+
+§10-3(C2) 해소용 bounded-set. 구현 계획: `docs/superpowers/plans/2026-06-05-harness-
+lineage-set-phase1.md`. **`--set-budget 1`(기본)이면 위 §1–§11 의 legacy single-shot 그대로.
+`>1` 이면 아래 set 경로가 켜진다** (`--commit-results` 필수). 단일 lane — worktree 는 phase2.
+
+### 12.1 두 비교 함수 (`policy.py`)
+
+기존엔 `decide_candidate` 하나가 챔피언 대비 keep/reject 를 다 했다(§8). set 경로는 둘로 분리:
+- `decide_promotion(champion_cer=…)` — **전역 챔피언**을 이기나? (= 기존 decide_candidate 의미, alias).
+- `decide_lineage_progress(lineage_best_cer=…)` — **set 내부 lineage best** 대비. `advance`(개선,
+  또는 set 의 첫 후보 = seed) / `hold`(이득 없음) / `dead_end`(non-finite, 또는 lineage_best ×
+  `LINEAGE_DEAD_END_FACTOR`=1.5 초과). 챔피언보다 나빠도 seed 면 살린다 — 이게 C2 핵심.
+
+### 12.2 상태기계 (`lineage.py`, 순수함수)
+
+`step_set(SetState, Outcome, SetBudget) -> Transition(state, action)`. phase: `explore →
+(repair|refine) → … → closed`. action 4종을 runner 가 실행:
+- `advance` — verify 통과 + lineage 전진: **후보 코드를 디스크에 유지**(lineage head 전진), set 계속.
+- `repair` — verify 실패(또는 refine 의 hold/실패): lineage head 로 rollback, set 유지.
+- `promote` — 챔피언을 이김: 챔피언 승격 + set 종료(다음 set 은 새 챔피언에서 reseed). **항상 우선.**
+- `reset` — dead_end / budget 소진: set 종료, 워크트리를 챔피언으로 복원.
+
+budget: explore 1 + repair ≤ `SET_MAX_REPAIRS`(2) + refine ≤ `SET_MAX_REFINES`(3). 순수함수라
+audio 없이 결정적 단위테스트(`tests/test_lineage_state_machine.py`).
+
+### 12.3 git / state (단일 lane)
+
+- HEAD(작업 브랜치) = **현재 lineage head**. 별도 `champion` ref(`gitops.py`) = 마지막 승격 코드.
+  `reset` 시 `restore_file_from_ref(champion)`, `promote` 시 commit 후 `advance_champion_ref(HEAD)`.
+- `commit_iteration` 은 **미변경**(metadata-off-git 은 phase1.5 로 보류). status:
+  `lineage_advance`(set 내부 체크포인트, **portfolio pool-inert** — global_best 미오염), `keep`/
+  `success`(승격), `reject`(repair/reset).
+- set 진행상태는 `HarnessState.set_*`(set_id/set_phase/set_best_cer/…) + `champion_ref` 로 영속 →
+  중단 후 resume 가능.
+
+### 12.4 scheduler 와의 관계
+
+set active 시 `_decide_iteration` 이 scheduler 의 `chosen_mode` 를 **set phase 로 override**
+(set=refine 면 prompt 도 refine). scheduler 는 trace 용 `scheduled_mode` 만 계산. set 이 idle/
+closed 면(= 새 set 의 첫 seed iter) override 안 함 → 그 seed mode 는 scheduler 가 정한다.
+
+### 12.5 phase1 범위 밖 (HARNESS-REDESIGN 후속)
+
+worktree·병렬 잡·branch protection·CI marker·`git archive` 패키징·archive/islands·portfolio
+`job_best` 전면분리·metadata-off-git(phase1.5)·cooldown normalize. (§10-1/2/4 의 explore 앵커링·
+diff base·구 explore-ratio 는 set 경로와 별개로 남아 있음.)
