@@ -62,3 +62,15 @@ PROMISING_CER_MAX_FACTOR: float = 1.25 # best_cer 대비 이 배수 넘는 rejec
 FORMAT_REJECT_PROBE_ITERS: int = 5     # 이 iter 까지만 format-reject abort 감시
 FORMAT_REJECT_ABORT_COUNT: int = 4     # 연속 format-reject N 회 → abort
 COMMAND_FAIL_ABORT_COUNT: int = 3      # 연속 command-fail N 회 → abort
+
+# ── Lineage set (HARNESS-REDESIGN §84–90, Phase 1) ──────────────────
+# A "set" cultivates one explore seed through a bounded repair/refine chain
+# instead of discarding a worse-than-champion explore after one shot (C2).
+# Budget keeps cost bounded (redesign §90: explore 1 + repair/refine 2~3).
+SET_MAX_REPAIRS: int = 2          # verify_fail fixes allowed per set
+SET_MAX_REFINES: int = 3          # local-refine steps allowed per set
+# Within-set "is this worth cultivating" gate. A candidate whose CER is worse
+# than the current lineage best by more than this factor is a dead end (close
+# the set) rather than something refine could rescue. Looser than promotion so
+# a 0.190 explore (champion 0.154) is NOT a dead end and gets refined.
+LINEAGE_DEAD_END_FACTOR: float = 1.50
