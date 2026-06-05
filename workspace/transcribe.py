@@ -90,14 +90,16 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         ]
         batch = to_storage_view(np.stack(feats, axis=0))
 
-        # Modest beam decode with no length/anti-loop biases: this iteration
-        # tests the segmentation mechanism in isolation, so the scoring-side
-        # knobs the incumbent stacked (length_penalty/patience/ngram) are
-        # stripped back to a neutral search.
+        # ABLATION: the beam_size=2 override is removed, dropping decode back to
+        # greedy (CT2's default beam_size=1). Beam search was originally added
+        # (iter_008/009) to fight the deletion axis on the blind-grid pipeline;
+        # silence-aware segmentation (iter_010) now owns coverage (length_ratio
+        # 0.94, dominant axis flipped to substitution), so the beam's original
+        # justification is gone. This tests whether it still pays for its ~2x
+        # cost now that segmentation, not search, supplies the coverage.
         results = generate(
             batch,
             [prompt_tokens] * len(batch_chunks),
-            beam_size=2,
             sampling_temperature=0.0,
         )
 
