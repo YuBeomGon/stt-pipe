@@ -68,10 +68,13 @@ _SAMPLE_TOPK = 10
 
 # ROVER override gate: a pool token may replace the anchor token at a
 # 1:1-aligned position only if at least this many samples agree on it AND that
-# agreement strictly exceeds the samples backing the anchor token. Conservative
-# (strict majority of the 5-sample pool) so the fusion repairs only confident
-# cross-sample substitutions and never trades the substitution axis for noise.
-_VOTE_MIN = 3
+# agreement strictly exceeds the samples backing the anchor token. iter_086 ran
+# a bare 3/5 majority and its swaps were net-harmful (sub only 0.57->0.56 while
+# hal rose 0.00->0.18) — a phonetic-neighbour the T=0.4 pool happens to agree on
+# overrode a correct anchor token. A 4/5 SUPERMAJORITY admits only the highest-
+# confidence cross-sample repairs; every weaker position falls back to the strong
+# precision anchor, so the fusion stops trading the substitution axis for noise.
+_VOTE_MIN = 4
 
 
 def _rover_fuse(anchor: list[int], samples: list[list[int]]) -> list[int]:
