@@ -56,6 +56,16 @@ _NUM_HYPOTHESES = 8
 # outlier, never on a near-even split where the max-joint-logprob prior holds.
 _WORD_VOTE_MIN = 5
 
+# Per-token repetition penalty applied DURING decode, before the word vote sees
+# the beams. The parent ran the default 1.0, so every one of the 8 beams — the
+# anchor and all 7 voters — could lock onto a self-repeating or locally-tempting
+# wrong token. iter_016 established ~1.1 as the value that suppresses exactly
+# that loop-substitution component of the 57% axis. Cleaning the beams at the
+# source gives the consensus vote denser, less-correlated-on-error evidence at
+# the isolated substitution positions, rather than voting over paths that all
+# inherited the same confident mistake.
+_REPETITION_PENALTY = 1.1
+
 
 def _word_consensus(texts: list[str]) -> str:
     """Word-level minimum-Bayes-risk over the N-best beam list.
@@ -130,6 +140,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             beam_size=_BEAM_SIZE,
             num_hypotheses=_NUM_HYPOTHESES,
             sampling_temperature=0.0,
+            repetition_penalty=_REPETITION_PENALTY,
         )[0]
 
         # Reconcile the full N-best beam list at the word level. beam[0] is the
