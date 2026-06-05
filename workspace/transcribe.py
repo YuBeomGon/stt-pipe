@@ -51,6 +51,15 @@ _MIN_ADVANCE_SECONDS = 2.0
 
 _BEAM_SIZE = 5
 
+# Per-token repetition penalty inside the beam. The parent stripped its decode
+# to a bare beam pass (penalty 1.0) to isolate the loudness-normalisation
+# effect; the ledger's best result (iter_016) showed ~1.1 steers the beam off
+# the self-repeating wrong-token path that drives loop-substitution on
+# phone-band audio — the dominant axis (sub 57%). Re-introducing it on top of
+# the consistent absolute level the loudness norm now provides is the REFINE
+# tune aimed at that axis.
+_REPETITION_PENALTY = 1.1
+
 # Target waveform RMS (~-20 dBFS). Whisper's feature extractor normalises the
 # log-mel with a fixed affine and never compensates for input gain, so bringing
 # every file to a common absolute level puts the acoustic encoder at a
@@ -113,6 +122,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             [sot_tokens],
             beam_size=_BEAM_SIZE,
             sampling_temperature=0.0,
+            repetition_penalty=_REPETITION_PENALTY,
         )[0]
 
         token_ids = res.sequences_ids[0]
