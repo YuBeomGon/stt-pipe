@@ -61,7 +61,18 @@ _PRE_EMPHASIS_ALPHA = 0.97
 # confident windows single-cost and bounding the dual-encode cost to the
 # band-degraded minority where the substitution axis concentrates. Below it the
 # window is a candidate for spectral restoration and both front-ends compete.
-_RAW_TRUST_LOGPROB = -0.4
+#
+# iter_077/078 found the pre-emphasis re-encode *creates* wrong-token posterior
+# sharpening upstream in the spectral shaping, so neither a swap margin nor a
+# gentler slope could stop marginal windows from re-injecting substitutions. The
+# remaining lever is this eligibility floor: at -0.4 the second front-end fires
+# on mid-confidence windows whose raw decode was already adequate, and those are
+# exactly where the spectral distortion does net harm. Dropping the floor to
+# -0.8 restricts the competing front-end to the deeply-degraded minority where
+# the raw avg-logprob is genuinely unexplainable, so the pre-emphasis only acts
+# where the raw decode is failing badly enough that even a distorted second view
+# is more likely to help than hurt.
+_RAW_TRUST_LOGPROB = -0.8
 
 
 def _pre_emphasis(x: np.ndarray, alpha: float) -> np.ndarray:
