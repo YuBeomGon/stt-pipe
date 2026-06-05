@@ -10,6 +10,22 @@
 
 ---
 
+> ## ⚠️ CRITICAL CORRECTIONS (2026-06-05 review + controller meta-review — apply before implementing; plan verdict: needs-rework)
+>
+> The design (worktree isolation, `fcntl.flock` serialized promotion, live-CER re-validate, ref CAS) is sound, but the following defects were verified against the real code and MUST be fixed:
+>
+> 1. **C1 — `_init_repo` does NOT return the repo root and does NOT create `champion`.** Confirmed: `tests/test_harness_runner.py` `def _init_repo(root: Path) -> None:` (returns `None`; creates git repo + workspace/baseline/runs but no `champion` ref). Every worktree/promotion test in this plan that does `main = _init_repo(tmp_path); gitops.ensure_champion_ref(main, …)` / `prepare_job_worktree(main, …)` will crash on `None`. **Fix:** in each new test, call `_init_repo(tmp_path)` for its side effects, then make an **initial commit** (so `champion` can point at something) and call `gitops.ensure_champion_ref(tmp_path, "champion")` with `tmp_path` as the root. Do not rely on `_init_repo`'s return value or assume it creates `champion`.
+>
+> 2. **C2 — "promotion lost" must be a first-class `step_set` outcome, not a post-hoc mutation of a frozen closed `Transition`.** The promote-arm rewrite references an undefined/truncated `_reopen_as_refine(...)` and `replace()`s a `Transition` that `step_set` already closed (`promote` → `phase="closed"`) into a `refine` state the pure machine never emits — corrupting set state. **Fix:** model the lost race at the *input* to `step_set`, not the output. When the CAS / re-validation loses, do NOT call `step_set` with `beats_champion=True`. Instead the runner re-runs the set decision with `beats_champion=False` (the candidate is verified-OK and may still improve the lineage), so `step_set`'s normal `advance`/`hold` refine logic keeps it as the lineage head and the set continues — no `Transition` mutation, no undefined helper. Delete `_reopen_as_refine`.
+>
+> 3. **I3 — live champion CER must NOT fall back to `None`.** `live_champion_cer` reads the tail of `promotion_map.jsonl`; when empty (bootstrap, no promotions yet) it returns `None`, and `decide_promotion(champion_cer=None)` treats "no champion" as "first candidate always wins" — so the FIRST parallel promotion always succeeds even when the committed `champion` already encodes a better baseline CER. **Fix:** seed `promotion_map.jsonl` with the bootstrap champion's recorded CER at `ensure_champion_ref` time (or read the champion commit's score), so re-validation always has a real CER.
+>
+> 4. **Merge with phase1.5 (shared lines).** phase1.5 and this plan both edit the set `repair`/`reset` blocks (`runner.py:~2249-2254`) and the promote arm. If **phase1.5 lands first**, the code-only `commit_iteration`, the `reset`-as-code-checkpoint status, and metadata-off-git are already done — then this plan's edits there reduce to: add `restore_lineage_head` for the worktree `repair` and wire the promotion lane; do NOT re-introduce metadata commits. State this rebasing explicitly in Tasks 2-3/3-4. (The promotion splice insulates `champion` regardless of phase1.5.)
+>
+> 5. **Scope split (recommended).** Tasks 4–5 (`requires_data`/`integration` pytest markers, `git archive` packaging) are NOT load-bearing for the promotion-race fix. Split them into a later phase; ship Tasks 1–3 (worktree + parallel launcher + gated promotion lock) as the coherent core. Also: register markers in `pyproject.toml` **before** any test uses `pytest.mark.worktree/promotion` (else `PytestUnknownMarkWarning`, fails under `-W error`).
+>
+> **Dependency note:** implement **phase1.5 first** (it fixes the live false-positive scope-reject that already bit phase3_015), then rebase this plan onto it per (4).
+
 ## Ground truth: what Phase 1 already landed (READ before starting)
 
 Phase 1 (`docs/superpowers/plans/2026-06-05-harness-lineage-set-phase1.md`) is **merged on `refactor-harness`**. Confirmed in code:
