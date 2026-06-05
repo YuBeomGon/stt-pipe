@@ -64,6 +64,13 @@ _COMPRESSION_RATIO_THRESHOLD = 2.4
 
 _BEAM_SIZE = 5
 
+# Gentle token-level repetition penalty (CT2 generate kwarg, never exercised on
+# this lineage). Whisper's standard ~1.1 setting nudges the beam off a
+# self-repeating degenerate path one token at a time without distorting natural
+# Korean morpheme repetition, attacking the confident-wrong-loop component of
+# the dominant substitution axis (and the two repeated_text focus files).
+_REPETITION_PENALTY = 1.1
+
 
 def _compression_ratio(text: str) -> float:
     if not text:
@@ -110,6 +117,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
                     [sot_tokens],
                     beam_size=_BEAM_SIZE,
                     sampling_temperature=0.0,
+                    repetition_penalty=_REPETITION_PENALTY,
                     return_scores=True,
                 )[0]
             else:
@@ -118,6 +126,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
                     [sot_tokens],
                     beam_size=1,
                     sampling_temperature=temp,
+                    repetition_penalty=_REPETITION_PENALTY,
                     return_scores=True,
                 )[0]
 
