@@ -1,4 +1,4 @@
-# PHASE3-HARNESS-MECHANICS — 코드 기준 동작 레퍼런스
+# HARNESS-MECHANICS — 코드 기준 동작 레퍼런스
 
 > 목적: Phase 3 self-evolution harness 가 **실제 코드에서 어떻게 도는지**를 한 곳에
 > 그림과 함께 정리한다. 운영 정본(SSOT §2)이 아니라 **코드 스냅샷 기반 학습/이해용
@@ -422,7 +422,7 @@ parent 재료가 된다.
 
 이 문서를 읽고 방향을 정하기 위한 메모. (배경 상세는 `archive/reviews/2026-06-04-
 evolve-design-review.md`, `archive/proposals/2026-06-04-explore-block-speciation.md`
-— archive 이므로 의존하지 말고 참고만. 현행 방향은 `deep-research-report.md`.)
+— archive 이므로 의존하지 말고 참고만. 현행 방향은 `HARNESS-REDESIGN.md`.)
 
 1. **explore 앵커링(F2).** 모든 mode 가 on-disk 챔피언 위에서 편집을 시작한다(§3 불변식).
    explore 도 마찬가지라 "발산"이 아니라 incumbent 변형이 되기 쉽다. → 현재는 explore

@@ -18,7 +18,7 @@
 ## 2. 주제별 정본
 
 > **2026-06-05 docs 정리.** drift 된 plan/design/deprecated 문서는 `archive/` 로
-> 이동했다(리팩토링 후 `deep-research-report.md` 기준으로 새로 작성 예정). 루트에는
+> 이동했다(리팩토링 후 `HARNESS-REDESIGN.md` 기준으로 새로 작성 예정). 루트에는
 > 아래 **현행 정본** + **시점기록 디렉토리**만 둔다. `_workmap/` 은 삭제(임시였음).
 
 ### 현행 정본 (live)
@@ -26,8 +26,8 @@
 | 주제 | 정본 | 비고 |
 |------|------|------|
 | 문제 정의, 데이터, 정규화, metric, 금지사항 | [`STT-PIPELINE-SPEC.md`](STT-PIPELINE-SPEC.md) | 도메인 정본 (코드 무관, 유효) |
-| harness 코드 동작 (다이어그램) | [`PHASE3-HARNESS-MECHANICS.md`](PHASE3-HARNESS-MECHANICS.md) | **현재 코드 기준** 동작 지도 |
-| 리팩토링 설계도 (worktree/lineage 분리) | [`deep-research-report.md`](deep-research-report.md) | 진행 중 리팩토링의 중심. 채택 시 새 PLAN 으로 정본화 |
+| harness 코드 동작 (다이어그램) | [`HARNESS-MECHANICS.md`](HARNESS-MECHANICS.md) | **현재 코드 기준** 동작 지도 |
+| 리팩토링 설계도 (worktree/lineage 분리) | [`HARNESS-REDESIGN.md`](HARNESS-REDESIGN.md) | 진행 중 리팩토링의 중심. 채택 시 새 PLAN 으로 정본화 |
 | candidate runtime profile | [`../harness/prompts/candidate.md`](../harness/prompts/candidate.md) | runner 가 prompt 에 inline. 변경 = candidate 행동 변경 |
 
 ### 시점기록 (그대로 유지)
@@ -69,9 +69,9 @@
 ## 4. 충돌 시 우선순위
 
 1. `STT-PIPELINE-SPEC.md` — 문제·평가·금지사항
-2. `PHASE3-HARNESS-MECHANICS.md` — 현재 코드 동작
+2. `HARNESS-MECHANICS.md` — 현재 코드 동작
 3. **코드 자체** — MECHANICS 와 코드가 다르면 코드가 정본(MECHANICS 를 갱신)
-4. `deep-research-report.md` — 리팩토링 목표 구조
+4. `HARNESS-REDESIGN.md` — 리팩토링 목표 구조
 5. `README.md`, `AGENTS.md`, `CLAUDE.md` — 요약·진입점
 
 > `archive/` 의 DESIGN·PHASE*-PLAN·STATUS 는 drift 가능 — 리팩토링 후 재작성 전까지 참고만.
@@ -92,7 +92,7 @@
 - **2026-05-29 prompt-diversification** (흡수/대체) — cold-restart/HISTORY 망각/metric reframe → discovery-first 로 흡수.
 - **2026-06-01 from-scratch-discovery-harness** (Draft) — portfolio/mode scheduler/micro-bank/cooldown 기반. Rev 2026-06-02: discovery floor + explore-heavy.
 - **2026-06-04 Phase 1 trio** (구현 완료, commit 2d1ee5c) — best monotone / discovery-floor count-cap / dead-end 기억. phase3_013 0.177→0.1539 돌파.
-- **2026-06-04 explore-block-speciation** (Increment 1 구현 · 전체 블록 보류) — explore DIVERGE directive. 전체 블록은 C1/C2 로 보류. phase3_014 결과(explore 단독 한계)로 **worktree 리팩토링**(deep-research-report)으로 방향 전환.
+- **2026-06-04 explore-block-speciation** (Increment 1 구현 · 전체 블록 보류) — explore DIVERGE directive. 전체 블록은 C1/C2 로 보류. phase3_014 결과(explore 단독 한계)로 **worktree 리팩토링**(HARNESS-REDESIGN)으로 방향 전환.
 
-지금 진행 중인 대규모 리팩토링 설계 = `deep-research-report.md` (§2 현행 정본).
+지금 진행 중인 대규모 리팩토링 설계 = `HARNESS-REDESIGN.md` (§2 현행 정본).
 proposal 은 *결정 이력* 이지 운영 정본이 아니다.
