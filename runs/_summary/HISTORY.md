@@ -42,3 +42,14 @@ set seed (first lineage candidate)
 
 ### 다음 후보
 직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
+
+## iter 5 · phase3_015_iter_005 · cer=NA (ΔNA) · reject
+
+### 관찰
+corpus_cer=0.176289, total_inference_time_s=214.3
+
+### 분석
+verify 중 scope 위반: docs/superpowers/plans/2026-06-05-phase1.5-metadata-off-git.md
+
+### 다음 후보
+직전 결과와 diagnosis를 보고 다음 단일 변경을 선택한다.
