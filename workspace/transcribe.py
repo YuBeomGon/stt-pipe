@@ -69,10 +69,14 @@ _BEAM_SIZE = 5
 # onto a carried-forward term and looping it.
 _REPETITION_PENALTY = 1.1
 
-# How many of the previous window's text tokens to prepend as context. Whisper's
-# decoder context is 448 tokens; the reference long-form policy caps the prompt
-# carry at roughly half that so the SOT triple + new audio decode keep room.
-_MAX_PROMPT_TOKENS = 200
+# How many of the previous window's text tokens to prepend as context. The
+# carried span is a *register prime*, not a transcript to re-emit; on phone-band
+# Korean a long prior (200 tok) is a large token bank the decoder drifts into
+# re-emitting as new output — the parent's insertion rise (0.08->0.12) that
+# cancelled its substitution drop (0.57->0.54). Capping at the most-recent ~64
+# tokens keeps the domain-vocabulary priming (the substitution attack) while
+# shrinking the re-emission surface that drives over-generation.
+_MAX_PROMPT_TOKENS = 64
 
 # Context-reset gate. If the previous window's text compresses harder than this
 # (degenerate / repetitive / hallucinated), it is NOT carried forward — priming
