@@ -242,6 +242,10 @@ class RunnerConfig:
     set_budget: int = 1
     max_repairs: int = cfg.SET_MAX_REPAIRS
     max_refines: int = cfg.SET_MAX_REFINES
+    # phase3: the SHARED main repo where `champion` lives (the gated promotion
+    # target). None → single-lane (main repo == repo_root, auto-derived via
+    # `git rev-parse --git-common-dir` for a worktree).
+    main_repo_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -1367,6 +1371,19 @@ def _decide_iteration(config: RunnerConfig, state: HarnessState):
     return sched, parents
 
 
+def _main_repo_root(config: RunnerConfig) -> Path:
+    """The SHARED repo where `champion` lives. In a worktree, derive it from
+    `git rev-parse --git-common-dir`; in single-lane it is just repo_root."""
+    if config.main_repo_root is not None:
+        return config.main_repo_root.resolve()
+    common = _run_git(config.repo_root, ["rev-parse", "--git-common-dir"],
+                      check=False).stdout.strip()
+    if common:
+        p = (config.repo_root / common).resolve()
+        return p.parent if p.name == ".git" else p
+    return config.repo_root.resolve()
+
+
 def _set_state_from(state: HarnessState):
     """Reconstruct the lineage SetState from the persisted HarnessState. An
     idle/closed phase means there is no live set → start a fresh one (next id)."""
@@ -2391,8 +2408,9 @@ def run_iteration(
     # AFTER state.save — commit_iteration stages state_path, which must exist on
     # disk first (mirrors the legacy path's save-then-commit ordering).
     if t.action == "promote":
-        # beat the global champion → keep/success status mutates the global best
-        # (record_best) and, after commit, advances the champion ref.
+        # provisionally a champion beat → record_best now; the serialized gate
+        # (post-save) re-validates against the LIVE champion and does the ref CAS.
+        # If the gate LOSES, the post-save block re-decides with beats_champion=False.
         decision_status = "success" if promo.status == "success" else "keep"
         commit_status = decision_status
         reason = promo.reason
@@ -2440,8 +2458,45 @@ def run_iteration(
         commit_iteration(config, state_path, commit_status, hyp_id,
                          state.iteration, reason=reason)
         if t.action == "promote":
-            head = _run_git(repo_root, ["rev-parse", "HEAD"]).stdout.strip()
-            gitops.advance_champion_ref(repo_root, state.champion_ref, head)
+            from harness import promotion as promo_mod
+            source_commit = _run_git(repo_root, ["rev-parse", "HEAD"]).stdout.strip()
+            main_repo = _main_repo_root(config)
+            pres = promo_mod.try_promote(
+                main_repo, job_id=config.job_id, source_commit=source_commit,
+                rel_path=config.allowed_path, candidate_report=verify_result.report,
+                baseline=baseline, sigma=noise.get("sigma"),
+                sigma_is_provisional=bool(noise.get("is_provisional")),
+                champion_ref=state.champion_ref, summary_dir=config.summary_dir,
+                absolute_delta_fallback=config.absolute_delta_fallback,
+            )
+            if pres.status == promo_mod.PROMOTE:
+                # champion advanced by the gate; record_best already done in the
+                # promote-decision block above.
+                pass
+            else:
+                # LOST race (C2 fix): do NOT mutate the closed Transition. Re-decide
+                # the set step with beats_champion=False — the candidate is verify-OK
+                # and may still improve the lineage, so step_set keeps it as the
+                # lineage head (advance/hold) and the set continues. The candidate
+                # stays committed on the job branch (it is the new lineage head).
+                outcome2 = Outcome(verify_ok=True, lineage_status=lin.status,
+                                   cer=cand_cer, beats_champion=False, hyp_id=hyp_id)
+                t2 = step_set(s, outcome2,
+                              SetBudget(config.max_repairs, config.max_refines))
+                _persist_set_state(state, t2.state)
+                if t2.action in ("repair", "reset"):
+                    # the no-longer-champion-beating candidate is not even a local
+                    # gain → roll back to lineage head (repair) / champion (reset).
+                    if t2.action == "reset":
+                        rollback_paths(repo_root, candidate_owned_statuses(
+                            git_status(repo_root), config))
+                        gitops.restore_file_from_ref(
+                            repo_root, state.champion_ref, config.allowed_path)
+                    else:
+                        gitops.restore_lineage_head(repo_root, config.allowed_path)
+                        rollback_paths(repo_root, [st for st in candidate_owned_statuses(
+                            git_status(repo_root), config) if st.untracked])
+                state.save(state_path)
     return result
 
 
@@ -2449,8 +2504,15 @@ def run_job(config: RunnerConfig) -> HarnessState:
     _check_bypass_in_production(config)
     state, state_path = load_or_init_state(config)
     if config.set_budget > 1 and config.commit_results:
-        from harness import gitops
-        gitops.ensure_champion_ref(config.repo_root.resolve(), state.champion_ref)
+        from harness import gitops, promotion as promo_mod
+        main_repo = _main_repo_root(config)
+        gitops.ensure_champion_ref(main_repo, state.champion_ref)
+        baseline = _read_json(config.repo_root / config.baseline_file)
+        promo_mod.seed_champion_cer(
+            main_repo, config.summary_dir,
+            baseline_cer=float(baseline.get("baseline_cer",
+                                            baseline.get("target_cer", 0.0)) or 0.0),
+            champion_commit=gitops.read_ref(main_repo, f"refs/heads/{state.champion_ref}"))
     format_reject_count = 0
     command_fail_streak = 0
     starting_iteration = state.iteration
@@ -2534,6 +2596,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit-results", action="store_true")
     parser.add_argument("--repo-root", type=Path, default=Path("."))
     parser.add_argument(
+        "--main-repo-root", type=Path, default=None,
+        help="shared repo where `champion` lives (gated promotion target). "
+             "Default None → auto-derive from the worktree via --git-common-dir.",
+    )
+    parser.add_argument(
         "--absolute-delta-fallback",
         type=float,
         default=cfg.BANKING_ABSOLUTE_DELTA,
@@ -2566,6 +2633,7 @@ def main(argv: list[str] | None = None) -> int:
             job_id=args.job_id,
             iterations=args.iters,
             repo_root=args.repo_root,
+            main_repo_root=args.main_repo_root,
             candidate_cmd=args.candidate_cmd,
             manual=args.manual,
             absolute_delta_fallback=args.absolute_delta_fallback,

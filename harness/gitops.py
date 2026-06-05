@@ -87,3 +87,58 @@ def cleanup_worktree(repo_root: Path, worktree_path: Path) -> None:
     _git(repo_root, ["worktree", "remove", "--force", worktree_path.as_posix()],
          check=False)
     _git(repo_root, ["worktree", "prune"], check=False)
+
+
+def read_ref(repo_root: Path, ref: str) -> str | None:
+    """Resolve ``ref`` to a commit sha, or None if it does not exist."""
+    r = _git(repo_root, ["rev-parse", "--verify", "--quiet", ref], check=False)
+    sha = r.stdout.strip()
+    return sha or None
+
+
+def promote_to_champion(
+    repo_root: Path, champion_ref: str, source_commit: str,
+    rel_path: Path, expected_old: str | None, message: str,
+) -> str | None:
+    """Splice ONLY ``rel_path`` from ``source_commit`` onto ``champion_ref`` as a
+    new linear commit, then CAS-advance the ref (HARNESS-REDESIGN §82).
+
+    Returns the new champion commit sha on success, or None if the compare-and-
+    swap lost (champion moved since ``expected_old`` was read → caller treats as
+    a lost race and keeps the candidate as its lineage head).
+
+    Implemented with a detached temp index off champion so no worktree is needed
+    (champion is never checked out): read champion's tree, overlay the file blob
+    from source_commit, write-tree, commit-tree with champion as parent, then
+    ``git update-ref <ref> <new> <expected_old>`` (atomic old-value guard).
+    """
+    import os
+    import tempfile
+
+    champ = read_ref(repo_root, f"refs/heads/{champion_ref}")
+    if champ is None:
+        return None
+    if expected_old is not None and champ != expected_old:
+        return None  # already moved before we even started
+    # blob of rel_path at source_commit
+    blob = _git(repo_root, ["rev-parse", f"{source_commit}:{rel_path.as_posix()}"]).stdout.strip()
+    # build a tree = champion's tree with rel_path replaced by blob, via a temp index
+    with tempfile.NamedTemporaryFile(prefix="champ_idx_", delete=False) as tf:
+        idx = tf.name
+    try:
+        env = {**os.environ, "GIT_INDEX_FILE": idx}
+        subprocess.run(["git", "read-tree", champ], cwd=repo_root, env=env,
+                       check=True, capture_output=True, text=True)
+        subprocess.run(["git", "update-index", "--add", "--cacheinfo",
+                        f"100644,{blob},{rel_path.as_posix()}"],
+                       cwd=repo_root, env=env, check=True, capture_output=True, text=True)
+        tree = subprocess.run(["git", "write-tree"], cwd=repo_root, env=env,
+                              check=True, capture_output=True, text=True).stdout.strip()
+    finally:
+        os.unlink(idx)
+    new = _git(repo_root, ["commit-tree", tree, "-p", champ, "-m", message]).stdout.strip()
+    # atomic CAS: fails (nonzero) if champion moved since `expected_old`.
+    cas_old = expected_old or champ
+    r = _git(repo_root, ["update-ref", f"refs/heads/{champion_ref}", new, cas_old],
+             check=False)
+    return new if r.returncode == 0 else None

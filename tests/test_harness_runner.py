@@ -1839,7 +1839,10 @@ def test_set_keeps_worse_than_champion_explore(tmp_path, monkeypatch):
 
 def test_set_promotes_when_beating_champion(tmp_path, monkeypatch):
     """set 후보가 챔피언을 이기면 promote: best_cer 갱신 + set 종료(idle) +
-    champion ref 가 새 HEAD 로 전진."""
+    champion ref 가 (gated CAS-splice 로) candidate 코드를 받아 전진하고
+    promotion_map.jsonl 에 row 가 남는다. champion 은 candidate 코드만 splice 한
+    별도 commit 이므로 HEAD 와 같지 않다 (phase3 gated-promotion 계약)."""
+    import json
     _init_repo(tmp_path)
     repo = tmp_path
     cfg_ = RunnerConfig(job_id="job", repo_root=repo, set_budget=4,
@@ -1869,11 +1872,21 @@ def test_set_promotes_when_beating_champion(tmp_path, monkeypatch):
 
     assert state.best_cer == 0.15          # global best advanced
     assert state.set_phase == "idle"       # set closed after promotion
+    # champion advanced via the gate's CAS-splice: it carries the candidate's
+    # transcribe.py but is its OWN linear commit (NOT == HEAD).
     champ = subprocess.run(["git", "rev-parse", "champion"], cwd=repo,
                            check=True, capture_output=True, text=True).stdout.strip()
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
                           check=True, capture_output=True, text=True).stdout.strip()
-    assert champ == head                   # champion ref advanced to promoted commit
+    assert champ != head                   # spliced commit, not HEAD
+    champ_code = subprocess.run(
+        ["git", "show", "champion:workspace/transcribe.py"], cwd=repo,
+        check=True, capture_output=True, text=True).stdout
+    assert champ_code == "def transcribe(a, sr):\n    return 'WINNER'\n"
+    # promotion_map.jsonl records the promotion for this job.
+    rows = [l for l in (repo / "runs/_summary/promotion_map.jsonl").read_text(
+        ).splitlines() if l.strip()]
+    assert any(json.loads(r)["job_id"] == "job" for r in rows)
 
 
 def test_snapshot_diff_flags_only_new_summary_and_dirs(tmp_path: Path) -> None:
@@ -2022,3 +2035,120 @@ def test_refine_parent_is_lineage_head_not_portfolio(tmp_path):
     assert sched.chosen_mode == "refine"
     assert len(parents) == 1 and parents[0]["hyp_id"] == "h2"
     assert parents[0]["harness_family_id"] == "lineage"
+
+
+@pytest.mark.worktree
+@pytest.mark.promotion
+def test_job_in_worktree_promotes_to_main_repo_champion(tmp_path):
+    """A job runs in a worktree; a champion-beating candidate advances the
+    champion on the MAIN repo (not the worktree) via the gate's CAS-splice,
+    records promotion_map.jsonl, and the job branch keeps its own commit (phase3)."""
+    import subprocess
+    from harness import gitops, runner
+    from harness.runner import RunnerConfig
+    from harness.state import HarnessState
+    from harness.verify import VerifyResult
+
+    def _git(root, *a):
+        return subprocess.run(["git", *a], cwd=root, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    _init_repo(tmp_path)                               # side effects only
+    gitops.ensure_champion_ref(tmp_path, "champion")   # champion @ init commit
+    wt = tmp_path / "wt-job1"
+    gitops.prepare_job_worktree(tmp_path, wt, "job/job1", "champion")
+    champ_before = gitops.read_ref(tmp_path, "refs/heads/champion")
+
+    cfg_ = RunnerConfig(job_id="job1", repo_root=wt, main_repo_root=tmp_path,
+                        set_budget=4, max_repairs=2, max_refines=3,
+                        commit_results=True)
+    state = HarnessState(job_id="job1", best_cer=0.20, best_hyp_id="champ")
+    state_path = wt / "runs/_summary/job1_state.json"
+
+    def cand_win(_prompt, out_dir):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "claude_stdout.txt").write_text(_VALID_META_STDOUT, encoding="utf-8")
+        (wt / "workspace/transcribe.py").write_text(
+            "def transcribe(a, sr):\n    return 'WINNER'\n", encoding="utf-8")
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    def verify_win(_hyp):
+        return VerifyResult(ok=True, hyp_id=_hyp, out_dir=wt / "runs" / _hyp,
+                            report={"corpus_cer": 0.15,
+                                    "total_inference_time_s": 90.0}, per_file=[])
+
+    runner.run_iteration(cfg_, state, state_path, candidate_func=cand_win,
+                         verify_func=verify_win)
+
+    # champion advanced on the MAIN repo (CAS-splice → its own commit, not job HEAD).
+    champ_after = gitops.read_ref(tmp_path, "refs/heads/champion")
+    assert champ_after is not None and champ_after != champ_before
+    assert _git(tmp_path, "show", "champion:workspace/transcribe.py") == (
+        "def transcribe(a, sr):\n    return 'WINNER'")
+    # job branch keeps its own committed lineage head (not the spliced champion).
+    job_head = _git(wt, "rev-parse", "HEAD")
+    assert job_head != champ_after
+    # promotion_map.jsonl on the main repo records the job.
+    rows = [l for l in (tmp_path / "runs/_summary/promotion_map.jsonl").read_text(
+        ).splitlines() if l.strip()]
+    assert any(json.loads(r)["job_id"] == "job1" for r in rows)
+
+
+@pytest.mark.worktree
+@pytest.mark.promotion
+def test_job_in_worktree_lost_race_keeps_lineage_head(tmp_path):
+    """Lost race: a candidate that beats the job's LOCAL best but not the live
+    champion (pre-seeded lower) stays the lineage head, champion is unmoved, and
+    the set is still alive (C2 fix: re-decide step_set with beats_champion=False)."""
+    import subprocess
+    from harness import gitops, runner
+    from harness.runner import RunnerConfig
+    from harness.state import HarnessState
+    from harness.verify import VerifyResult
+
+    def _git(root, *a):
+        return subprocess.run(["git", *a], cwd=root, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    _init_repo(tmp_path)
+    gitops.ensure_champion_ref(tmp_path, "champion")
+    wt = tmp_path / "wt-job1"
+    gitops.prepare_job_worktree(tmp_path, wt, "job/job1", "champion")
+    champ_before = gitops.read_ref(tmp_path, "refs/heads/champion")
+
+    # pre-seed a LOWER live champion CER on the main repo → our 0.15 candidate
+    # beats local best (0.20) but loses the live re-validation (0.10).
+    mp = tmp_path / "runs/_summary/promotion_map.jsonl"
+    mp.parent.mkdir(parents=True, exist_ok=True)
+    mp.write_text(json.dumps({"job_id": "peer", "cer": 0.10,
+                              "champion_commit": "deadbeef"}) + "\n", encoding="utf-8")
+
+    cfg_ = RunnerConfig(job_id="job1", repo_root=wt, main_repo_root=tmp_path,
+                        set_budget=4, max_repairs=2, max_refines=3,
+                        commit_results=True)
+    state = HarnessState(job_id="job1", best_cer=0.20, best_hyp_id="champ")
+    state_path = wt / "runs/_summary/job1_state.json"
+
+    def cand_win(_prompt, out_dir):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "claude_stdout.txt").write_text(_VALID_META_STDOUT, encoding="utf-8")
+        (wt / "workspace/transcribe.py").write_text(
+            "def transcribe(a, sr):\n    return 'LATE'\n", encoding="utf-8")
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    def verify_win(_hyp):
+        return VerifyResult(ok=True, hyp_id=_hyp, out_dir=wt / "runs" / _hyp,
+                            report={"corpus_cer": 0.15,
+                                    "total_inference_time_s": 90.0}, per_file=[])
+
+    runner.run_iteration(cfg_, state, state_path, candidate_func=cand_win,
+                         verify_func=verify_win)
+
+    # champion on the main repo is UNMOVED.
+    assert gitops.read_ref(tmp_path, "refs/heads/champion") == champ_before
+    # the candidate stays the lineage head (verify-OK → advance/hold, set alive).
+    assert "LATE" in (wt / "workspace/transcribe.py").read_text()
+    assert state.set_phase not in ("idle", "closed")   # set still alive
+    # no row added for this job (the gate lost before recording).
+    rows = [l for l in mp.read_text().splitlines() if l.strip()]
+    assert all(json.loads(r)["job_id"] != "job1" for r in rows)

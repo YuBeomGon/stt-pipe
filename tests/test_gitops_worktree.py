@@ -84,3 +84,44 @@ def test_cleanup_worktree_removes_it(repo: Path, tmp_path) -> None:
     assert not wt.exists()
     paths = gitops.list_worktrees(repo)
     assert all(Path(p).resolve() != wt.resolve() for p in paths)
+
+
+def _git_rc(root: Path, *args: str) -> int:
+    return subprocess.run(["git", *args], cwd=root,
+                          capture_output=True, text=True).returncode
+
+
+def test_promote_to_champion_splices_only_file_and_cas(repo: Path, tmp_path) -> None:
+    wt = tmp_path / "wt"
+    gitops.prepare_job_worktree(repo, wt, "job/j", "champion")
+    (wt / "workspace" / "transcribe.py").write_text("WINNER\n", encoding="utf-8")
+    (wt / "noise.txt").write_text("metadata junk\n", encoding="utf-8")
+    _git(wt, "add", "-A")
+    _git(wt, "commit", "-qm", "lineage + junk")
+    src = _git(wt, "rev-parse", "HEAD")
+    old = gitops.read_ref(repo, "refs/heads/champion")
+    new = gitops.promote_to_champion(repo, "champion", src,
+            Path("workspace/transcribe.py"), expected_old=old, message="promote j")
+    assert new is not None and new != old
+    assert gitops.read_ref(repo, "refs/heads/champion") == new
+    # champion got the file but NOT the junk → linear, metadata-free.
+    assert _git(repo, "show", "champion:workspace/transcribe.py") == "WINNER"
+    assert _git_rc(repo, "cat-file", "-e", "champion:noise.txt") != 0
+
+
+def test_promote_to_champion_cas_loses_when_champion_moved(repo: Path, tmp_path) -> None:
+    wt = tmp_path / "wt"
+    gitops.prepare_job_worktree(repo, wt, "job/j", "champion")
+    (wt / "workspace" / "transcribe.py").write_text("A\n", encoding="utf-8")
+    _git(wt, "add", "-A")
+    _git(wt, "commit", "-qm", "a")
+    src = _git(wt, "rev-parse", "HEAD")
+    stale_old = gitops.read_ref(repo, "refs/heads/champion")
+    # someone else promotes first (advances champion off stale_old).
+    won = gitops.promote_to_champion(repo, "champion", src,
+            Path("workspace/transcribe.py"), expected_old=stale_old, message="b1")
+    assert won is not None
+    # our promote with the now-stale expected_old must LOSE (return None).
+    lost = gitops.promote_to_champion(repo, "champion", src,
+            Path("workspace/transcribe.py"), expected_old=stale_old, message="b2")
+    assert lost is None
