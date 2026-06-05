@@ -60,11 +60,18 @@ _BEAM_SIZE = 5
 # Diverse sampling pool (whisper's best_of). Random sampling decorrelates errors
 # across draws, unlike the >=95%-correlated beam N-best (ledger iter_063), so a
 # correct phone-band domain token the beam pruned can surface in the pool and be
-# voted in. Temperature/top-k set the pool's entropy; the mechanism is the vote,
-# not the scalar.
+# voted in. Temperature/top-k set the pool's entropy. iter_086/087 ran T=0.4,
+# topk=10 and substitution stayed pinned at 0.56: at that low temperature each
+# sample sits too close to the greedy anchor's beam path, so the pool echoes the
+# anchor token rather than carrying the beam-pruned correct one — the
+# decorrelation premise barely holds and the vote has nothing better to swap in.
+# Raise temperature to 0.7 so draws genuinely escape the anchor path, and narrow
+# top-k to 6 so those escaped draws still concentrate on a small plausible set —
+# a 4/5 supermajority can only form if the freed samples converge, which a wide
+# top-k at high temperature would scatter into noise.
 _NUM_SAMPLES = 5
-_SAMPLE_TEMPERATURE = 0.4
-_SAMPLE_TOPK = 10
+_SAMPLE_TEMPERATURE = 0.7
+_SAMPLE_TOPK = 6
 
 # ROVER override gate: a pool token may replace the anchor token at a
 # 1:1-aligned position only if at least this many samples agree on it AND that
