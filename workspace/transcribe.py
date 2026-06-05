@@ -57,16 +57,17 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             [prompt_tokens] * len(batch_chunks),
             beam_size=1,
             sampling_temperature=0.0,
-            # The greedy decoder loops on a short phrase (repeated_text flag)
-            # then emits EOS early, deleting the window tail — the dominant
-            # coverage/deletion axis. The parent fought this with a blanket
-            # repetition_penalty=1.15, but penalizing *every* repeated token
-            # also suppresses legitimate Korean repeats, and its length_ratio
-            # fell 0.65->0.59 (more deletion, worse cer). no_repeat_ngram_size
-            # blocks only exact n-gram cycles (the actual loop), leaving real
-            # speech un-penalized, so it breaks the loop without trading away
-            # coverage.
-            no_repeat_ngram_size=3,
+            # Anti-loop block tuned for the dominant deletion/coverage axis.
+            # The parent's no_repeat_ngram_size=3 forbids re-emitting ANY exact
+            # 3-token sequence, but conversational Korean recurs short trigrams
+            # (back-channel/honorific patterns, e.g. "네 네 네"), so n=3 also
+            # blocks legitimate speech, knocks the greedy decoder off-track, and
+            # deepened deletion (length_ratio 0.65->0.62, cer 0.4128->0.4318 vs
+            # plain greedy). The genuine repetition-collapse loop phrases on the
+            # repeated_text files span >=4 subword tokens, so widening the block
+            # to n=4 still catches the real loop while sparing natural short
+            # repeats — relieving the coverage penalty on the clean files.
+            no_repeat_ngram_size=4,
         )
 
         for r in results:
