@@ -3,3 +3,7 @@
 # whose holdout subdirectories are chmod 000 (sealed during Phase 3) and
 # raise PermissionError on stat during recursive collection.
 testpaths = ["tests"]
+markers = [
+    "worktree: exercises git worktree creation/cleanup (no audio data)",
+    "promotion: exercises the serialized champion promotion lock + ref CAS (no audio data)",
+]
