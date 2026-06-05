@@ -932,7 +932,18 @@ git commit -m "feat(gitops): champion ref helpers for single-lane sets (phase1)"
 
 ---
 
-## Task 7: Metadata out of git (append-only, stop committing per-iter)
+## Task 7: Metadata out of git — **DEFERRED out of this increment (2026-06-05)**
+
+> **Status: DEFERRED.** Implementation was attempted and **blocked** by a design collision the plan + review both missed: fully gitignoring `runs/` silently disables the **candidate scope-violation guard and rollback**, which are built on git tracking of the `runs/_summary/` surface:
+> - **Detection** — `git_status` uses `git status --porcelain --untracked-files=all`, which does **not** report ignored paths. With `runs/` ignored, a candidate writing into `runs/_summary/<job>_state.json` (or baseline/docs) during `transcribe` is **no longer caught** by `disallowed_candidate_paths`/`disallowed_post_verify_paths` (`runner.py:295-328`, `1958-1968`, `2008-2018`) — a real safety regression, not a test artifact.
+> - **Rollback** — `rollback_paths` (`runner.py:345-353`) uses `git restore` (can't restore an untracked/ignored file) + `git clean -fd` **without `-x`** (won't remove ignored files). Poison in an ignored `runs/` can't be rolled back.
+> - **F2 abort-commit** — `run_job` commits aborted state via `commit_iteration("abort", …)` (`runner.py:2180-2191`); a status-gated commit-only-code rule makes that a no-op, breaking `test_run_job_commits_aborted_state_when_commit_results`.
+>
+> **Decision:** metadata-off-git is **independent of the C2 fix** (Tasks 1–6, 8 deliver the lineage set with the *existing* `commit_iteration` unchanged — it commits code+metadata together every iter, keeping the tree clean, which is correct just churnier). Doing it properly requires its own design for the scope-guard/rollback on an ignored tree (filesystem-snapshot guard, or `git status --ignored` + `git clean -fdx` for the runs surface, plus removing the now-obsolete F2 abort-commit). That is a separate sub-project — pulling it into the C2 increment violates "small, reversible" and over-reaches. **Tracked as a Phase-1.5 follow-up; the original spec below is retained for that work.**
+>
+> Task 8 does **not** depend on this task — it uses the existing `commit_iteration` (passing `lineage_advance`/`keep`/`reject` statuses; the original function commits whenever there is a staged diff, so lineage checkpoints and promotions commit correctly and the tree stays clean).
+
+*(Original spec, retained for the deferred follow-up:)*
 
 Today `commit_iteration` (`runner.py:1774`) git-adds `transcribe.py` + `HISTORY.md` + decisions/meta/state and commits **every iter** — the 720-commit churn and the race that wiped uncommitted docs. Phase 1 keeps these files as **append-only on disk** (they already use atomic writes — `state.save`, `Portfolio.save`, jsonl appends) and removes them from git tracking; git commits become **code checkpoints only**.
 
@@ -1074,6 +1085,10 @@ This is the integration task. It is gated so `--set-budget 1` (default) preserve
 - Test: `tests/test_harness_runner.py` (set-path integration tests with injected `verify_func`)
 
 This task has three coupled pieces, in order: **(8a)** config fields, **(8b)** set-phase → prompt-mode override in `_decide_iteration` (review I-1), **(8c)** the dual-decision set branch in `run_iteration` with `lineage_advance`/promote wiring (review C-2, I-2).
+
+> **Depends on the EXISTING `commit_iteration`** — Task 7 (status-gated commit-code-only) is **deferred** (see Task 7 banner). The current `commit_iteration` commits whenever there is a staged diff (it always stages `transcribe.py` + metadata), so: `lineage_advance`/`keep`/`success` calls commit the lineage code checkpoint (HEAD advances — `rev-parse HEAD` after the call yields a real commit for `advance_champion_ref`), and `reject` (repair/reset) calls commit metadata so the tree stays clean for the next `ensure_worktree_ready`. **Caveat (accepted churn):** on `reset` we `restore_file_from_ref(champion)` first, so the subsequent `reject` commit records a code revert-to-champion — noisy history but correct; cleaned up when Task 7 lands. The `--set-budget>1 requires --commit-results` guard (Step 5) is what makes the reset-restore safe (without a commit the restored file would leave the tree dirty).
+>
+> **Carry these Task-4 review contract notes into the wiring:** (1) prompt mode is driven by `state.set_phase` (persisted from `t.state.phase`), NOT by `t.action` — e.g. a refine `hold`/fail returns `action="repair"` but keeps `phase="refine"`, so the next prompt is correctly `refine`, not `repair`. Only an explore-fail sets `phase="repair"`. (2) Repair prompt injection uses `_last_failure_parent` which reads the last `verify_fail` from `decisions.jsonl` (not `state.last_failure_hyp_id`), so the state field being stale on a refine-rollback is harmless in Phase 1.
 
 - [ ] **Step 1: Add RunnerConfig fields (M-2: frozen → set via constructor)**
 
