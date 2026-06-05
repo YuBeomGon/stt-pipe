@@ -1,44 +1,43 @@
 """Workspace transcribe — autoresearch evolves this file.
 
-DIVERGE slot — lexicon-guided N-best rescoring. Every prior consensus/selection
-iteration that consumed the N-best return channel (the beam-vote iters 011/024-
-028 and the independent-sample MBR/medoid iters 051-056) selected among the
-hypotheses by **geometry**: medoid by edit-similarity, position-wise word vote,
-confidence-weighted Bayes risk — all measures of *central tendency of the
-cloud*. None of them ever consulted **external domain knowledge** about which
-spelling is correct. Geometry cannot help when a phone-band obstruent
-substitution is *confident*: the ledger established (iter_009/011/024) that
-beams are >=95% correlated on their errors, so a confidently-wrong domain term
-sits identically in every hypothesis and the medoid inherits it. Central
-tendency has no opinion about whether 보험 or 보훔 is a real word.
+DIVERGE slot. Every prior iteration ran a *single-shot* decode per window and
+read at most two return channels: ``sequences_ids`` (the text/timestamp tokens)
+and ``no_speech_prob`` (iter006). The decode result carries a third channel
+that no iteration has ever read — the per-sequence **score**, available when
+``generate(..., return_scores=True)`` is set. CT2 returns it length-normalised,
+so ``res.scores[0]`` is a usable proxy for the decoder's average log-prob over
+the window: a direct confidence signal for *how reliable this window's
+transcription is*, distinct from no_speech_prob (which asks "is this speech?"
+not "is this decode trustworthy?").
 
-The dominant axis is substitution (57%, length_ratio 0.96 healthy): the headroom
-is in *what* gets mis-recognised — insurance call-center domain terms degraded by
-the 300-3400 Hz telephony band-pass. This iteration introduces a fundamentally
-different selection criterion over the same single-pass beam N-best: rerank the
-beam_size hypotheses by
+That score channel is exactly what OpenAI's reference Whisper uses for its
+**temperature-fallback** long-form policy, which no iteration here has built.
+The mechanism this slot introduces replaces the single-shot decode with an
+adaptive per-window loop:
 
-    combined = avg_logprob(res.scores[i]) + LAMBDA * lexicon_hits(text_i)
+  - decode at temperature 0.0 with beam search (the high-precision attempt);
+  - score the result on two signals the score channel makes available — the
+    length-normalised avg log-prob (``res.scores[0]``) and the gzip
+    *compression ratio* of the emitted text (a degenerate, repeated, or
+    hallucinated window compresses far more than natural speech);
+  - if either signal flags the decode as untrustworthy (avg log-prob too low,
+    or compression ratio too high), re-decode the *same* window at a higher
+    sampling temperature and try again, walking a temperature schedule;
+  - keep the best-scoring attempt seen if none clears the gate.
 
-where lexicon_hits counts occurrences of a fixed Korean insurance/call-center
-lexicon in each hypothesis. The decoder's own beam ranking (raw log-prob) often
-ranks a phonetically-adjacent non-word at parity with the correct domain term
-because the high-frequency cues that separate them were filtered out; a single
-hit of *external lexical knowledge* breaks that tie toward the in-domain
-spelling. This is single-pass (one beam generate per window, num_hypotheses=
-beam_size, return_scores=True), so the encoder cost is the incumbent's and the
-runtime stays in budget — unlike the temperature-fallback / two-pass machinery.
-
-Distinct from iter_004's <|startofprev|> glossary *prompt* biasing: that pushes
-the prior into the decoder *before* search (and competes for the 224 prompt
-positions); this leaves the search untouched and applies the lexicon as a
-*post-hoc rescorer* over completed hypotheses, so it can never crowd out the
-audio decode and never propagate a wrong prompt token.
+This is a fundamentally different decode strategy than the incumbent's fixed
+beam+no_speech gate: instead of a single irreversible decode, each window gets
+multiple attempts and the score channel arbitrates. It attacks the residual
+hallucination (0.18) / repeated-text (0.27) directly via the compression gate,
+and the low-confidence windows — where phone-band substitution concentrates —
+get a second, higher-entropy shot to escape a confidently-wrong beam path.
 
 Contract (`STT-PIPELINE-SPEC.md §10`): ``transcribe(audio, sr) -> str``.
 """
 
 from __future__ import annotations
+
+import zlib
 
 import numpy as np
 
@@ -51,70 +50,33 @@ _WINDOW_SECONDS = 30.0
 _TIME_PRECISION = 0.02
 _MIN_ADVANCE_SECONDS = 2.0
 
+# Temperature-fallback schedule (OpenAI Whisper's robustness policy). The first
+# attempt is beam search at T=0 (precision); each fallback raises entropy so the
+# decoder can escape a degenerate or confidently-wrong path.
+_TEMPERATURE_SCHEDULE = (0.0, 0.2, 0.4, 0.6, 0.8)
+
+# Gate thresholds read off the score channel. avg log-prob below the floor =>
+# the decoder is unsure of this window; gzip compression ratio above the ceiling
+# => the text is repetitive/hallucinated (natural speech ~1.3-1.8, degenerate
+# loops >> 2.4). Either condition triggers a higher-temperature retry.
+_LOGPROB_THRESHOLD = -1.0
+_COMPRESSION_RATIO_THRESHOLD = 2.4
+
 _BEAM_SIZE = 5
-# Take the full beam N-best so the rescorer has hypotheses to choose among.
-_NUM_HYPOTHESES = 5
 
-# Acoustic-tie gate, in avg-logprob units. REFINE on iter_064: the soft additive
-# score (avg_logprob + LAMBDA*hits, LAMBDA=0.15) let a single distinct domain
-# term swing 0.15 — far larger than the >=95%-correlated beams' actual avg_logprob
-# spread (~0.01-0.05) — so the rerank effectively ALWAYS picked the max-domain-
-# term hypothesis, even one acoustically worse because it SUBSTITUTED a domain
-# term where a non-domain word belonged (a substitution INJECTED on the dominant
-# 57% axis, the structural source of the 0.1766 regression vs best 0.1629).
-# Replace the soft score with a hard gate: only hypotheses whose avg_logprob is
-# within EPSILON of the top beam compete on distinct lexicon hits. The lexicon
-# can then only arbitrate genuine acoustic ties — exactly the phone-band
-# confusions where 보험 and 보훔 are near-equiprobable — and can never override a
-# clearly-better acoustic path. REFINE on iter_065: at EPSILON=0.04 the gate
-# still admitted beams up to 0.04 avg-logprob WORSE than the top — but the
-# iter_065 finding pinned the inter-beam spread at ~0.01-0.05, so 0.04 spans
-# nearly the whole spread and let the lexicon promote an acoustically-inferior
-# beam that merely substituted a domain term, re-injecting error on the dominant
-# 57% substitution axis (cer 0.1733 > best 0.1629). Tighten to 0.02 — the bottom
-# half of the spread — so only GENUINELY near-equiprobable hypotheses compete on
-# lexicon hits, the exact phone-band ties (보험 vs 보훔) the rerank is for, while
-# any beam the decoder ranks meaningfully higher acoustically still wins outright.
-_LEXICON_EPSILON = 0.02
-
-# Fixed Korean insurance / call-center domain lexicon. These are exactly the
-# substitution-prone terms whose distinguishing high-frequency consonant cues
-# the telephony band-pass attenuates, so the decoder's raw log-prob ranks the
-# correct spelling at parity with a phonetic neighbour. Counting their presence
-# in each hypothesis is the external knowledge the geometric selectors lacked.
-# REFINE on iter_063: score by DISTINCT terms present, not total occurrences —
-# multiplicity rewarded a hypothesis that loops one domain term ("보험 보험
-# 보험"), the structural source of iter_063's insertion regression
-# (ins 0.08 best → 0.12). Presence keeps the rerank a pure in-domain tiebreaker.
-_LEXICON = (
-    "보험", "보험료", "보험금", "계약", "보장", "가입", "가입자", "피보험자",
-    "수익자", "청구", "약관", "해지", "환급", "갱신", "특약", "만기", "납입",
-    "자동이체", "고객님", "상담", "본인", "확인", "동의", "안내", "명의",
-    "통장", "카드", "연락처", "주민등록번호", "사고", "접수", "지급", "심사",
-)
-
-# REFINE on iter_068: the rerank stayed pinned at ~0.173 across iters 063-067
-# even after the EPSILON width (0.04→0.02) and the selection RULE (max-hits →
-# strict-superset) were fully tuned. The residual failure is *false promotion* —
-# within a genuine acoustic tie a challenger is promoted for a distinct lexicon
-# hit the top beam lacks, but not every hit is real evidence: 2-char terms
-# (사고, 본인, 카드, 동의, 명의, 통장, 청구, 약관, 해지, 만기, 상담 …) sit in
-# dense phonetic-neighbour clouds, so a beam containing one is WEAK evidence the
-# term was truly spoken; promoting on it re-injects exactly the domain-term
-# substitution the rerank was meant to remove (sub fixed at 0.55). Raise each
-# hit's PRECISION: only count distinctive >=3-char terms (보험료, 보험금, 가입자,
-# 피보험자, 수익자, 자동이체, 고객님, 연락처, 주민등록번호). A long term is
-# acoustically specific — a beam carrying 자동이체 or 피보험자 almost certainly
-# heard it — so a tie broken on it is far likelier to FIX a substitution than
-# inject one. The acoustic-tie EPSILON gate is unchanged; this narrows only
-# WHICH lexicon evidence is allowed to break a tie.
-_RERANK_LEXICON = tuple(term for term in _LEXICON if len(term) >= 3)
+# Gentle token-level repetition penalty (CT2 generate kwarg, never exercised on
+# this lineage). Whisper's standard ~1.1 setting nudges the beam off a
+# self-repeating degenerate path one token at a time without distorting natural
+# Korean morpheme repetition, attacking the confident-wrong-loop component of
+# the dominant substitution axis (and the two repeated_text focus files).
+_REPETITION_PENALTY = 1.1
 
 
-def _lexicon_hits(text: str) -> int:
+def _compression_ratio(text: str) -> float:
     if not text:
-        return 0
-    return sum(1 for term in _RERANK_LEXICON if term in text)
+        return 0.0
+    data = text.encode("utf-8")
+    return len(data) / len(zlib.compress(data))
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
@@ -143,37 +105,54 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         )
         features = to_storage_view(inputs.input_features)
 
-        res = generate(
-            features,
-            [sot_tokens],
-            beam_size=_BEAM_SIZE,
-            num_hypotheses=_NUM_HYPOTHESES,
-            sampling_temperature=0.0,
-            return_scores=True,
-        )[0]
+        # Temperature-fallback loop. Decode the window, score it off the score
+        # channel, and re-decode hotter until a trustworthy attempt is found or
+        # the schedule is exhausted (then keep the best-scoring attempt).
+        best = None  # (passes_comp, avg_logprob, res)
+        chosen = None
+        for temp in _TEMPERATURE_SCHEDULE:
+            if temp == 0.0:
+                res = generate(
+                    features,
+                    [sot_tokens],
+                    beam_size=_BEAM_SIZE,
+                    sampling_temperature=0.0,
+                    repetition_penalty=_REPETITION_PENALTY,
+                    return_scores=True,
+                )[0]
+            else:
+                res = generate(
+                    features,
+                    [sot_tokens],
+                    beam_size=1,
+                    sampling_temperature=temp,
+                    repetition_penalty=_REPETITION_PENALTY,
+                    return_scores=True,
+                )[0]
 
-        # Lexicon-guided selection over the N-best as an EPSILON-gated acoustic
-        # tiebreak. Only hypotheses whose avg_logprob is within _LEXICON_EPSILON
-        # of the top beam are eligible; among those, prefer the most distinct
-        # domain terms, breaking ties by avg_logprob. A hypothesis the decoder
-        # ranks clearly lower acoustically can never be promoted just for
-        # containing more domain terms, so the lexicon arbitrates only genuine
-        # phone-band ties and cannot inject a domain-term substitution.
-        scores = res.scores if res.scores else [0.0] * len(res.sequences_ids)
-        top_score = max(scores)
-        best_idx = 0
-        best_key = (-1, float("-inf"))
-        for i, token_ids in enumerate(res.sequences_ids):
-            if scores[i] < top_score - _LEXICON_EPSILON:
-                continue
+            avg_logprob = res.scores[0] if res.scores else float("-inf")
+
+            token_ids = res.sequences_ids[0]
             text_tokens = [t for t in token_ids if t < timestamp_begin]
-            text_i = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
-            key = (_lexicon_hits(text_i), scores[i])
-            if key > best_key:
-                best_key = key
-                best_idx = i
+            text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
+            comp_ratio = _compression_ratio(text)
+            passes_comp = comp_ratio <= _COMPRESSION_RATIO_THRESHOLD
 
-        token_ids = res.sequences_ids[best_idx]
+            # Fallback ranking is lexicographic: a compression-passing attempt
+            # always outranks a degenerate one, ties broken by avg_logprob. This
+            # stops the no-clear-gate fallback from emitting a repeated/degenerate
+            # window just because it happened to score the highest logprob.
+            if best is None or (passes_comp, avg_logprob) > (best[0], best[1]):
+                best = (passes_comp, avg_logprob, res)
+
+            if avg_logprob >= _LOGPROB_THRESHOLD and passes_comp:
+                chosen = res
+                break
+
+        if chosen is None:
+            chosen = best[2]
+
+        token_ids = chosen.sequences_ids[0]
         text_tokens = [t for t in token_ids if t < timestamp_begin]
         ts_tokens = [t for t in token_ids if t >= timestamp_begin]
 
