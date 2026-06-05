@@ -92,3 +92,134 @@ def test_run_iter_always_appends_and_keeps_if_better(tmp_path, monkeypatch):
     state = json.loads((job_dir.parent / "_summary" / "job_state.json").read_text())
     assert state["best_hyp_id"] == rec.id
     assert state["best_cer"] == 0.15
+
+
+def _seed_best(tmp_path: Path) -> Path:
+    """Create a job dir with one scored record + best.txt (no real corpus)."""
+    job_dir = tmp_path / "runs" / "job"
+    arch.append_record(job_dir, arch.ArchiveRecord(
+        id="0000", parents=[], cer=0.15, status="scored", hypothesis="h",
+        what_i_learned="l", fingerprint=["t"], score_report=None, ts="t"))
+    arch.write_best(job_dir, "0000")
+    return job_dir
+
+
+def test_maybe_holdout_records_sidecar_on_cadence(tmp_path, monkeypatch):
+    _seed_best(tmp_path)
+    cfg = es.SimpleConfig(job_id="job", repo_root=tmp_path, holdout_every=1)
+    # fake the holdout subprocess: return a fixed cer for the current best
+    # (NEVER touch the real sealed corpus from a test).
+    monkeypatch.setattr(es, "_invoke_holdout", lambda cfg_, best_id: 0.16)
+    archive = arch.load_archive(tmp_path / "runs" / "job")
+    es._maybe_holdout(cfg, iteration=0, archive=archive)
+    sidecar = (tmp_path / "runs" / "_summary" / "job_holdout.jsonl")
+    assert sidecar.is_file()
+    rows = [json.loads(l) for l in sidecar.read_text().splitlines() if l.strip()]
+    assert rows[-1]["hyp_id"] == "0000"
+    assert rows[-1]["holdout_cer"] == 0.16
+
+
+def test_maybe_holdout_dedups_per_best_id(tmp_path, monkeypatch):
+    _seed_best(tmp_path)
+    cfg = es.SimpleConfig(job_id="job", repo_root=tmp_path, holdout_every=1)
+    calls = []
+    monkeypatch.setattr(es, "_invoke_holdout",
+                        lambda cfg_, best_id: calls.append(best_id) or 0.16)
+    archive = arch.load_archive(tmp_path / "runs" / "job")
+    es._maybe_holdout(cfg, iteration=0, archive=archive)
+    es._maybe_holdout(cfg, iteration=1, archive=archive)  # same best -> skip
+    assert calls == ["0000"]  # invoked exactly once for this best id
+    rows = [json.loads(l) for l in
+            (tmp_path / "runs" / "_summary" / "job_holdout.jsonl")
+            .read_text().splitlines() if l.strip()]
+    assert len(rows) == 1
+
+
+def test_maybe_holdout_no_best_is_noop(tmp_path, monkeypatch):
+    cfg = es.SimpleConfig(job_id="job", repo_root=tmp_path, holdout_every=1)
+    called = []
+    monkeypatch.setattr(es, "_invoke_holdout",
+                        lambda cfg_, best_id: called.append(best_id))
+    es._maybe_holdout(cfg, iteration=0, archive=[])  # empty archive
+    assert called == []
+    assert not (tmp_path / "runs" / "_summary" / "job_holdout.jsonl").exists()
+
+
+def test_holdout_never_influences_best_selection(tmp_path, monkeypatch):
+    """The holdout cer (here much WORSE than in-loop) must not change best.txt
+    or which record best_record returns — selection is in-loop cer only."""
+    _seed_best(tmp_path)
+    cfg = es.SimpleConfig(job_id="job", repo_root=tmp_path, holdout_every=1)
+    monkeypatch.setattr(es, "_invoke_holdout", lambda cfg_, best_id: 0.99)
+    archive = arch.load_archive(tmp_path / "runs" / "job")
+    es._maybe_holdout(cfg, iteration=0, archive=archive)
+    assert arch.read_best(tmp_path / "runs" / "job") == "0000"
+    assert arch.best_record(arch.load_archive(tmp_path / "runs" / "job")).id == "0000"
+
+
+def test_run_job_default_evaluates_holdout_only_at_job_end(tmp_path, monkeypatch):
+    """holdout_every=0 (default): holdout is sealed during the search and
+    evaluated exactly once, at job end, on the final best."""
+    repo = _git_repo(tmp_path)
+    stub = repo / "stub.py"
+    stub.write_text(
+        "import pathlib\n"
+        "p = pathlib.Path('workspace/transcribe.py')\n"
+        "p.write_text('def transcribe(a, s):\\n    return \\'hi\\'\\n')\n"
+        "print('```yaml\\ncapability_investigated: a\\nwhat_i_learned: b\\n"
+        "hypothesis: c\\nfingerprint: [t]\\n```')\n"
+    )
+    cers = iter([0.20, 0.18])
+
+    class FakeVR:
+        def __init__(self, cer):
+            self.ok, self.report, self.error = True, {"corpus_cer": cer}, None
+    monkeypatch.setattr(es, "run_verify", lambda cfg: FakeVR(next(cers)))
+    monkeypatch.setenv("EVOLVE_NO_HARDEN_CLAUDE", "1")
+    calls = []
+    monkeypatch.setattr(es, "_invoke_holdout",
+                        lambda cfg_, best_id: calls.append((cfg_.job_id, best_id)) or 0.17)
+
+    cfg = es.SimpleConfig(job_id="job", repo_root=repo,
+                          candidate_cmd=f"{sys.executable} {stub}",
+                          iters=2, explore=0.0, parent_policy="best",
+                          holdout_every=0)
+    best_id = es.run_job(cfg)
+    # exactly one job-end holdout on the FINAL best
+    assert calls == [("job", best_id)]
+    rows = [json.loads(l) for l in
+            (repo / "runs" / "_summary" / "job_holdout.jsonl")
+            .read_text().splitlines() if l.strip()]
+    assert len(rows) == 1
+    assert rows[0]["hyp_id"] == best_id
+
+
+def test_run_job_leak_warning_only_when_holdout_every_positive(tmp_path, monkeypatch, capsys):
+    repo = _git_repo(tmp_path)
+    stub = repo / "stub.py"
+    stub.write_text(
+        "import pathlib\n"
+        "p = pathlib.Path('workspace/transcribe.py')\n"
+        "p.write_text('def transcribe(a, s):\\n    return \\'hi\\'\\n')\n"
+        "print('```yaml\\ncapability_investigated: a\\nwhat_i_learned: b\\n"
+        "hypothesis: c\\nfingerprint: [t]\\n```')\n"
+    )
+
+    class FakeVR:
+        def __init__(self):
+            self.ok, self.report, self.error = True, {"corpus_cer": 0.15}, None
+    monkeypatch.setattr(es, "run_verify", lambda cfg: FakeVR())
+    monkeypatch.setattr(es, "_invoke_holdout", lambda cfg_, best_id: 0.16)
+    monkeypatch.setenv("EVOLVE_NO_HARDEN_CLAUDE", "1")
+
+    base = dict(job_id="job", repo_root=repo,
+                candidate_cmd=f"{sys.executable} {stub}",
+                iters=1, explore=0.0, parent_policy="best")
+
+    es.run_job(es.SimpleConfig(holdout_every=0, **base))
+    assert "WARNING" not in capsys.readouterr().out
+
+    es.run_job(es.SimpleConfig(holdout_every=2, **base))
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "leak" in out.lower()

@@ -10,6 +10,7 @@ import json
 import random
 import shlex
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -269,23 +270,115 @@ def _targets_claude(candidate_cmd: str) -> bool:
 
 
 def run_job(cfg_: SimpleConfig) -> str | None:
-    """Run exactly cfg_.iters iterations. Returns the best id (or None)."""
+    """Run exactly cfg_.iters iterations. Returns the best id (or None).
+
+    Holdout policy (operator decision — do not weaken):
+      * Default (holdout_every == 0): the holdout stays SEALED during the
+        search and is evaluated exactly ONCE, at job end, on the final best.
+      * holdout_every == K > 0 (opt-in, measurement/ablation only): ADDITIONALLY
+        peek at the holdout every K iterations on the current best. This risks
+        leakage — an operator reacting to a mid-run holdout number is indirect
+        selection — so we emit a one-line WARNING at job start.
+    In all cases the holdout cer is REPORTING ONLY: it is written to the
+    <job>_holdout.jsonl sidecar and never advances best.txt or feeds parent
+    selection (selection uses in-loop cer exclusively)."""
     if _targets_claude(cfg_.candidate_cmd):
         cc.check_bypass_in_production(cfg_.iters, commit_results=False)
+    if cfg_.holdout_every and cfg_.holdout_every > 0:
+        print(
+            f"WARNING: --holdout-every {cfg_.holdout_every} peeks at the SEALED "
+            "holdout mid-run; reacting to those numbers leaks the holdout into "
+            "selection. Recorded for reporting only — do not steer on it."
+        )
     archive = arch.load_archive(cfg_.job_dir)
     start = len(archive)
     for i in range(cfg_.iters):
-        run_iter(cfg_, iteration=start + i, archive=archive)
-        if cfg_.holdout_every and arch.read_best(cfg_.job_dir):
-            # holdout cadence handled by run_job (Task 8 wires the actual call)
-            _maybe_holdout(cfg_, iteration=start + i, archive=archive)
+        iteration = start + i
+        run_iter(cfg_, iteration=iteration, archive=archive)
+        # Mid-run peeking is opt-in (K>0) and throttled to every Kth iteration;
+        # _maybe_holdout dedups per best id so unchanged-best iters are no-ops.
+        if cfg_.holdout_every and cfg_.holdout_every > 0 \
+                and (iteration + 1) % cfg_.holdout_every == 0:
+            _maybe_holdout(cfg_, iteration=iteration, archive=archive)
+    # Default behavior: always evaluate the holdout once at job end on the final
+    # best (dedup makes this a no-op if a K>0 peek already covered this best id).
+    _maybe_holdout(cfg_, iteration=start + cfg_.iters - 1, archive=archive)
     best = arch.best_record(archive)
     return best.id if best else None
 
 
+def _invoke_holdout(cfg_: SimpleConfig, best_id: str) -> float | None:
+    """Run the existing holdout script anchored on this job's state and return
+    the holdout corpus_cer.
+
+    REPORTING-ONLY. The return value is recorded to the sidecar/state for the
+    leaderboard and NEVER feeds keep-if-better or parent selection.
+
+    Anchoring contract (the only coupling): scripts/evaluate_holdout.py resolves
+    the 0715 eval run via runs/_summary/<job>_state.json::best_hyp_id — which
+    _write_state already keeps current — and requires a JOB_DONE.lock under
+    --summary-dir, which we create for the duration. Best-effort: a failed
+    holdout returns None and never crashes the loop. Tests MUST monkeypatch this
+    so the real sealed corpus is never touched.
+    """
+    lock = cfg_.summary_dir / "JOB_DONE.lock"
+    created = False
+    if not lock.is_file():
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text("simple-evolve holdout cadence\n", encoding="utf-8")
+        created = True
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "scripts.evaluate_holdout",
+             "--unseal", "--job-id", cfg_.job_id,
+             "--summary-dir", str(cfg_.summary_dir),
+             "--runs-dir", str(cfg_.repo_root / "runs")],
+            cwd=cfg_.repo_root, check=False,
+        )
+    except OSError:
+        return None
+    finally:
+        if created and lock.is_file():
+            lock.unlink()
+    # evaluate_holdout writes docs/reports/<job>_HOLDOUT_<date>.json with the
+    # holdout corpus_cer under key "holdout_cer"; read the newest one for this job.
+    reports = sorted(
+        (cfg_.repo_root / "docs" / "reports").glob(f"{cfg_.job_id}_HOLDOUT_*.json")
+    )
+    if not reports:
+        return None
+    return _read_json(reports[-1]).get("holdout_cer")
+
+
 def _maybe_holdout(cfg_: SimpleConfig, iteration: int, archive) -> None:
-    """Placeholder hook — Task 8 implements the holdout invocation cadence."""
-    return None
+    """Evaluate the holdout on the CURRENT best and record it to the
+    <job>_holdout.jsonl sidecar (read by scripts/archive_summary.py).
+
+    Each best id is evaluated at most once (dedup), so repeated calls while best
+    is unchanged are cheap no-ops. Holdout cer is recorded for REPORTING ONLY —
+    nothing here advances best.txt or feeds selection.
+    """
+    best = arch.best_record(archive)
+    if best is None:
+        return
+    sidecar = cfg_.summary_dir / f"{cfg_.job_id}_holdout.jsonl"
+    already: set[str | None] = set()
+    if sidecar.is_file():
+        for line in sidecar.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                try:
+                    already.add(json.loads(line).get("hyp_id"))
+                except json.JSONDecodeError:
+                    pass
+    if best.id in already:
+        return  # only evaluate each new best once
+    holdout_cer = _invoke_holdout(cfg_, best.id)
+    cfg_.summary_dir.mkdir(parents=True, exist_ok=True)
+    with sidecar.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "iter": iteration, "hyp_id": best.id,
+            "in_loop_cer": best.cer, "holdout_cer": holdout_cer,
+        }, ensure_ascii=False) + "\n")
 
 
 def _restore(repo_root: Path, allowed_path: Path) -> None:
