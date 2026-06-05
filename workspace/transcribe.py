@@ -87,9 +87,8 @@ def _frame_rms(audio: np.ndarray, sr: int) -> tuple[np.ndarray, np.ndarray, int]
     return rms, starts, hop
 
 
-def _silence_gaps(audio: np.ndarray, sr: int) -> list[int]:
+def _silence_gaps(rms: np.ndarray, starts: np.ndarray, hop: int) -> list[int]:
     """Sample indices at the centre of each cut-eligible silence run."""
-    rms, starts, hop = _frame_rms(audio, sr)
     if rms.shape[0] == 0:
         return []
 
@@ -121,7 +120,8 @@ def _segment_bounds(audio: np.ndarray, sr: int) -> list[tuple[int, int]]:
     n = audio.shape[0]
     max_samp = int(_MAX_SEGMENT_S * sr)
     min_samp = int(_MIN_SEGMENT_S * sr)
-    gaps = _silence_gaps(audio, sr)
+    rms, starts, hop = _frame_rms(audio, sr)
+    gaps = _silence_gaps(rms, starts, hop)
 
     bounds: list[tuple[int, int]] = []
     start = 0
@@ -143,7 +143,24 @@ def _segment_bounds(audio: np.ndarray, sr: int) -> list[tuple[int, int]]:
             cut = gaps[k]
             k += 1
         if cut < 0:
-            cut = hi  # no silence in range — forced cut mid-window
+            # No silence RUN clears the contiguity gate in [lo, hi] — common on
+            # the eval's long monologue calls (longest_speech_s 149-233 s),
+            # where every admissible window is wall-to-wall voiced. The parent
+            # then hard-cuts at exactly `hi`, an acoustically-blind boundary
+            # that bisects whatever word straddles start+max and decodes its
+            # two halves from adjacent context — re-injecting the dominant 57 %
+            # substitution. The RMS envelope is already computed; aim the
+            # forced cut at the QUIETEST frame in [lo, hi] (a local energy
+            # trough, even if too short to be a true gap) so the inevitable cut
+            # lands at the lowest-energy point available rather than at an
+            # arbitrary index.
+            if starts.shape[0]:
+                in_range = (starts >= lo) & (starts <= hi)
+                if in_range.any():
+                    masked = np.where(in_range, rms, np.inf)
+                    cut = int(starts[int(np.argmin(masked))])
+            if cut < 0:
+                cut = hi
         bounds.append((start, cut))
         start = cut
     return bounds
