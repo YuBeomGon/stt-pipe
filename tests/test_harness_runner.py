@@ -143,11 +143,62 @@ def test_candidate_owned_statuses_rolls_back_summary_but_not_run_artifacts() -> 
         GitPathStatus("??", Path("runs/job_iter_001/prompt.md")),
     ]
     owned = candidate_owned_statuses(statuses, config)
+    # phase1.5: candidate_owned now precisely owns the allowed_path plus ANY
+    # runs/ path (its own per-iter output surface). It no longer sweeps up
+    # arbitrary non-runs/ untracked paths (the collateral-damage hazard).
     assert [item.path for item in owned] == [
         Path("workspace/transcribe.py"),
         Path("runs/_summary/HISTORY.md"),
         Path("runs/_summary/poison.txt"),
+        Path("runs/job_iter_001/prompt.md"),
     ]
+
+
+def test_candidate_owned_excludes_unrelated_untracked(tmp_path: Path) -> None:
+    """phase1.5 collateral-damage fix: a stray untracked file the candidate
+    never touched must NOT be classified as candidate-owned (so rollback never
+    deletes it). Only allowed_path + runs/<hyp_id>/ are candidate-owned on the
+    tracked surface."""
+    from harness.runner import candidate_owned_statuses
+    config = RunnerConfig(job_id="job", repo_root=tmp_path)
+    statuses = [
+        GitPathStatus(" M", Path("workspace/transcribe.py")),  # allowed (tracked)
+        GitPathStatus("??", Path("runs/job_iter_001/out.json")),  # own verify out
+        GitPathStatus("??", Path("stray.txt")),                # UNRELATED stray
+    ]
+    owned = {str(s.path) for s in candidate_owned_statuses(statuses, config)}
+    assert "stray.txt" not in owned                  # ← collateral-damage guard
+    assert "workspace/transcribe.py" in owned
+    assert "runs/job_iter_001/out.json" in owned
+
+
+def test_rollback_paths_removes_only_listed_untracked(tmp_path: Path) -> None:
+    """rollback deletes exactly the passed untracked paths with os.remove/rmtree
+    — never git clean — so unrelated untracked files survive."""
+    from harness.runner import rollback_paths
+    _init_repo(tmp_path)
+    (tmp_path / "junkdir").mkdir()
+    (tmp_path / "junkdir/a").write_text("a\n", encoding="utf-8")
+    (tmp_path / "junkfile.txt").write_text("p\n", encoding="utf-8")
+    (tmp_path / "keepme.txt").write_text("keep\n", encoding="utf-8")  # NOT passed
+
+    rollback_paths(tmp_path, [
+        GitPathStatus("??", Path("junkfile.txt")),
+        GitPathStatus("??", Path("junkdir")),
+    ])
+    assert not (tmp_path / "junkfile.txt").exists()
+    assert not (tmp_path / "junkdir").exists()
+    assert (tmp_path / "keepme.txt").exists()         # ← survived (not in list)
+
+
+def test_rollback_paths_restores_tracked_with_git(tmp_path: Path) -> None:
+    from harness.runner import rollback_paths
+    _init_repo(tmp_path)
+    (tmp_path / "workspace/transcribe.py").write_text("dirty\n", encoding="utf-8")
+    rollback_paths(tmp_path, [GitPathStatus(" M", Path("workspace/transcribe.py"))])
+    assert (tmp_path / "workspace/transcribe.py").read_text(encoding="utf-8") == (
+        "def transcribe(audio, sr):\n    return ''\n"
+    )
 
 
 def test_build_candidate_prompt_mentions_claude_constraints(tmp_path: Path) -> None:

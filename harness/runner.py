@@ -11,6 +11,7 @@ import math
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -354,26 +355,71 @@ def ensure_worktree_ready(config: RunnerConfig) -> None:
 
 
 def rollback_paths(repo_root: Path, statuses: list[GitPathStatus]) -> None:
+    """Revert exactly the given tracked-surface paths. Tracked-modified →
+    git restore (back to HEAD). Untracked (`??`) → precise filesystem delete
+    (os.remove / rmtree) of ONLY the listed paths — never `git clean`, which
+    (a) won't remove ignored files and (b) caused the real-world collateral
+    deletion of an unrelated untracked file (phase1.5). Callers pass
+    candidate_owned_statuses(...) or the precise scope-violation list, so nothing
+    outside the candidate's writes is ever passed here. (Ignored-surface poison is
+    handled by remove_ignored_poison, not this function.)"""
     if not statuses:
         return
-    tracked = [str(status.path) for status in statuses if not status.untracked]
-    untracked = [str(status.path) for status in statuses if status.untracked]
+    tracked = [str(s.path) for s in statuses if not s.untracked]
+    removable = [s for s in statuses if s.untracked]
     if tracked:
         _run_git(repo_root, ["restore", "--", *tracked])
-    if untracked:
-        _run_git(repo_root, ["clean", "-fd", "--", *untracked])
+    for s in removable:
+        target = repo_root / s.path
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target, ignore_errors=True)
+        elif target.exists() or target.is_symlink():
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def candidate_owned_statuses(
     statuses: list[GitPathStatus], config: RunnerConfig
 ) -> list[GitPathStatus]:
-    return [
-        status
-        for status in statuses
-        if status.path == config.allowed_path
-        or status.path.parts[:2] == ("runs", "_summary")
-        or status.path.parts[:1] != ("runs",)
-    ]
+    """Paths on the *tracked* surface the candidate is responsible for and that
+    rollback may revert. PRECISE (phase1.5): exactly the candidate's own surface —
+      - config.allowed_path (workspace/transcribe.py),
+      - anything under runs/<hyp_id>/ (its own verify output, if it ever surfaces
+        as a tracked/untracked status — it does not once runs/ is ignored, but the
+        clause is harmless and keeps the pre-gitignore-flip iterations correct).
+    Crucially this NO LONGER returns arbitrary non-runs/ untracked paths: a stray
+    untracked file the candidate never created must never be deleted by rollback
+    (the real-world git-clean collateral-damage hazard). A candidate write to a
+    NEW tracked path outside this set (e.g. docs/foo) is a scope VIOLATION —
+    detected by disallowed_*_paths and rejected — and removed precisely by feeding
+    the disallowed/post_violations list to rollback_paths (Task 3); it is never
+    'owned' here, so an unrelated file is never swept up. Poison under the now-
+    ignored runs/_summary/ surface is detected/removed separately by the snapshot
+    diff (Task 2)."""
+    owned: list[GitPathStatus] = []
+    for status in statuses:
+        parts = status.path.parts
+        if status.path == config.allowed_path:
+            owned.append(status)
+        elif parts[:1] == ("runs",):
+            # runs/<hyp_id>/... (or runs/_summary/... pre-flip) — the candidate's
+            # own per-iter output dir.
+            owned.append(status)
+        elif not status.untracked:
+            # A *tracked-modified* path outside the candidate's surface (e.g. a
+            # baseline/ file the candidate's transcribe poisoned during verify).
+            # `git restore` reverts it to HEAD — harmless and required so a
+            # poisoned tracked baseline is undone before the keep/success read.
+            # This is NOT the collateral-damage hazard: that hazard was deleting
+            # an UNTRACKED stray via `git clean`. Untracked non-runs/ paths are
+            # therefore deliberately EXCLUDED (never owned → never removed); a
+            # candidate write to a new untracked path is a scope violation handled
+            # by the precise rollback of the disallowed/post_violations list (Task
+            # 3), never swept up here.
+            owned.append(status)
+    return owned
 
 
 def _read_json(path: Path) -> dict:
