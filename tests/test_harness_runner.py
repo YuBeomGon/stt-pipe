@@ -1671,3 +1671,42 @@ def test_set_keeps_worse_than_champion_explore(tmp_path, monkeypatch):
     assert state.set_best_cer == 0.30
     assert state.best_cer == 0.20
     assert "EXPLORE" in (repo / "workspace/transcribe.py").read_text(encoding="utf-8")
+
+
+def test_set_promotes_when_beating_champion(tmp_path, monkeypatch):
+    """set 후보가 챔피언을 이기면 promote: best_cer 갱신 + set 종료(idle) +
+    champion ref 가 새 HEAD 로 전진."""
+    _init_repo(tmp_path)
+    repo = tmp_path
+    cfg_ = RunnerConfig(job_id="job", repo_root=repo, set_budget=4,
+                        commit_results=True, manual=False, candidate_cmd=None)
+    state = HarnessState(job_id="job", best_cer=0.20, best_hyp_id="champ")
+    state_path = repo / "runs/_summary/job_state.json"
+
+    def candidate(_prompt: str, out_dir: Path):
+        (repo / "workspace/transcribe.py").write_text(
+            "def transcribe(a, sr):\n    return 'WINNER'\n", encoding="utf-8")
+        _write_valid_meta(out_dir)
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    def verifier(hyp_id: str) -> VerifyResult:
+        return VerifyResult(
+            ok=True,
+            hyp_id=hyp_id,
+            out_dir=repo / "runs" / hyp_id,
+            report={"corpus_cer": 0.15, "total_inference_time_s": 90.0},
+            per_file=[],
+        )
+
+    from harness import gitops
+    gitops.ensure_champion_ref(repo, "champion")
+    run_iteration(cfg_, state, state_path,
+                  candidate_func=candidate, verify_func=verifier)
+
+    assert state.best_cer == 0.15          # global best advanced
+    assert state.set_phase == "idle"       # set closed after promotion
+    champ = subprocess.run(["git", "rev-parse", "champion"], cwd=repo,
+                           check=True, capture_output=True, text=True).stdout.strip()
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                          check=True, capture_output=True, text=True).stdout.strip()
+    assert champ == head                   # champion ref advanced to promoted commit
