@@ -54,13 +54,17 @@ _MIN_ADVANCE_SECONDS = 2.0
 
 # MBR-over-samples parameters. N independent draws give the consensus its
 # diversity (the signal density the correlated beam N-best lacked, ledger
-# iter_024). The temperature must be high enough that uncertain substitutions
-# scatter across draws, low enough that confident speech stays stable;
-# Whisper's own fallback ladder treats ~0.4 as the first genuinely-sampling
-# rung. sampling_topk=0 samples from the full softmax (CT2 enables sampling as
-# soon as sampling_topk != 1).
+# iter_024). REFINE: the parent ran at 0.4 and regressed to 0.1725 — too hot,
+# so every draw scatters even on *confident* speech and injects fresh
+# substitutions the medoid cannot undo, raising the cloud's whole-sequence
+# floor on the 57% substitution axis. Dropping to 0.2 (Whisper's first
+# genuinely-sampling rung) keeps the cloud near the decoder's mode — each draw
+# approaches the clean greedy decode — while still scattering on the flat-
+# posterior phone-band obstruent confusions the medoid is meant to arbitrate.
+# sampling_topk=0 samples from the full softmax (CT2 enables sampling as soon
+# as sampling_topk != 1).
 _NUM_SAMPLES = 5
-_SAMPLING_TEMPERATURE = 0.4
+_SAMPLING_TEMPERATURE = 0.2
 _SAMPLING_TOPK = 0
 
 # Gentle token-level repetition penalty (kept from the best lineage, iter_016):
