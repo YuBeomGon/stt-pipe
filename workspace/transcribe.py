@@ -43,9 +43,16 @@ _MIN_SILENCE_S = 0.35
 # Whisper's decoder context is 448 tokens; cap carried-over priming well under
 # half so it can never starve generation of the new chunk.
 _MAX_CONTEXT_TOKENS = 180
-# Beam width — the REFINE tune. >1 lets alternative hypotheses survive so the
-# length-normalized score can override a greedy substitution.
+# Beam width — >1 lets alternative hypotheses survive so the length-normalized
+# score can override a greedy substitution.
 _BEAM_SIZE = 5
+# Length penalty exponent for beam finalization. CT2 normalizes a beam's score
+# by length**_LENGTH_PENALTY; the default (1.0) is exact per-token averaging,
+# which on this audio let beam=5 prefer a clipped hypothesis (del 0.35→0.37 in
+# iter_007). A value >1 over-normalizes so longer, more-complete hypotheses are
+# no longer out-scored by short ones — recovering the coverage beam shed while
+# keeping the substitution reduction beam buys.
+_LENGTH_PENALTY = 1.3
 
 
 def _silence_aligned_bounds(audio: np.ndarray, sr: int) -> list[tuple[int, int]]:
@@ -133,6 +140,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             features,
             [prompt],
             beam_size=_BEAM_SIZE,
+            length_penalty=_LENGTH_PENALTY,
             sampling_temperature=0.0,
         )
         ids = res[0].sequences_ids[0]
