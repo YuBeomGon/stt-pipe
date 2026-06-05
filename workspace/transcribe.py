@@ -93,11 +93,28 @@ _LEXICON = (
     "통장", "카드", "연락처", "주민등록번호", "사고", "접수", "지급", "심사",
 )
 
+# REFINE on iter_068: the rerank stayed pinned at ~0.173 across iters 063-067
+# even after the EPSILON width (0.04→0.02) and the selection RULE (max-hits →
+# strict-superset) were fully tuned. The residual failure is *false promotion* —
+# within a genuine acoustic tie a challenger is promoted for a distinct lexicon
+# hit the top beam lacks, but not every hit is real evidence: 2-char terms
+# (사고, 본인, 카드, 동의, 명의, 통장, 청구, 약관, 해지, 만기, 상담 …) sit in
+# dense phonetic-neighbour clouds, so a beam containing one is WEAK evidence the
+# term was truly spoken; promoting on it re-injects exactly the domain-term
+# substitution the rerank was meant to remove (sub fixed at 0.55). Raise each
+# hit's PRECISION: only count distinctive >=3-char terms (보험료, 보험금, 가입자,
+# 피보험자, 수익자, 자동이체, 고객님, 연락처, 주민등록번호). A long term is
+# acoustically specific — a beam carrying 자동이체 or 피보험자 almost certainly
+# heard it — so a tie broken on it is far likelier to FIX a substitution than
+# inject one. The acoustic-tie EPSILON gate is unchanged; this narrows only
+# WHICH lexicon evidence is allowed to break a tie.
+_RERANK_LEXICON = tuple(term for term in _LEXICON if len(term) >= 3)
+
 
 def _lexicon_hits(text: str) -> int:
     if not text:
         return 0
-    return sum(1 for term in _LEXICON if term in text)
+    return sum(1 for term in _RERANK_LEXICON if term in text)
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
