@@ -101,7 +101,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
         # Temperature-fallback loop. Decode the window, score it off the score
         # channel, and re-decode hotter until a trustworthy attempt is found or
         # the schedule is exhausted (then keep the best-scoring attempt).
-        best = None  # (avg_logprob, res)
+        best = None  # (passes_comp, avg_logprob, res)
         chosen = None
         for temp in _TEMPERATURE_SCHEDULE:
             if temp == 0.0:
@@ -127,16 +127,21 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             text_tokens = [t for t in token_ids if t < timestamp_begin]
             text = tokenizer.decode(text_tokens, skip_special_tokens=True).strip()
             comp_ratio = _compression_ratio(text)
+            passes_comp = comp_ratio <= _COMPRESSION_RATIO_THRESHOLD
 
-            if best is None or avg_logprob > best[0]:
-                best = (avg_logprob, res)
+            # Fallback ranking is lexicographic: a compression-passing attempt
+            # always outranks a degenerate one, ties broken by avg_logprob. This
+            # stops the no-clear-gate fallback from emitting a repeated/degenerate
+            # window just because it happened to score the highest logprob.
+            if best is None or (passes_comp, avg_logprob) > (best[0], best[1]):
+                best = (passes_comp, avg_logprob, res)
 
-            if avg_logprob >= _LOGPROB_THRESHOLD and comp_ratio <= _COMPRESSION_RATIO_THRESHOLD:
+            if avg_logprob >= _LOGPROB_THRESHOLD and passes_comp:
                 chosen = res
                 break
 
         if chosen is None:
-            chosen = best[1]
+            chosen = best[2]
 
         token_ids = chosen.sequences_ids[0]
         text_tokens = [t for t in token_ids if t < timestamp_begin]
