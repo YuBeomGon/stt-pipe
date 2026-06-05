@@ -66,6 +66,10 @@ _LEXICON_LAMBDA = 0.15
 # the telephony band-pass attenuates, so the decoder's raw log-prob ranks the
 # correct spelling at parity with a phonetic neighbour. Counting their presence
 # in each hypothesis is the external knowledge the geometric selectors lacked.
+# REFINE on iter_063: score by DISTINCT terms present, not total occurrences —
+# multiplicity rewarded a hypothesis that loops one domain term ("보험 보험
+# 보험"), the structural source of iter_063's insertion regression
+# (ins 0.08 best → 0.12). Presence keeps the rerank a pure in-domain tiebreaker.
 _LEXICON = (
     "보험", "보험료", "보험금", "계약", "보장", "가입", "가입자", "피보험자",
     "수익자", "청구", "약관", "해지", "환급", "갱신", "특약", "만기", "납입",
@@ -77,7 +81,7 @@ _LEXICON = (
 def _lexicon_hits(text: str) -> int:
     if not text:
         return 0
-    return sum(text.count(term) for term in _LEXICON)
+    return sum(1 for term in _LEXICON if term in text)
 
 
 def transcribe(audio: np.ndarray, sr: int) -> str:
