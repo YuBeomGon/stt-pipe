@@ -246,6 +246,13 @@ class RunnerConfig:
     # target). None → single-lane (main repo == repo_root, auto-derived via
     # `git rev-parse --git-common-dir` for a worktree).
     main_repo_root: Path | None = None
+    # phase3 F4: the measured CER of the bootstrap champion, used ONLY to seed
+    # the promotion_map so the serialized gate has a baseline. None (default) →
+    # do NOT seed: live_champion_cer returns None and the first scored candidate
+    # wins the gate (aligns with the in-process gate's best_cer-None path). A
+    # stub-start MUST leave this None; a real champion start passes the measured
+    # value (or relies on a promotion_map that a prior run already populated).
+    champion_cer: float | None = None
 
 
 @dataclass(frozen=True)
@@ -2507,12 +2514,21 @@ def run_job(config: RunnerConfig) -> HarnessState:
         from harness import gitops, promotion as promo_mod
         main_repo = _main_repo_root(config)
         gitops.ensure_champion_ref(main_repo, state.champion_ref)
-        baseline = _read_json(config.repo_root / config.baseline_file)
-        promo_mod.seed_champion_cer(
-            main_repo, config.summary_dir,
-            baseline_cer=float(baseline.get("baseline_cer",
-                                            baseline.get("target_cer", 0.0)) or 0.0),
-            champion_commit=gitops.read_ref(main_repo, f"refs/heads/{state.champion_ref}"))
+        # F4: seed the gate's baseline ONLY when the champion's real CER is known
+        # (operator passed --champion-cer). Do NOT derive it from baseline_cer —
+        # that assumes champion==baseline pipeline, false for a stub champion
+        # (~0.41 ≠ baseline 0.1714) and funnels every improving iter into a false
+        # LOST race. seed_champion_cer is idempotent, so if a prior run already
+        # populated promotion_map.jsonl this is a no-op there too. When left
+        # unseeded, live_champion_cer returns None → the first scored candidate
+        # wins the gate (consistent with the in-process best_cer-None path), so a
+        # stub-start champion advances from the first real candidate.
+        if config.champion_cer is not None:
+            promo_mod.seed_champion_cer(
+                main_repo, config.summary_dir,
+                baseline_cer=float(config.champion_cer),
+                champion_commit=gitops.read_ref(
+                    main_repo, f"refs/heads/{state.champion_ref}"))
     format_reject_count = 0
     command_fail_streak = 0
     starting_iteration = state.iteration
@@ -2619,6 +2635,12 @@ def main(argv: list[str] | None = None) -> int:
         "--max-refines", type=int, default=cfg.SET_MAX_REFINES,
         help="set 당 허용 local-refine 횟수 (SSOT harness/config.py)",
     )
+    parser.add_argument(
+        "--champion-cer", type=float, default=None,
+        help="measured CER of the bootstrap champion, to seed the gate. Omit on "
+             "a stub-start (the first scored candidate then wins the gate and "
+             "the champion advances). Never re-measures baseline/*.json.",
+    )
     args = parser.parse_args(argv)
 
     if not args.manual and not args.candidate_cmd:
@@ -2641,6 +2663,7 @@ def main(argv: list[str] | None = None) -> int:
             set_budget=args.set_budget,
             max_repairs=args.max_repairs,
             max_refines=args.max_refines,
+            champion_cer=args.champion_cer,
         )
     )
     print(

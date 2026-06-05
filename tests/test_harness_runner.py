@@ -2152,3 +2152,59 @@ def test_job_in_worktree_lost_race_keeps_lineage_head(tmp_path):
     # no row added for this job (the gate lost before recording).
     rows = [l for l in mp.read_text().splitlines() if l.strip()]
     assert all(json.loads(r)["job_id"] != "job1" for r in rows)
+
+
+@pytest.mark.worktree
+@pytest.mark.promotion
+def test_stub_start_no_champion_cer_first_candidate_promotes(tmp_path):
+    """F4: on a stub-start with NO --champion-cer the promotion_map is left
+    empty (live_champion_cer → None), so the first scored candidate WINS the gate
+    and the champion advances — no false LOST funnel."""
+    import subprocess
+    from harness import gitops, runner
+    from harness.runner import RunnerConfig
+    from harness.verify import VerifyResult
+
+    def _git(root, *a):
+        return subprocess.run(["git", *a], cwd=root, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    _init_repo(tmp_path)
+    gitops.ensure_champion_ref(tmp_path, "champion")
+    champ_before = gitops.read_ref(tmp_path, "refs/heads/champion")
+
+    cfg_ = RunnerConfig(job_id="job", repo_root=tmp_path, main_repo_root=tmp_path,
+                        set_budget=4, commit_results=True, candidate_cmd=None)
+
+    def candidate(_prompt, out_dir):
+        (tmp_path / "workspace/transcribe.py").write_text(
+            "def transcribe(a, sr):\n    return 'STUBWIN'\n", encoding="utf-8")
+        _write_valid_meta(out_dir)
+        return subprocess.CompletedProcess(["fake"], 0, "", "")
+
+    def verifier(hyp_id):
+        return VerifyResult(ok=True, hyp_id=hyp_id, out_dir=tmp_path / "runs" / hyp_id,
+                            report={"corpus_cer": 0.41, "total_inference_time_s": 90.0},
+                            per_file=[])
+
+    state, state_path = runner.load_or_init_state(cfg_)
+    # mirror run_job's bootstrap (seeding) then run one iteration:
+    gitops.ensure_champion_ref(runner._main_repo_root(cfg_), state.champion_ref)
+    from harness import promotion as promo_mod
+    # opt-in: champion_cer None + empty map → NO seed row written.
+    assert cfg_.champion_cer is None
+    if cfg_.champion_cer is not None:
+        promo_mod.seed_champion_cer(runner._main_repo_root(cfg_), cfg_.summary_dir,
+                                    baseline_cer=cfg_.champion_cer)
+    mp = tmp_path / "runs/_summary/promotion_map.jsonl"
+    assert not mp.is_file() or mp.read_text().strip() == ""   # empty → first wins
+
+    runner.run_iteration(cfg_, state, state_path,
+                         candidate_func=candidate, verify_func=verifier)
+
+    champ_after = gitops.read_ref(tmp_path, "refs/heads/champion")
+    assert champ_after is not None and champ_after != champ_before   # champion advanced
+    assert _git(tmp_path, "show", "champion:workspace/transcribe.py") == (
+        "def transcribe(a, sr):\n    return 'STUBWIN'")
+    rows = [l for l in mp.read_text().splitlines() if l.strip()]
+    assert any(json.loads(r)["job_id"] == "job" for r in rows)
