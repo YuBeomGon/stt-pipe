@@ -44,6 +44,12 @@ _MIN_ADVANCE_SECONDS = 2.0
 
 _BEAM_SIZE = 5
 
+# Per-token repetition penalty (iter_016, best 0.1629). The parent's CJK-mask
+# decode left this at the CT2 default 1.0; ~1.1 steers the beam off a
+# self-repeating / locally-tempting wrong token during decode itself —
+# orthogonal to the suppress_tokens script mask.
+_REPETITION_PENALTY = 1.1
+
 # Codepoint ranges that can only be a substitution error in a Korean transcript:
 # Hiragana/Katakana, CJK unified ideographs (+ ext-A and compatibility forms).
 # Hangul (U+AC00-D7A3, U+1100-11FF, U+3130-318F) is deliberately NOT here.
@@ -113,6 +119,7 @@ def transcribe(audio: np.ndarray, sr: int) -> str:
             [sot_tokens],
             beam_size=_BEAM_SIZE,
             sampling_temperature=0.0,
+            repetition_penalty=_REPETITION_PENALTY,
             suppress_tokens=_SUPPRESS_TOKENS,
         )[0]
 
