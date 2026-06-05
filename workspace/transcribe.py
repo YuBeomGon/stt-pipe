@@ -41,7 +41,7 @@ from frozen.asr_backend import generate, load, to_storage_view
 _LANGUAGE_TOKEN = "<|ko|>"
 _TASK_TOKEN = "<|transcribe|>"
 
-_BEAM_SIZE = 5
+_BEAM_SIZE = 8
 
 # Hard ceiling on a decode segment: the Whisper encoder context is 30 s, so a
 # segment may never exceed it. Keep a small margin below 30 s.
