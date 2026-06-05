@@ -252,7 +252,7 @@ class Portfolio:
         *,
         hyp_id: str,
         iteration: int,
-        decision_status: str,  # keep | success | micro_bank | reject
+        decision_status: str,  # keep | success | micro_bank | reject | lineage_advance (pool-inert)
         report: dict[str, Any],
         best_report: dict[str, Any] | None,
         harness_signature: str,
@@ -326,7 +326,10 @@ class Portfolio:
         # near_best — best 를 못 깬 후보라도 global best × factor 근방이면 보존.
         # keep/micro_bank/reject 무관(축 개선 없이 단순히 가까운 후보도 combine/
         # refine 재료). best 갱신 시 prune 되므로 풀은 늘 현 best 기준 근방만 남는다.
-        if cer is not None and self._retain_near_best(entry):
+        # NOTE(phase1): lineage_advance(=in-set code checkpoint)는 어떤 풀에도
+        # 넣지 않는다 — set 내부 lineage head 는 state 가 추적하고, portfolio 는
+        # 승격된 champion 계열만 담아야 refine/combine parent 가 안 오염된다(C-2).
+        if decision_status != "lineage_advance" and cer is not None and self._retain_near_best(entry):
             updated.append("near_best")
 
         return updated

@@ -299,3 +299,30 @@ def test_parents_plateau_empty_when_under_two_families() -> None:
     p = Portfolio(job_id="j")
     _populate(p, "j_iter_001", 1, "family_001", 0.18)
     assert pf.parents_for_mode(p, "plateau") == []
+
+
+def test_lineage_advance_does_not_touch_any_pool() -> None:
+    from harness.portfolio import Portfolio
+
+    p = Portfolio(job_id="j")
+    # establish a real champion first.
+    p.update(
+        hyp_id="champ", iteration=1, decision_status="keep",
+        report={"corpus_cer": 0.154}, best_report=None,
+        harness_signature="s0", harness_family_id="F0",
+    )
+    assert p.global_best == "champ"
+    # an in-set advance, WORSE than champion but within near-best window
+    # (0.17 < 0.154 * 1.20 = 0.1848), must not move global_best nor
+    # enter family_best/metric_best/near_best.
+    before_family = dict(p.family_best)
+    before_near = list(p.near_best)
+    updated = p.update(
+        hyp_id="explore1", iteration=2, decision_status="lineage_advance",
+        report={"corpus_cer": 0.170}, best_report={"corpus_cer": 0.154},
+        harness_signature="s1", harness_family_id="F1",
+    )
+    assert p.global_best == "champ"          # unchanged
+    assert p.family_best == before_family    # F1 not added
+    assert p.near_best == before_near        # 0.170 not banked
+    assert updated == []                     # no slot updated
