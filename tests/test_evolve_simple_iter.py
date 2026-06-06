@@ -97,6 +97,103 @@ def test_run_iter_always_appends_and_keeps_if_better(tmp_path, monkeypatch):
     assert state["best_cer"] == 0.15
 
 
+_YAML = (
+    "```yaml\ncapability_investigated: a\nwhat_i_learned: b\n"
+    "hypothesis: c\nfingerprint: [t]\n```"
+)
+
+
+class _FakeResult:
+    def __init__(self, stdout: str, stderr: str = "", returncode: int = 0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+
+
+def _make_candidate(repo: Path, outcomes: list):
+    """Return a fake run_candidate_command. Each call pops one outcome:
+    a rate-limit string (returns a rate-limited result) or "CLEAN" (edits the
+    workspace + returns a valid YAML result so run_iter can proceed)."""
+    seq = iter(outcomes)
+
+    def _fake(*, candidate_cmd, prompt, out_dir, repo_root, workspace_file):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        outcome = next(seq)
+        if outcome == "CLEAN":
+            (repo / "workspace" / "transcribe.py").write_text(
+                "def transcribe(a, s):\n    return 'hi'\n"
+            )
+            res = _FakeResult(_YAML)
+        else:
+            res = _FakeResult(outcome)
+        # mirror real behaviour: persist the captured streams so _candidate_text
+        # can source them from disk
+        (out_dir / "claude_stdout.txt").write_text(res.stdout, encoding="utf-8")
+        (out_dir / "claude_stderr.txt").write_text(res.stderr, encoding="utf-8")
+        return res
+
+    return _fake
+
+
+def test_run_iter_backoff_retries_then_proceeds(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    job_dir = repo / "runs" / "job"
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(es, "_sleep", lambda secs: sleeps.append(secs))
+    monkeypatch.setattr(
+        es.cc, "run_candidate_command",
+        _make_candidate(repo, [
+            "You've hit your session limit · resets 11pm",
+            "usage limit reached",
+            "CLEAN",
+        ]),
+    )
+
+    class FakeVR:
+        def __init__(self, cer):
+            self.ok, self.report, self.error = True, {"corpus_cer": cer}, None
+    monkeypatch.setattr(es, "run_verify", lambda cfg: FakeVR(0.15))
+    monkeypatch.setenv("EVOLVE_NO_HARDEN_CLAUDE", "1")
+
+    cfg = es.SimpleConfig(
+        job_id="job", repo_root=repo, candidate_cmd="claude -p",
+        explore=0.0, parent_policy="best", iters=1,
+    )
+    rec = es.run_iter(cfg, iteration=0, archive=[])
+    assert rec.status == "scored"
+    # slept exactly twice on the first two ladder rungs (no real sleep)
+    assert sleeps == [5 * 60, 10 * 60]
+    # produced exactly one real record
+    assert len(arch.load_archive(job_dir)) == 1
+
+
+def test_run_iter_backoff_exhausted_raises_abort(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    job_dir = repo / "runs" / "job"
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(es, "_sleep", lambda secs: sleeps.append(secs))
+    # rate-limited on every attempt (initial + all 6 ladder rungs)
+    monkeypatch.setattr(
+        es.cc, "run_candidate_command",
+        _make_candidate(repo, ["usage limit"] * (1 + len(es.cc.RATE_LIMIT_BACKOFF_MIN))),
+    )
+    monkeypatch.setenv("EVOLVE_NO_HARDEN_CLAUDE", "1")
+
+    cfg = es.SimpleConfig(
+        job_id="job", repo_root=repo, candidate_cmd="claude -p",
+        explore=0.0, parent_policy="best", iters=1,
+    )
+    import pytest
+    with pytest.raises(es.RateLimitAbort):
+        es.run_iter(cfg, iteration=0, archive=[])
+    # slept the full ladder, all patched (no real sleep)
+    assert sleeps == [m * 60 for m in es.cc.RATE_LIMIT_BACKOFF_MIN]
+    # NO bogus archive row appended for the aborted iter
+    assert arch.load_archive(job_dir) == []
+
+
 def test_err_tail_combines_error_and_stderr():
     out = es._err_tail("boom", "x" * 50 + "CUDA out of memory", limit=20)
     assert "boom" in out

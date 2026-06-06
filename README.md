@@ -221,6 +221,9 @@ python scripts/evolve_simple.py --job-id simple_001 --iters 20 \
   --explore 0.5 --parent-policy llm
 ```
 
+토큰/세션 한도 시 5·10·20·40·80·80분(누적 ~235분) backoff 재시도; 소진되면
+`aborted_rate_limit`로 중단하고 같은 `--job-id`로 재개 가능.
+
 리더보드:
 
 ```bash

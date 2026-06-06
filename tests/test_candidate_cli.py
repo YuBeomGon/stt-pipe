@@ -57,6 +57,28 @@ def test_parse_metadata_rejects_missing_block(tmp_path):
     assert (tmp_path / "candidate_meta.err").is_file()
 
 
+def test_is_rate_limited_true_for_session_usage_resets_markers():
+    assert cc.is_rate_limited("You've hit your session limit · resets 11pm")
+    assert cc.is_rate_limited("usage limit reached")
+    assert cc.is_rate_limited("limit exceeded — resets at 3am")
+    # case-insensitive
+    assert cc.is_rate_limited("USAGE LIMIT")
+
+
+def test_is_rate_limited_false_for_normal_and_plain_limit():
+    assert not cc.is_rate_limited("all good, candidate produced a diff")
+    assert not cc.is_rate_limited("")
+    # contains "limit" but none of the session/usage/resets/hit-your markers
+    assert not cc.is_rate_limited("ValueError: list index out of range (limit)")
+    assert not cc.is_rate_limited("rate limited")  # no marker word
+    assert not cc.is_rate_limited("memory limit of buffer reached")
+
+
+def test_rate_limit_backoff_ladder_is_canonical():
+    assert cc.RATE_LIMIT_BACKOFF_MIN == (5, 10, 20, 40, 80, 80)
+    assert sum(cc.RATE_LIMIT_BACKOFF_MIN) == 235  # cumulative ~235 min
+
+
 def test_run_candidate_command_captures_diff(tmp_path, monkeypatch):
     # Build a tiny git repo with a workspace file a stub command will edit.
     import subprocess

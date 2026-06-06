@@ -1433,6 +1433,14 @@ One iteration end-to-end: deterministic mode → select_context → materialize 
 
 The N-iteration driver + the thin CLI exposing the ≤6 knobs.
 
+> **Note (rate-limit backoff, added post-implementation):** `run_iter` wraps the
+> candidate call in a backoff retry (`cc.RATE_LIMIT_BACKOFF_MIN` = 5·10·20·40·80·80
+> min, cumulative ~235 min; ported verbatim from `runner.py`). On a persistent
+> session/token limit it raises `RateLimitAbort`, which `run_job` catches to stop
+> cleanly and write `status="aborted_rate_limit"` into the state file (no bogus
+> archive row for the aborted iter); rerunning the same `--job-id` resumes. Sleep
+> is via the module-level `es._sleep` indirection so tests never actually sleep.
+
 **Files**
 - Modify: `harness/evolve_simple.py` (add `run_job`)
 - Create: `scripts/evolve_simple.py`

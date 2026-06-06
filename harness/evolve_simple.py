@@ -10,6 +10,7 @@ import json
 import random
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +26,19 @@ from harness.verify import VerifyConfig, run_verify
 # surface assets). Static assets are package-owned, not per-job; only the
 # workspace, runs/, and baseline live under the per-job repo_root.
 _PKG_ROOT = Path(__file__).resolve().parents[1]
+
+# Indirection so tests can monkeypatch (`es._sleep`) and never actually sleep
+# during the rate-limit backoff ladder.
+_sleep = time.sleep
+
+
+class RateLimitAbort(Exception):
+    """Raised by run_iter when the session/token rate-limit backoff ladder
+    (cc.RATE_LIMIT_BACKOFF_MIN) is exhausted and the candidate output is STILL
+    rate-limited. This is a wait/abort condition, not a candidate failure — no
+    archive row is appended for the aborted iter. run_job catches it, records
+    job status ``aborted_rate_limit`` and stops cleanly; re-running with the
+    same --job-id resumes (archive/state persist)."""
 
 
 @dataclass
@@ -136,10 +150,12 @@ def _read_asset(repo_root: Path, rel: Path) -> str:
     return (_PKG_ROOT / rel).read_text(encoding="utf-8")
 
 
-def _write_state(cfg_: SimpleConfig, archive: list[arch.ArchiveRecord]) -> None:
+def _write_state(cfg_: SimpleConfig, archive: list[arch.ArchiveRecord],
+                 status: str = "completed") -> None:
     best = arch.best_record(archive)
     state = {
         "job_id": cfg_.job_id,
+        "status": status,
         "iterations": len(archive),
         # NOTE: the verify report for candidate <cid> lives at
         # runs/<job_id>/<cid>/score_report.json (run_verify is called with
@@ -160,6 +176,53 @@ def _write_log(cfg_: SimpleConfig, line: dict) -> None:
     cfg_.summary_dir.mkdir(parents=True, exist_ok=True)
     with (cfg_.summary_dir / f"{cfg_.job_id}_log.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+
+def _candidate_text(out_dir: Path, result) -> str:
+    """Combined candidate stdout+stderr used for rate-limit detection. Prefers
+    the saved claude_stdout.txt/claude_stderr.txt (matching how the old runner
+    sourced the text) and falls back to the CompletedProcess attrs."""
+    parts: list[str] = []
+    for fname, attr in (("claude_stdout.txt", "stdout"),
+                        ("claude_stderr.txt", "stderr")):
+        p = out_dir / fname
+        if p.is_file():
+            parts.append(p.read_text(encoding="utf-8"))
+        else:
+            val = getattr(result, attr, None)
+            if val:
+                parts.append(val)
+    return "\n".join(parts)
+
+
+def _run_candidate_with_backoff(cfg_: SimpleConfig, prompt: str, out_dir: Path,
+                                iteration: int):
+    """Run the candidate once; if the output looks rate-limited, retry on the
+    cc.RATE_LIMIT_BACKOFF_MIN ladder (5·10·20·40·80·80 min). Returns the
+    CompletedProcess from the first non-rate-limited attempt. Raises
+    RateLimitAbort if the ladder is exhausted and STILL rate-limited."""
+    def _invoke():
+        return cc.run_candidate_command(
+            candidate_cmd=cfg_.candidate_cmd, prompt=prompt, out_dir=out_dir,
+            repo_root=cfg_.repo_root, workspace_file=cfg_.allowed_path,
+        )
+
+    result = _invoke()
+    for wait_min in cc.RATE_LIMIT_BACKOFF_MIN:
+        if not cc.is_rate_limited(_candidate_text(out_dir, result)):
+            return result
+        print(
+            f"[rate-limit] 세션/토큰 한도 감지 — {wait_min}분 후 재시도 "
+            f"(iter {iteration})",
+            flush=True,
+        )
+        _sleep(wait_min * 60)
+        result = _invoke()
+    if cc.is_rate_limited(_candidate_text(out_dir, result)):
+        raise RateLimitAbort(
+            f"rate limit persisted through backoff ladder at iter {iteration}"
+        )
+    return result
 
 
 def run_iter(
@@ -198,10 +261,11 @@ def run_iter(
     # delta scope check below ignores pre-existing untracked files.
     before_scope = _out_of_scope(repo, cfg_.allowed_path)
 
-    result = cc.run_candidate_command(
-        candidate_cmd=cfg_.candidate_cmd, prompt=prompt, out_dir=out_dir,
-        repo_root=repo, workspace_file=cfg_.allowed_path,
-    )
+    # Session/token rate limit is transient: retry the SAME iter on a backoff
+    # ladder (5·10·20·40·80·80 min) instead of burning it as an instant reject.
+    # If the ladder is exhausted and still limited, this raises RateLimitAbort,
+    # which run_job catches to stop cleanly (no bogus archive row for this iter).
+    result = _run_candidate_with_backoff(cfg_, prompt, out_dir, iteration)
 
     ts = datetime.now(UTC).isoformat()
     meta, reason = cc.parse_candidate_metadata(result.stdout, out_dir=out_dir)
@@ -320,9 +384,27 @@ def run_job(cfg_: SimpleConfig) -> str | None:
         cc.check_bypass_in_production(cfg_.iters, commit_results=False)
     archive = arch.load_archive(cfg_.job_dir)
     start = len(archive)
+    iteration = start
     for i in range(cfg_.iters):
         iteration = start + i
-        run_iter(cfg_, iteration=iteration, archive=archive)
+        try:
+            run_iter(cfg_, iteration=iteration, archive=archive)
+        except RateLimitAbort:
+            # Backoff ladder exhausted and still rate-limited. No archive row
+            # was appended for this iter — stop cleanly, persist state with
+            # status=aborted_rate_limit, and let the operator resume later with
+            # the same --job-id (load_archive picks up prior rows; next_id
+            # continues, evaluated budget is preserved).
+            best = arch.best_record(archive)
+            _write_state(cfg_, archive, status="aborted_rate_limit")
+            best_id = best.id if best else "—"
+            best_cer = (f"{best.cer:.4f}"
+                        if best and best.cer is not None else "n/a")
+            print(
+                f"job {cfg_.job_id} | ABORTED (rate limit) — best so far="
+                f"{best_id} cer={best_cer}; resume with the same --job-id later"
+            )
+            return best.id if best else None
     job_end_iter = start + cfg_.iters - 1
     best = arch.best_record(archive)
     _emit_job_summary(cfg_, iteration=job_end_iter, best=best)

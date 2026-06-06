@@ -24,6 +24,11 @@ _CLAUDE_HARDENING_ARGS: tuple[str, ...] = (
 )
 _HARDEN_BYPASS_ENV = "EVOLVE_NO_HARDEN_CLAUDE"
 
+# Claude 세션/토큰 한도 backoff 사다리(분). 한도 신호가 계속 보이면 같은 iter 를
+# 이 간격으로 재시도한다 — 누적 5+10+20+40+80+80 = 235분. 소진 후에도 한도면 abort.
+# (verbatim lift of runner.py::_RATE_LIMIT_BACKOFF_MIN.)
+RATE_LIMIT_BACKOFF_MIN: tuple[int, ...] = (5, 10, 20, 40, 80, 80)
+
 _REQUIRED_META_KEYS = (
     "capability_investigated",
     "what_i_learned",
@@ -80,6 +85,17 @@ def harden_candidate_cmd(candidate_cmd: str) -> tuple[str, list[str]]:
             parts.append(arg)
             added.append(arg)
     return shlex.join(parts), added
+
+
+def is_rate_limited(text: str) -> bool:
+    """`claude -p` 출력이 세션/토큰 한도(예: "You've hit your session limit ·
+    resets 11:30pm")를 가리키는지. 일반 command 실패와 구분해 backoff 한다.
+
+    (verbatim lift of runner.py::_is_rate_limited.)"""
+    s = (text or "").lower()
+    if "limit" not in s:
+        return False
+    return any(k in s for k in ("session", "usage", "resets", "hit your"))
 
 
 def _run_git(repo_root: Path, args: list[str], check: bool = True):
