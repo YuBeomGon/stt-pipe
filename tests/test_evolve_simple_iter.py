@@ -97,6 +97,58 @@ def test_run_iter_always_appends_and_keeps_if_better(tmp_path, monkeypatch):
     assert state["best_cer"] == 0.15
 
 
+def test_err_tail_combines_error_and_stderr():
+    out = es._err_tail("boom", "x" * 50 + "CUDA out of memory", limit=20)
+    assert "boom" in out
+    assert "CUDA out of memory" in out
+    # bounded to ~limit chars of stderr tail
+    assert "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" not in out
+
+
+def test_run_iter_verify_fail_captures_error(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    job_dir = repo / "runs" / "job"
+    stub = repo / "stub.py"
+    stub.write_text(
+        "import pathlib\n"
+        "p = pathlib.Path('workspace/transcribe.py')\n"
+        "p.write_text('def transcribe(a, s):\\n    return \\'hi\\'\\n')\n"
+        "print('```yaml\\ncapability_investigated: a\\nwhat_i_learned: b\\n"
+        "hypothesis: c\\nfingerprint: [t]\\n```')\n"
+    )
+
+    class FakeVR:
+        def __init__(self):
+            self.ok = False
+            self.report = None
+            self.error = "boom"
+            self.stderr = "traceback...\nRuntimeError: CUDA out of memory\n"
+    monkeypatch.setattr(es, "run_verify", lambda cfg: FakeVR())
+    monkeypatch.setenv("EVOLVE_NO_HARDEN_CLAUDE", "1")
+
+    cfg = es.SimpleConfig(
+        job_id="job", repo_root=repo,
+        candidate_cmd=f"{sys.executable} {stub}",
+        explore=0.0, parent_policy="best", iters=1,
+    )
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rec = es.run_iter(cfg, iteration=0, archive=[])
+    assert rec.status == "rejected"
+    # the appended record carries the verify failure error
+    loaded = arch.load_archive(job_dir)
+    assert loaded[-1].error is not None
+    assert "CUDA out of memory" in loaded[-1].error
+    # error written to disk for inspection
+    verr = job_dir / rec.id / "verify_error.txt"
+    assert verr.is_file()
+    assert "CUDA out of memory" in verr.read_text(encoding="utf-8")
+    # emitted log line shows the reason, not a bare "rejected"
+    assert "CUDA out of memory" in buf.getvalue()
+
+
 def _seed_best(tmp_path: Path, best_body: str = "def transcribe(a, s):\n    return 'best'\n") -> Path:
     """Create a job dir with one scored record + best.txt + the best snapshot
     (runs/job/0000/transcribe.py) so _maybe_holdout can materialize it. The

@@ -56,6 +56,22 @@ class SimpleConfig:
         return self.repo_root / "runs" / "_summary"
 
 
+def _err_tail(error: str | None, stderr: str, limit: int = 1200) -> str:
+    """Compact failure reason = the error message + the last `limit` chars of
+    stderr (stripped, whitespace collapsed). This is the signal fed back to the
+    next candidate so it can see WHY the last attempt failed."""
+    parts: list[str] = []
+    err = (error or "").strip()
+    if err:
+        parts.append(err)
+    tail = (stderr or "").strip()
+    if tail:
+        if len(tail) > limit:
+            tail = tail[-limit:]
+        parts.append(tail)
+    return " ".join(" ".join(parts).split())
+
+
 def _seed_for(job_id: str, iteration: int) -> int:
     h = hashlib.sha256(f"{job_id}:{iteration}".encode()).hexdigest()
     return int(h[:16], 16)
@@ -192,7 +208,8 @@ def run_iter(
     ts = datetime.now(UTC).isoformat()
     meta, reason = cc.parse_candidate_metadata(result.stdout, out_dir=out_dir)
 
-    def _finalize(status: str, cer, score_report, m: dict | None):
+    def _finalize(status: str, cer, score_report, m: dict | None,
+                  error: str | None = None):
         rec = arch.ArchiveRecord(
             id=cid, parents=[parent.id] if parent else [], cer=cer, status=status,
             hypothesis=(m or {}).get("hypothesis", ""),
@@ -201,13 +218,20 @@ def run_iter(
             score_report=score_report, ts=ts, mode=mode,
             lane=(m or {}).get("lane"),
             capability_investigated=(m or {}).get("capability_investigated", ""),
+            error=error,
         )
         arch.append_record(cfg_.job_dir, rec)
         return rec
 
+    def _write_verify_error(text: str) -> None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "verify_error.txt").write_text(text or "", encoding="utf-8")
+
     # command failed
     if result.returncode != 0:
-        rec = _finalize("command_failed", None, None, meta)
+        cmd_err = _err_tail(None, result.stderr or result.stdout)
+        rec = _finalize("command_failed", None, None, meta, error=cmd_err)
+        _write_verify_error(cmd_err)
         _restore(repo, cfg_.allowed_path)
         _emit_log(cfg_, iteration, mode, parent, rec, kept=False, holdout=None)
         archive.append(rec)
@@ -216,7 +240,7 @@ def run_iter(
 
     # format reject
     if meta is None:
-        rec = _finalize("format_reject", None, None, None)
+        rec = _finalize("format_reject", None, None, None, error=reason)
         _restore(repo, cfg_.allowed_path)
         _emit_log(cfg_, iteration, mode, parent, rec, kept=False, holdout=None)
         archive.append(rec)
@@ -224,8 +248,11 @@ def run_iter(
         return rec
 
     # scope reject — candidate introduced a NEW out-of-scope change
-    if not _scope_ok(before_scope, _out_of_scope(repo, cfg_.allowed_path)):
-        rec = _finalize("scope_reject", None, None, meta)
+    after_scope = _out_of_scope(repo, cfg_.allowed_path)
+    if not _scope_ok(before_scope, after_scope):
+        new_paths = sorted(after_scope - before_scope)
+        scope_err = "out-of-scope writes: " + ", ".join(new_paths)
+        rec = _finalize("scope_reject", None, None, meta, error=scope_err)
         _restore(repo, cfg_.allowed_path)
         _emit_log(cfg_, iteration, mode, parent, rec, kept=False, holdout=None)
         archive.append(rec)
@@ -241,7 +268,9 @@ def run_iter(
         runs_dir=Path("runs"), runtime_hard_multiplier=cfg_.runtime_hard_multiplier,
     ))
     if not vr.ok:
-        rec = _finalize("rejected", None, None, meta)
+        verify_err = _err_tail(getattr(vr, "error", None), getattr(vr, "stderr", ""))
+        rec = _finalize("rejected", None, None, meta, error=verify_err)
+        _write_verify_error(verify_err)
         _restore(repo, cfg_.allowed_path)
         _emit_log(cfg_, iteration, mode, parent, rec, kept=False, holdout=None)
         archive.append(rec)
@@ -249,7 +278,7 @@ def run_iter(
         return rec
 
     cer = float(vr.report["corpus_cer"])
-    rec = _finalize("scored", cer, f"{cid}/score_report.json", meta)
+    rec = _finalize("scored", cer, f"{cid}/score_report.json", meta, error=None)
     archive.append(rec)
 
     # keep-if-better: advance best only on a real improvement
@@ -471,7 +500,15 @@ def _restore(repo_root: Path, allowed_path: Path) -> None:
 def _emit_log(cfg_, iteration, mode, parent, rec, kept, holdout):
     pid = parent.id if parent else "—"
     pcer = f"{parent.cer:.4f}" if parent and parent.cer is not None else "n/a"
-    cer_str = f"{rec.cer:.4f}" if rec.cer is not None else rec.status
+    if rec.cer is not None:
+        cer_str = f"{rec.cer:.4f}"
+    else:
+        # Non-scored row: surface WHY it failed, not a bare status. Truncate the
+        # reason to one short line so the log stays scannable.
+        reason = " ".join((rec.error or "").split())
+        if len(reason) > 80:
+            reason = reason[:80] + "…"
+        cer_str = f"{rec.status}: {reason}" if reason else rec.status
     decision = "KEEP" if kept else "—"
     hold_str = f" | hold={holdout:.4f}" if holdout is not None else ""
     line = (

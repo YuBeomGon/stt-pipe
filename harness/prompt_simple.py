@@ -63,6 +63,41 @@ def _format_ledger(records: list[ArchiveRecord]) -> str:
     return "\n".join(reversed(facts))
 
 
+_RECENT_FAILURES_MAX = 5
+_FAILURE_ERR_MAX = 400
+
+
+def _format_recent_failures(records: list[ArchiveRecord]) -> str:
+    """The 'artifacts' channel: show the last N NON-scored records that captured
+    an error so the next candidate can map approach -> error and not repeat it.
+
+    Newest first; only emitted when at least one such record exists (caller
+    keeps the block out of the prompt entirely otherwise)."""
+    entries: list[str] = []
+    for r in reversed(records):  # newest first
+        if r.status == "scored":
+            continue
+        err = (r.error or "").strip()
+        if not err:
+            continue
+        gist = (r.hypothesis or "").strip().splitlines()
+        gist = gist[0].strip() if gist else ""
+        if not gist:
+            gist = ",".join(r.fingerprint) or "(no description)"
+        err = " ".join(err.split())
+        if len(err) > _FAILURE_ERR_MAX:
+            err = err[:_FAILURE_ERR_MAX] + "…"
+        entries.append(f"- ({r.id}) approach: {gist}\n  error: {err}")
+        if len(entries) >= _RECENT_FAILURES_MAX:
+            break
+    if not entries:
+        return ""
+    return (
+        "=== RECENT FAILURES (do NOT repeat these — fix or avoid) ===\n"
+        + "\n".join(entries)
+    )
+
+
 def _format_bans(bans: list[str]) -> str:
     if not bans:
         return ""
@@ -93,6 +128,7 @@ def build_simple_prompt(
         else "(no operator directive this run.)"
     )
     bans_block = _format_bans(bans)
+    failures_block = _format_recent_failures(archive or [])
     best_line = (
         f"best so far: {best_hyp_id} (cer {best_cer:.4f})"
         if best_cer is not None else "best so far: none yet"
@@ -138,6 +174,8 @@ Current state: {best_line}
 {_format_parent(parent)}
 
 {_format_inspirations(inspirations)}
+
+{failures_block}
 
 Findings ledger (facts already established — build on them, do not re-derive):
 {ledger}

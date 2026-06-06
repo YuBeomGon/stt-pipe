@@ -30,6 +30,7 @@ class ArchiveRecord:
     mode: str | None = None
     lane: str | None = None
     capability_investigated: str = ""
+    error: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 

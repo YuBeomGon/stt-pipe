@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -61,6 +62,34 @@ def test_children_count(tmp_path):
             _rec("0002", 0.18, parents=["0000"])]
     assert arch.children_count(recs, "0000") == 2
     assert arch.children_count(recs, "0001") == 0
+
+
+def test_archive_record_error_roundtrip(tmp_path):
+    job_dir = tmp_path / "runs" / "job"
+    rec = arch.ArchiveRecord(
+        id="0000", parents=[], cer=None, status="rejected", hypothesis="h",
+        what_i_learned="l", fingerprint=["t"], score_report=None, ts="t",
+        error="CUDA out of memory",
+    )
+    arch.append_record(job_dir, rec)
+    loaded = arch.load_archive(job_dir)
+    assert len(loaded) == 1
+    assert loaded[0].error == "CUDA out of memory"
+    # explicit serialize round-trip
+    row = arch.record_to_row(rec)
+    back = arch.row_from_dict(json.loads(row))
+    assert back.error == "CUDA out of memory"
+
+
+def test_legacy_row_missing_error_defaults_none():
+    # an old archive row written before the `error` field existed
+    legacy = {
+        "id": "0000", "parents": [], "cer": 0.2, "status": "scored",
+        "hypothesis": "h", "what_i_learned": "l", "fingerprint": ["t"],
+        "score_report": "0000/score_report.json", "ts": "t",
+    }
+    rec = arch.row_from_dict(legacy)
+    assert rec.error is None
 
 
 def test_materialize_parent_copies_transcribe(tmp_path):

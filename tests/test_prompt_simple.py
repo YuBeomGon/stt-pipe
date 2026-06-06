@@ -54,6 +54,46 @@ def test_build_prompt_contains_all_sections():
     assert not prompt.startswith("-")                 # argv-safe first char
 
 
+def _failed_rec(cid, error, hypothesis="batch all windows in one generate() call"):
+    return arch.ArchiveRecord(
+        id=cid, parents=[], cer=None, status="rejected", hypothesis=hypothesis,
+        what_i_learned="", fingerprint=["batch-windows"], score_report=None,
+        ts="t", error=error,
+    )
+
+
+def test_build_prompt_includes_recent_failures_section():
+    archive = [
+        _rec("0000", 0.20, ["base"]),
+        _failed_rec("0001", "CUDA out of memory while batching 200 windows"),
+    ]
+    prompt = ps.build_simple_prompt(
+        profile="P", frozen_surface="F", workspace_body="w",
+        baseline={"target_cer": 0.1, "total_inference_time_s": 1.0},
+        mode="EXPLORE", directive="", bans=[], parent=None, inspirations=[],
+        allowed_path="workspace/transcribe.py", best_cer=0.20, best_hyp_id="0000",
+        archive=archive,
+    )
+    assert "RECENT FAILURES" in prompt
+    assert "CUDA out of memory while batching 200 windows" in prompt
+    # the failing approach gist surfaces so the LLM maps approach -> error
+    assert "batch all windows" in prompt
+    # uses === separators, never a leading --- line
+    assert "\n---\n" not in prompt
+
+
+def test_build_prompt_no_failures_section_when_none():
+    archive = [_rec("0000", 0.20, ["base"]), _rec("0001", 0.18, ["vad"])]
+    prompt = ps.build_simple_prompt(
+        profile="P", frozen_surface="F", workspace_body="w",
+        baseline={"target_cer": 0.1, "total_inference_time_s": 1.0},
+        mode="EXPLORE", directive="", bans=[], parent=None, inspirations=[],
+        allowed_path="workspace/transcribe.py", best_cer=0.18, best_hyp_id="0001",
+        archive=archive,
+    )
+    assert "RECENT FAILURES" not in prompt
+
+
 def test_build_prompt_exploit_directive_differs():
     explore = ps.build_simple_prompt(
         profile="P", frozen_surface="F", workspace_body="w",
