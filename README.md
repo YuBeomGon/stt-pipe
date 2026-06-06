@@ -206,6 +206,58 @@ python3 scripts/launch_parallel.py \
 
 ---
 
+## simple-evolve (신규 단순 루프)
+
+기존 old-harness (set 모드·worktree·gated promotion) 와는 **별개**의, 의도적으로
+단순화한 자체-진화 루프. flat never-pruned archive + LLM-driven move (parent 선택 →
+candidate 가 `workspace/transcribe.py` 수정) + verify keep-if-better. scheduler /
+lineage / portfolio / cooldown / signature / promotion / gitops 없음. 엔트리포인트는
+`scripts/evolve_simple.py`. 노브: `--job-id --iters --candidate-cmd --directive
+--explore --ban --pin --parent-policy`. **`--holdout-every` 는 제거됨** (holdout 은
+이제 운영자 수동).
+
+```bash
+python scripts/evolve_simple.py --job-id simple_001 --iters 20 \
+  --explore 0.5 --parent-policy llm
+```
+
+리더보드:
+
+```bash
+python scripts/archive_summary.py --job simple_001
+```
+
+### Holdout (운영자 수동)
+
+루프는 holdout 을 **전혀 건드리지 않는다** — in-loop CER (0715) 만 계산하고
+best 를 `runs/_summary/<job>_state.json::best_hyp_id` 에 기록한다. 잡이 끝난 뒤,
+운영자가 봉인된 holdout 으로 best 를 **수동 검증**한다:
+
+```bash
+python scripts/evaluate_holdout.py --unseal --job-id <id>
+# state 의 best_hyp_id 를 anchor 로 0715 eval run 을 찾아 holdout 평가.
+```
+
+**주의**: 자동 재봉인 (`chmod -R 000`) 은 재귀 도중 "Permission denied" 로 실패할
+수 있다 (candidate user 로 실행 시 라이브 검증에서 실제 실패함 — 이것이 자동
+holdout 호출을 제거한 이유). **실행 후 반드시 봉인이 복구됐는지 확인**한다:
+
+```bash
+ls -ld data/raw/wav/AIG_녹취반출_20250813 data/raw/label/AIG_녹취반출_20250813
+# 두 디렉토리 모두 d--------- (perm 000) 이어야 정상.
+```
+
+`d---------` 가 아니면 재봉인:
+
+```bash
+bash scripts/seal_holdout.sh   # 또는 두 디렉토리에 chmod 000
+```
+
+holdout 접근은 운영자 파일 권한이 필요하다 — candidate 는 sandbox 되어 있으며
+holdout 을 절대 읽어선 안 된다.
+
+---
+
 ## 절대 금지
 
 요약만 — 전체 목록은 [`docs/STT-PIPELINE-SPEC.md §11`](docs/STT-PIPELINE-SPEC.md).

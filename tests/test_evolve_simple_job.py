@@ -40,9 +40,6 @@ def test_run_job_produces_exactly_n_rows(tmp_path, monkeypatch):
         def __init__(self, cer):
             self.ok, self.report, self.error = True, {"corpus_cer": cer}, None
     monkeypatch.setattr(es, "run_verify", lambda cfg: FakeVR(next(cers)))
-    # default holdout_every=0 still runs a job-end holdout on the final best;
-    # stub it so the test never touches the real sealed corpus.
-    monkeypatch.setattr(es, "_invoke_holdout", lambda cfg_, best_id: None)
     monkeypatch.setenv("EVOLVE_NO_HARDEN_CLAUDE", "1")
 
     cfg = es.SimpleConfig(job_id="job", repo_root=repo,
@@ -54,16 +51,17 @@ def test_run_job_produces_exactly_n_rows(tmp_path, monkeypatch):
     assert best_id == "0001"                 # 0.18 is the min
 
 
-def test_cli_parses_six_knobs(monkeypatch):
+def test_cli_parses_knobs(monkeypatch):
     import scripts.evolve_simple as cli
     ns = cli.parse_args([
         "--job-id", "j", "--iters", "5", "--directive", "try vad",
         "--explore", "0.3", "--ban", "beam sweep", "--pin", "0002",
-        "--holdout-every", "2", "--parent-policy", "random",
+        "--parent-policy", "random",
     ])
     assert ns.iters == 5
     assert ns.explore == 0.3
     assert ns.parent_policy == "random"
     assert ns.ban == ["beam sweep"]
     assert ns.pin == "0002"
-    assert ns.holdout_every == 2
+    # --holdout-every is GONE (holdout is now operator-manual)
+    assert not hasattr(ns, "holdout_every")

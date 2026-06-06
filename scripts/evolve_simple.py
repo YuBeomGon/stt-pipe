@@ -21,7 +21,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--explore", type=float, default=0.5)
     p.add_argument("--ban", action="append", default=[])
     p.add_argument("--pin", default=None)
-    p.add_argument("--holdout-every", type=int, default=0)
     p.add_argument("--parent-policy", choices=["llm", "random", "best"], default="llm")
     p.add_argument("--candidate-cmd", default="claude -p")
     p.add_argument("--repo-root", type=Path, default=Path("."))
@@ -34,7 +33,6 @@ def main(argv: list[str] | None = None) -> int:
         job_id=ns.job_id, repo_root=ns.repo_root, candidate_cmd=ns.candidate_cmd,
         iters=ns.iters, explore=ns.explore, parent_policy=ns.parent_policy,
         directive=ns.directive, bans=ns.ban, pinned=ns.pin,
-        holdout_every=ns.holdout_every,
     )
     best = run_job(cfg)
     print(f"job {ns.job_id} done — best={best}")
