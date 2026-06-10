@@ -1434,8 +1434,8 @@ One iteration end-to-end: deterministic mode → select_context → materialize 
 The N-iteration driver + the thin CLI exposing the ≤6 knobs.
 
 > **Note (rate-limit backoff, added post-implementation):** `run_iter` wraps the
-> candidate call in a backoff retry (`cc.RATE_LIMIT_BACKOFF_MIN` = 5·10·20·40·80·80
-> min, cumulative ~235 min; ported verbatim from `runner.py`). On a persistent
+> candidate call in a backoff retry (`cc.RATE_LIMIT_BACKOFF_MIN` = 5·10·20·40·80·80·80
+> min, cumulative ~315 min; ported from `runner.py` + one extra 80 step). On a persistent
 > session/token limit it raises `RateLimitAbort`, which `run_job` catches to stop
 > cleanly and write `status="aborted_rate_limit"` into the state file (no bogus
 > archive row for the aborted iter); rerunning the same `--job-id` resumes. Sleep
