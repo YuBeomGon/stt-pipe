@@ -1,0 +1,12 @@
+{
+  "eval_run": "0006",
+  "holdout_run": "holdout_1780706717",
+  "eval_cer": 0.17573148841991532,
+  "holdout_cer": 0.21661647508171436,
+  "delta_cer": 0.040884986661799044,
+  "sigma": 0.0,
+  "sigma_provisional": true,
+  "threshold": 0.01,
+  "overfit_suspected": true,
+  "produced_at": "2026-06-06T00:46:48.264077+00:00"
+}
