@@ -75,8 +75,8 @@ def test_is_rate_limited_false_for_normal_and_plain_limit():
 
 
 def test_rate_limit_backoff_ladder_is_canonical():
-    assert cc.RATE_LIMIT_BACKOFF_MIN == (5, 10, 20, 40, 80, 80)
-    assert sum(cc.RATE_LIMIT_BACKOFF_MIN) == 235  # cumulative ~235 min
+    assert cc.RATE_LIMIT_BACKOFF_MIN == (5, 10, 20, 40, 80, 80, 80)
+    assert sum(cc.RATE_LIMIT_BACKOFF_MIN) == 315  # cumulative ~315 min
 
 
 def test_run_candidate_command_captures_diff(tmp_path, monkeypatch):

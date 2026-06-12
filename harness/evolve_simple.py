@@ -198,7 +198,7 @@ def _candidate_text(out_dir: Path, result) -> str:
 def _run_candidate_with_backoff(cfg_: SimpleConfig, prompt: str, out_dir: Path,
                                 iteration: int):
     """Run the candidate once; if the output looks rate-limited, retry on the
-    cc.RATE_LIMIT_BACKOFF_MIN ladder (5·10·20·40·80·80 min). Returns the
+    cc.RATE_LIMIT_BACKOFF_MIN ladder (5·10·20·40·80·80·80 min). Returns the
     CompletedProcess from the first non-rate-limited attempt. Raises
     RateLimitAbort if the ladder is exhausted and STILL rate-limited."""
     def _invoke():
@@ -262,7 +262,7 @@ def run_iter(
     before_scope = _out_of_scope(repo, cfg_.allowed_path)
 
     # Session/token rate limit is transient: retry the SAME iter on a backoff
-    # ladder (5·10·20·40·80·80 min) instead of burning it as an instant reject.
+    # ladder (5·10·20·40·80·80·80 min) instead of burning it as an instant reject.
     # If the ladder is exhausted and still limited, this raises RateLimitAbort,
     # which run_job catches to stop cleanly (no bogus archive row for this iter).
     result = _run_candidate_with_backoff(cfg_, prompt, out_dir, iteration)

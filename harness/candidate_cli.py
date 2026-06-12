@@ -25,9 +25,9 @@ _CLAUDE_HARDENING_ARGS: tuple[str, ...] = (
 _HARDEN_BYPASS_ENV = "EVOLVE_NO_HARDEN_CLAUDE"
 
 # Claude 세션/토큰 한도 backoff 사다리(분). 한도 신호가 계속 보이면 같은 iter 를
-# 이 간격으로 재시도한다 — 누적 5+10+20+40+80+80 = 235분. 소진 후에도 한도면 abort.
-# (verbatim lift of runner.py::_RATE_LIMIT_BACKOFF_MIN.)
-RATE_LIMIT_BACKOFF_MIN: tuple[int, ...] = (5, 10, 20, 40, 80, 80)
+# 이 간격으로 재시도한다 — 누적 5+10+20+40+80+80+80 = 315분. 소진 후에도 한도면 abort.
+# (runner.py::_RATE_LIMIT_BACKOFF_MIN 기반, 80 단계 1개 추가.)
+RATE_LIMIT_BACKOFF_MIN: tuple[int, ...] = (5, 10, 20, 40, 80, 80, 80)
 
 _REQUIRED_META_KEYS = (
     "capability_investigated",
